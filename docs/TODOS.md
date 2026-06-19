@@ -1,0 +1,1080 @@
+# TODOS
+
+Known limitations, deferred work, and design questions parked for
+later. Each entry should describe the problem clearly enough that
+someone returning to it months later can pick it up without
+re-discovering the context.
+
+---
+
+## §2026-06-17 — Opaque wrap-scope type embedded by-value in a port struct: raw now, RAII handle wrapper later
+
+### The case
+
+A port-scope struct embeds an **opaque wrap-scope type by value** and only
+ever passes its address to wrap-scope ops — never touches its fields. Canonical
+example: `git_odb.lock: pthread_mutex_t` (also `git_cache`, `git_mwindow_ctl`).
+The port calls `git_mutex_init` (ctor), `git_mutex_lock`/`unlock` (ops),
+`git_mutex_free` (dtor) on `&db->lock`; it never reads the mutex's internals.
+
+### Decision (v1): keep it raw
+
+Embed the bindgen binding directly (`lock: pthread_mutex_t`, `#[repr(C)]`) and
+call the wrap-scope ops through `ffi::` with an `addr_of_mut!(self.lock)` cast,
+inside `unsafe`. No wrapper, no accessors, no lifecycle trait. Matches the
+"primitives stay in C" stance of §2026-06-10 (lifecycle/sync primitive
+migration).
+
+### Why a wrapper is eventually wanted (not v1)
+
+- **No field accessors** — opaque, so the ops→accessor refactor correctly
+  derives none. That part needs nothing.
+- **But lifecycle is real and owner-driven**: init (ctor) + destroy (dtor) +
+  lock/unlock (ops). Skipping `pthread_mutex_destroy` on drop leaks/UB, so
+  *something* must carry that `Drop`.
+- **Soundness, not just ergonomics**: a lock is acquired through a *shared*
+  handle (`&GitOdb` across threads), i.e. mutation through `&self`. On a bare
+  field that's UB under Rust aliasing — it needs `UnsafeCell`. The raw-embed +
+  `addr_of!(self.lock) as *mut` cast is the unsound pattern; this is exactly
+  why `std::sync::Mutex` wraps the OS mutex in `UnsafeCell`.
+
+The eventual shape: a `#[repr(transparent)] struct GitMutex(UnsafeCell<pthread_mutex_t>)`
+handle wrapper — layout-identical so the port struct embeds it by value with
+**zero ABI change** — exposing `init`/`lock`/`unlock` through `&self`,
+`Drop`=destroy, and **no** accessors. Reused by every struct embedding the
+primitive (wrap once, not per-owner). This is the `locking` metadata already on
+`git_odb` (acquire/release/`locked_fields`) made concrete.
+
+### Discriminating rule (for whoever builds it)
+
+For an opaque wrap-scope type embedded by a port struct: emit the transparent
+handle wrapper **iff the port invokes any op/lifecycle routine on it**
+(lock/init/destroy/…); otherwise (pure carry — a reserved/padding blob) embed
+the raw binding and skip the wrapper entirely.
+
+### Tracker
+
+Surfaced diagnosing why `pthread_mutex_t`/`z_stream` had no wrap-scope
+type-entry (the wrap-closure under-capture: the closure walks port-*symbol*
+deps but not port-*type* field deps, and never harvests a frontier wrap
+function's signature types). Gated behind that closure fix: the analyzer can
+only decide wrapper-vs-raw
+once the embedded opaque type is captured with its op set attributed (the
+alloc.json `locks` category + `git_mutex_*` ops). Keep raw until then.
+
+---
+
+## §2026-06-16 — Header-defined `macro_symbol` is forced wrap-scope; a port-internal one may want mirroring, not a shim
+
+### The rule today
+
+`entry_scope` (`compose/scope.py`) has one carve-out for macros: a macro is
+port-scope **only** if its home is a `.c` TU that's itself in port scope;
+otherwise wrap — *regardless of the file rule*. So a `macro_symbol` defined in a
+**header** is always wrap, even when that header is in `port_paths` (where the
+ordinary `classify` file rule would say port).
+
+```python
+if (kind or "").startswith("macro"):
+    home = def_file or (decl_files[0] if decl_files else "")
+    if home.endswith(_C_TU_SUFFIXES) and home in port_paths:
+        return "port"
+    return "wrap"
+return classify(def_file, decl_files, port_paths)
+```
+
+This is shared by the composer's macro `is_port`, the bindgen surface filter,
+and the deps-DAG scope query, and the port prompt states the same contract
+("header-defined macros are wrap-scope already; mirroring only applies to TU
+macros").
+
+### Why it's the default
+
+A `#define` has no ABI and can't be re-exported Rust→C, so a header macro can't
+be "ported" in the `#[no_mangle]` + `#ifndef`-guard sense — the remaining C
+callers still need it visible, so it stays a C define read through bindgen. For
+`macro_symbol`/`macro_misc` that means a wrap-side `static inline crustify_<NAME>`
+shim (the `_MACRO_SHIM_KINDS` path), which bridges to the underlying symbol —
+itself possibly port-scope and ported normally. So the target isn't lost; only
+the macro stays C.
+
+### The gap / question
+
+The carve-out is uniform across `macro_constant` / `macro_symbol` / `macro_misc`.
+For a header `macro_symbol` whose expansion is **purely port-internal logic**
+(not a stable public-API alias — e.g. a convenience wrapper over a port-defined
+static), freezing it as a C `#define` + FFI shim is arguably wrong: we'd rather
+**mirror** it into a Rust macro/fn (as TU macros already are) and let the C
+`#define` stay only where genuine C callers remain. Today there's no way to
+express "this header macro is port-internal → mirror it"; everything header-home
+is wrap.
+
+### What to consider
+
+- A signal to distinguish *public-API* header macros (keep wrap/shim — external
+  C callers depend on them) from *port-internal* header macros (mirror, like TU
+  macros). Candidates: whether the macro's expansion references only port-scope
+  symbols, or whether any out-of-port-scope caller expands it (the macro's
+  `used_by`/expansion sites — analogous to the callback call-site analysis).
+- If introduced, `entry_scope` would gain a third branch for header macros whose
+  expansion + use sites are entirely port-internal → port (mirror), and the port
+  prompt's "TU-only mirroring" rule would widen to "TU ∪ port-internal-header".
+
+### Tracker
+
+Surfaced reviewing the macro carve-out alongside the callback call-site work
+(the use-site analysis there is the same shape needed here — who expands the
+macro, in vs out of port scope). Not urgent; the shim path is correct for the
+common public-API case.
+
+---
+
+## §2026-06-16 — Callbacks are tracked only as typedefs; inline/anonymous fn-pointers are invisible
+
+### The gap
+
+A callback **node** is minted solely for a **named typedef** — `kind ==
+"callback"` is `reachesRoutineType(TypedefType.getBaseType())` in
+`entities/types.ql`, and all the callback machinery (`callback_signature_type_uses.ql`,
+`callback_call_sites.ql`, `_enrich_callback`'s `ptr_args`/`depends_on`/`used_by`)
+keys off that typedef identity. An **inline / anonymous** function pointer — a
+struct field `int (*read)(...)`, a raw `void (*cb)(...)` arg, a fn-ptr return
+without a typedef — gets **no callback node, no signature deps, no call sites,
+no wrapper identity**. It surfaces only as a plain pointer (`ptr_args`/`ptr_ret`
+with the `"(routine)"` pointee marker; struct fields get a `ptr` block).
+
+### Why it matters
+
+The dominant inline fn-ptr in libgit2 is the **struct vtable**: `git_odb_backend`
+(~14 slots: `read`/`write`/`free`/…), `git_odb_stream`, `git_odb_writepack`,
+`git_transport`, the smart-subtransport tables — all **inline** fn-ptr fields,
+not typedefs (bindgen renders e.g. `git_odb_backend.free` as an inline
+`Option<unsafe extern "C" fn(...)>`, no alias). So the backend-dispatch
+callbacks — arguably *the* callbacks for the ODB port — are exactly the ones the
+machinery can't see. Inline fn-ptr **args** exist too but are rare (args are
+usually typedef'd); the struct-field case is where it bites.
+
+### The crux — identity
+
+A typedef has a **name** → one reusable wrapper, one node. An inline fn-ptr is
+**anonymous** → its only identity is its *site*: `(struct, field)` or
+`(function, arg-pos)`. Two structurally-identical inline fn-ptrs are distinct
+anonymous types. Tracking them means **synthesizing identities** per site — the
+pattern the string/array clusters already use.
+
+### Design fork
+
+The named-vs-anonymous split lines up with the wrap-stage split:
+- **Typedef callback** (named, reusable) → standalone node → **symbol wrapper**
+  newtype + `.call` (the path already built).
+- **Inline vtable field** (anonymous, struct-bound) → part of the **struct's
+  contract** → the **type wrapper's** §12.2 / §7.3 pattern ("per-element
+  behaviour via callbacks → safe element trait"; "fn-pointer half → an `unsafe
+  extern "C" fn` trampoline"). So inline vtable fn-ptrs arguably should NOT
+  become standalone callback nodes — they belong to the struct.
+
+### But the *facts* gap is the real problem
+
+Even granting the type wrapper owns the vtable, it lacks the facts the typedef
+callbacks now have:
+- **Signature deps**: `git_odb_backend.read` takes `const git_oid *`, but that
+  `git_oid` isn't captured as a struct dep *through the field* (the field-type→tag
+  resolver chokes on a fn-ptr type string). Usually masked because the struct
+  references `git_oid` elsewhere — but the *slot's* deps aren't clean.
+- **Call sites**: `backend->read(...)` is an indirect call through a field —
+  capturable, but `callback_call_sites.ql` requires the callee expr's type to be
+  a `TypedefType`, so it skips field-dispatched inline calls. Easy to extend:
+  `ExprCall` where the callee is a `FieldAccess` of a fn-ptr field → key by
+  `(struct, field)`, enclosing fn = call site. Still no points-to.
+
+### Options
+
+- **A — leave untracked** (status quo): vtable slots stay raw `Option<fn>` in
+  wrappers; no typed `.call`, naked `ffi::` in the vtable accessors.
+- **B — synthesize per-`(struct,field)` callback identities** (mirror string/array
+  clusters): full callback treatment for vtable slots. Most power, most
+  machinery (synthetic naming/homing, the field↔node relationship).
+- **C — capture the *facts* only** for inline fn-ptr struct fields (deps + call
+  sites keyed by `(struct,field)`), feed the type wrapper's §12.2 pattern, no
+  standalone nodes. Lighter; respects the "vtable belongs to the struct" fork.
+
+Lean: **C, scoped to struct fields** — extend the two queries to also emit inline
+fn-ptr struct fields (keyed by struct+field) so the type wrapper gets the same
+signature-dep + call-site facts for vtable trampolines and correct layering,
+without the synthetic-node overhead of B. Leave inline fn-ptr args/returns as
+`"(routine)"` ptrs (too rare to pay for).
+
+### Tracker
+
+Surfaced reviewing the callback-deps work (`§2026-06-16` callback signature/
+call-site capture, commit `c6d90b6`). The real open question is whether the ODB
+port wants per-slot typed dispatch (→ C/B) or is fine treating the vtable as one
+opaque trait object (→ A suffices) — a question about how `git_odb_backend`
+itself gets ported.
+
+---
+
+## §2026-06-13 — Crate boundary is the *link artifact*: `_in_tree_libs` must cover executables, not just libraries
+
+### What
+
+`scaffold_manifest._in_tree_libs` (and the equivalent gate in `bindgen_manifest`)
+collects only `build.json.libraries` with `source_dirs`:
+
+```python
+libs = {name for name, lib in (doc.get("libraries") or {}).items()
+        if lib.get("source_dirs")}
+```
+
+So the crate-per-`linked_in` model currently recognises **libraries** as crates
+but **not executables**. An executable target — e.g. openssl's `apps/`, where
+`build.json.executables.openssl.source_dirs == ['apps/']` and the app's
+port-scope symbols get `linked_in == "openssl"` — would have its **own port
+crate dropped** (`_crate_for` returns None for `"openssl"`), because the
+executable isn't in the in-tree set.
+
+The crate boundary is really the **link artifact** = *library OR executable*.
+
+### What works already (no change needed)
+
+The *wrap deps* an executable target pulls in are attributed correctly today:
+the libssl/libcrypto types & syms the apps import through the shared public
+headers carry their own `linked_in` (`libssl`/`libcrypto`), independent of the
+importing target or the declaration header. So bindgen routes them to
+`libssl-sys`/`libcrypto-sys`, wrap routes them to `rust/libssl`/`rust/libcrypto`,
+and the app's port crate cross-depends on those. Only the executable's **own**
+crate is the gap.
+
+### Fix
+
+Include executables-with-`source_dirs` in `_in_tree_libs` (and any matching
+bindgen filter) — union `libraries` ∪ `executables`. The executable's port crate
+stays a `staticlib` (`libopenssl_app.a`-style), linked into the final `openssl`
+binary exactly as a library staticlib is linked into its consumers; the
+`openssl` → `libssl`/`libcrypto` dependency stays a DAG edge. Confirm
+`_port_crate_cargo_toml` is still appropriate for a binary-backing crate (it is —
+the C build does the final link; the crate just supplies the re-exported staticlib).
+
+### Tracker
+
+Surfaced reasoning about picking openssl `apps/` as a target while validating the
+crate-per-`linked_in` model. Not needed for the libgit2 odb target (a single
+library); needed before any executable target. Composes with the `linked_in`
+analyzer-fill fix below and the overlapping-`source_dirs` item above.
+
+---
+
+## §2026-06-13 — `linked_in` §8.5: disambiguate overlapping `source_dirs` (openssl `providers/`)
+
+### What
+
+The type analyzer's `linked_in` resolution (`type_analyzer.md` §8.5, landed) lists
+its fallbacks as: (1) lifecycle ops' `linked_in`, (2) declaring/defining header →
+`build.json` library via `source_dirs`/`include_dirs`, (3) co-located symbol.
+Rule (2) is **ambiguous when `source_dirs` overlap**: in openssl, `providers/`
+is shared by `libcrypto` **and** `fips` **and** `legacy`
+(`build.json.libraries.{libcrypto,fips,legacy}.source_dirs` all list
+`providers/...`), so a header→library map alone can't pick one for a type
+defined under `providers/`.
+
+### Why it's not urgent
+
+Rule (1) sidesteps it: a type's lifecycle ops (`dtor`/`ctors`) are real linked
+symbols the symbol analyzer already attributed to the *specific* library they
+link into, so ops-bearing types resolve unambiguously regardless of the
+`source_dirs` overlap. The gap only bites an **ops-less type defined in an
+overlapping dir** — rare. Validated: the statem target has 0 manifest dirs with
+mixed `linked_in` (149 dirs) and only 1 null type (`version_info`, a file-local
+`.c` helper covered by co-located symbols), so no live failure today.
+
+### Fix when it matters
+
+Add a line to §8.5 making the precedence explicit: **for a type defined under a
+directory claimed by more than one `build.json` library, the lifecycle-op
+library (rule 1) wins over the header→library map (rule 2); never pick
+arbitrarily among the overlapping libraries.** Optionally, when rule (1) is
+unavailable and the dir is multiply-claimed, prefer the most-specific
+`source_dirs` match or leave `null` + flag rather than guess.
+
+### Tracker
+
+Surfaced validating the crate-per-`linked_in` model against
+`/root/git/openssl-crustify-statem` (4 in-tree libs; `providers/` shared by
+libcrypto/fips/legacy). Composes with the `linked_in` analyzer-fill fix below.
+
+---
+
+## §2026-06-13 — LANDED: type analyzer now fills `linked_in` (was structurally always null for types)
+
+### What was broken
+
+`types.json` `linked_in` was **never filled** for types. The composer seeds it
+`null`; the type analyzer's prompt listed it as composer-filled and the agent
+left it untouched; the symbol analyzer fills `linked_in` only on `syms.json`.
+So a type's manifest dir got a library **only by borrowing it from a co-located
+symbol/macro** — and a **type-only public header with no co-located symbol**
+(e.g. `git_oidarray` in `include/git2/oidarray.h`, whose dir has *no* `syms.json`)
+stayed `null`.
+
+This was invisible under the old crate=path scaffolder, but the
+crate-per-`linked_in` model keys both the **scaffolder crate** and the **bindgen
+`-sys` allowlist** on `linked_in` — so a null `linked_in` **silently drops the
+type from both the port crate and its FFI bindings**. Measured blast radius on
+libgit2/odb: ~10 in-tree manifest dirs (the `include/git2/*` public headers,
+`deps/zlib/*`, `src/libgit2/commit_list`); the ~20 `system/usr/include/*` dirs
+that also resolve to null are *correctly* dropped (system libs are FFI-only).
+`git_oidarray` only survived before because the bindgen *agent* hand-patched it
+into `AGENT_ALLOWED_TYPES` in `libgit2-sys/build.rs` (the composer seed
+`ALLOWED_TYPES` had only `git_oidarray_dispose`, the linked symbol).
+
+### Fix (type analyzer)
+
+`prompts/analyzer/type_analyzer.md` §8.5 (new) + the field-table row +
+`templates/types.json` `_comment_identity`: the type analyzer now **fills
+`linked_in`**, resolved (strongest signal first) from (1) the type's lifecycle
+ops' `linked_in` — the `dtor`/`ctors` are linked symbols the symbol analyzer
+already resolved in their `syms.json`; (2) the declaring/defining header → owning
+`build.json` library via `source_dirs`/`include_dirs`; (3) any co-located symbol.
+`null` only when no attribution is defensible.
+
+### Validated
+
+`analyze types --name git_oidarray --redo` → `linked_in: libgit2` (from
+`git_oidarray_dispose`). Downstream: `scaffold --file include/git2/oidarray.h`
+now emits the stub (was "no in-scope source files"); `wrap types --name
+git_oidarray` now schedules (was "no scaffolded anchor"). Empirically confirmed
+the *pre-fix* analyzer left it null even on a fresh fully-annotated re-run.
+
+### Follow-up
+
+  - Cheap safety net (not yet done): have the scaffolder/bindgen **log** any
+    in-tree (non-system) manifest dir it drops for null `linked_in`, so a future
+    analyzer miss surfaces loudly instead of silently dropping a type.
+  - Re-attribution sweep: other in-tree null-`linked_in` dirs
+    (`include/git2/{buffer,pack,repository,tag,tree,types}`, `deps/zlib/*`,
+    `src/libgit2/commit_list`) get fixed automatically on their next
+    `analyze types` pass under the new prompt.
+
+---
+
+## §2026-06-08 — `decl_files` keeps an alphabetical sort with no semantic value
+
+### What
+
+The T1 entity queries (`entities/functions.ql`, `types.ql`,
+`globals.ql`) emit `decl_files` as `concat(..., "|" order by pathOf(h))`.
+The `order by` exists only to make the CSV deterministic — alphabetical
+order carries **no semantic meaning**, and a positional `decls[0]` reading
+of it is actively misleading (it biases toward `.c` over `.h` since
+`c` < `h`, and toward `build/` generated artifacts since `b` sorts first).
+
+### Current mitigation
+
+Consumers no longer read `decls[0]` positionally: `compose.scope.canonical_decl`
+picks the declaration by **priority** (in-repo header > in-repo source >
+external/absolute, deprioritizing `build/`). So the list order is now
+irrelevant to correctness — the alphabetical sort is dead weight kept
+purely for reproducible CSVs.
+
+### To revisit
+
+Either drop the `order by` entirely (and confirm CodeQL `concat` is
+deterministic enough across runs for our reproducibility needs), or
+replace it with an order that *is* meaningful (e.g. the priority order
+`canonical_decl` uses), so the CSV itself is self-describing. Low
+priority — purely a cleanliness / reproducibility-contract question.
+
+---
+
+## §2026-06-04 — CodeQL flattens function calls through macro expansions
+
+### What
+
+cpp-all's `FunctionCall.getEnclosingFunction()` returns the function
+whose body lexically contains the call site, regardless of whether
+the call appeared directly in source or was emitted by a macro
+expansion. The `function_calls.csv` table (and analogously
+`global_accesses.csv` / `function_addresses.csv`) records the union
+without provenance.
+
+Concrete example from the openssl-crustify-statem analysis:
+
+  - `ssl/statem/statem_dtls.c` line 1218 source code reads
+    `ossl_assert(ret > 0)`.
+  - `ossl_assert` is a wrap-scope macro in
+    `include/internal/common.h` whose body expands to
+    `__builtin_expect(!!(...), 1)`.
+  - Our T2 CSVs record BOTH of:
+    - `macro_expansions`: `dtls1_buffer_message → ossl_assert` at
+      line 1218.
+    - `function_calls`: `dtls1_buffer_message → __builtin_expect`
+      at line 1218.
+
+There is no column on `function_calls` indicating that the call
+came through `ossl_assert`'s expansion vs being written directly in
+`dtls1_buffer_message`'s source.
+
+### Why this matters
+
+For accurate Rust-port generation we want to distinguish:
+
+  - **Direct calls in P's source** — Rust port emits an explicit
+    call to the corresponding extern (`unsafe extern "C" fn`).
+  - **Calls inside an expanded C macro M** — Rust port should
+    invoke a hand-written C wrapper `crustify_M(...)` that bindgen
+    can bind; the inner calls live inside the wrapper, not in the
+    Rust port.
+
+Without provenance, an automated port generator might over-generate
+direct extern bindings for symbols that should be reached through
+macro wrappers, leading to:
+
+  - Wrong call shape in the Rust port (calling the inner function
+    directly with arguments shaped for the macro's API).
+  - Possible silent semantic drift if the macro does anything
+    non-trivial around the inner call (argument transformations,
+    `do { } while(0)` guarding, ifdef-conditional logic).
+
+### Why we're not fixing it now
+
+  1. `macro_expansions` already gives us the `(P, M)` edges, which
+     is sufficient to:
+     - Include M in the closure of P during composer emission.
+     - Tell the wrap-stage agent that a callable macro wrapper is
+       needed for M.
+     - Generate the C wrapper from M's body recorded in
+       `macros.csv`.
+  2. bindgen generates extern declarations from headers
+     unconditionally — adding an over-broad set of externs into the
+     `-sys` crate is harmless (the unused ones are dead code).
+  3. We don't yet have an automated Rust-port generator that needs
+     the distinction; hand-port-driven workflows look at source,
+     not at our CSVs.
+
+### What we'd do when it matters
+
+Add a `via_macro` column to `entities/function_calls.ql` (and
+optionally `global_accesses.ql` / `function_addresses.ql` for
+symmetry):
+
+```ql
+import cpp
+
+from FunctionCall call, Function caller, Function callee
+where caller = call.getEnclosingFunction()
+  and callee = call.getTarget()
+select caller.getName(),
+       caller.getLocation().getFile().getRelativePath(),
+       callee.getName(),
+       callee.getLocation().getFile().getRelativePath(),
+       call.getLocation().getStartLine(),
+       call.getEnclosingElement+()
+           .(MacroInvocation).getMacro().getName()  // null when direct
+```
+
+The composer-side change:
+
+  - When building each port symbol's forward-symbol set for the
+    closure, split function_calls rows by `via_macro` IS NULL vs
+    NOT NULL.
+  - Direct rows → "P directly calls X" — extern decl is the right
+    binding.
+  - Via-macro rows → "X is reached through macro M's body" — no
+    direct extern from P's perspective; the macro's C wrapper
+    handles it.
+  - The macro M is in the closure regardless (via
+    macro_expansions); the inner X is informational about M's
+    body, not about P's needs.
+
+This is a one-column CodeQL change plus a per-edge split in the
+composer; estimated half a day of work + retest.
+
+### Tracker
+
+  - First surfaced during analyze-symbols testing for openssl-crustify-statem.
+  - Decision: accept the flat data as the source of truth for now;
+    revisit when automated Rust port generation work begins.
+
+---
+
+## §2026-06-04 — Deep anonymous-aggregate field inlining (types)
+
+### What
+
+`compose/types_manifest.py` composes each struct's `fields[]` from
+`entities/fields.csv`. A field whose *type* is an anonymous
+`struct {…}` / `union {…}` (no tag, no typedef) currently emits with
+the raw `(unnamed class/struct/union)` type string and is NOT
+recursively inlined — its nested members don't appear in the
+manifest.
+
+The locked field schema calls for an `anon` block on such fields:
+
+```jsonc
+{"name": "inner", "ref": "value",
+ "anon": {"kind": "struct",
+          "fields": [{"name": "a"}, {"name": "b", "type": "EVP_PKEY *", "ref": "pointer", "ptr": {…}}]}}
+```
+
+recursive (anon-in-anon), with the field-type closure descending
+through `anon.fields[*].type` and pointer fields inside `anon` getting
+their own `ptr` ownership blocks.
+
+### Why it's deferred
+
+`entities/fields.ql` filters out fields whose *declaring* type is
+anonymous (`f.getDeclaringType().getName().prefix(1) = "("`), so the
+anonymous aggregate's own members are absent from `fields.csv`.
+Inlining needs the composer to (a) know a field's type is anonymous
+and (b) enumerate that anonymous aggregate's members. That requires
+a `fields.ql` rewrite emitting:
+
+  - a synthetic owner id (`anon:<file>:<line>`) for anonymous
+    declaring types instead of skipping them;
+  - a per-field `field_anon_id` linking a named field to the
+    anonymous aggregate that is its type;
+  - (ideally) a field ordinal / byte-offset column so the Rust port
+    can reconstruct layout-faithful order — the current CSV row order
+    is CodeQL `Field` iteration order, not guaranteed declaration
+    order.
+
+Then the composer reconstructs the nesting by joining on the
+synthetic ids and recurses.
+
+### Why it's low-risk to defer for statem
+
+The anonymous aggregates in the statem analysis are the big
+anonymous unions inside `SSL_CONNECTION` internals (`ssl/ssl_local.h`)
+— wrap-scope for the statem target, where they surface as narrowed
+opaque fields. Statem's own port-scope types are function-pointer
+tables + small enums with no anonymous-aggregate fields.
+
+### Tracker
+
+  - Field schema + composer landed without anon inlining; anon-typed
+    fields carry the raw type string and the closure correctly skips
+    them (no phantom entry).
+  - Revisit alongside the field-ordinal column when layout-faithful
+    native Rust struct generation begins.
+
+---
+
+## §2026-06-05 — Workload-weighted batching for the per-dir analyzer agents
+
+### What
+
+`_run_analyze_parallel` spawns **one agent per manifest dir** and
+hands it *every* entry in that dir (selection `"<subject> files:
+<files-in-dir>"`), regardless of how many structs the dir has or how
+complex their layouts/footprints are. A dir like `ssl/ssl_local` puts
+~21 structs — including the codebase's largest god-objects (`ssl_st`,
+`ssl_connection_st`, `ssl_ctx_st`) — onto a single agent.
+
+Add a **parametric workload budget** so an over-budget dir is split
+into **sequential** sub-batches (one agent per batch), keeping each
+agent's effort concentrated on a tractable slice.
+
+### Why this matters
+
+This is the structural mitigation for the non-deterministic op
+attribution in PITFALLS §2026-06-05. The `ssl_st` / `ssl_connection_st`
+bail (206 / 0 ops, empty + rationalizing comment) happened in the
+full-dir e2e; the scoped 2-struct rerun produced the correct
+signature-subject partition (25 / 441, zero overlap). Same inputs,
+opposite outcome — and the difference correlated with per-agent load.
+Capping the load should make the correct outcome repeatable.
+
+### Design options (from the 2026-06-05 discussion)
+
+**Weight metric** (computable deterministically from the composed
+manifest, weakest→strongest predictor):
+
+  1. entry count — `≤ X structs`;
+  2. field sum — `Σ len(fields) ≤ N` (captures §6b per-pointer load);
+  3. footprint sum — `Σ (|opaque_in| + |non_opaque_in|) ≤ M` (captures
+     §4 op-selection load — the actual driver of the bail; e.g.
+     `ssl_connection_st` = 462);
+  4. **composite** `w = α·1 + β·fields + γ·footprint` (recommended,
+     footprint-dominant). Enums/callbacks weigh ~0.
+
+**Bin-packing.** Greedy, largest-first, with a hard **"≥1 entry per
+batch"** rule so a single over-budget struct gets its own agent (that
+alone isolates the `ssl_connection_st` case).
+
+**Scheduling.** Entries in the same dir share one `types.json`, so
+batches within a dir must run **sequentially** (read-modify-write).
+Batches in different dirs stay independent. The model shifts from a
+flat pool of dir-jobs to a **pool of dir-chains** — each chain a
+sequential list of batch sub-jobs — scheduled `parallel_max` chains at
+a time. Net: the long-pole dir becomes K sequential focused agents
+(more wall-time for that dir, better per-entry quality); cross-dir
+parallelism unchanged.
+
+**Sub-batch selection + preservation (main correctness risk).** A
+batch targets a subset, so it uses `"<subject> tags: <subset>"` rather
+than `files:`. Each batch agent must preserve sibling entries it
+isn't processing. Safeguards: (a) the per-entry skip already makes a
+later batch skip already-annotated entries; (b) strengthen the prompt
+to "preserve other entries' agent annotations too"; or — more robust —
+(c) have the orchestrator write each batch to a scratch file and
+`merge_manifest_file`-union into the dir manifest (the merge primitive
+already does field-level union by entry key), so correctness doesn't
+depend on the agent round-tripping siblings.
+
+**Parameterization.** A `--type-weight-budget` flag (+ optional
+`kilo.json`/config default), e.g. composite ≤ 150, min 1 entry.
+Generalizes to symbols (same per-dir overload risk) but scope to types
+first.
+
+### Why we're not doing it now
+
+It's a structural orchestrator change (weight computation, bin-pack,
+chain scheduler, merge-on-write) with a real correctness risk
+(same-file preservation). The cheaper PITFALLS §2026-06-05 prompt
+guardrail (attribute overlap by signature subject; never empty a type
+due to embedded-base overlap) addresses the *attribution* error
+directly; the workload budget addresses the *overload trigger*. Ship
+the guardrail first, then revisit batching if bails persist.
+
+### Tracker
+
+  - Pitfall + the two-run evidence recorded in PITFALLS §2026-06-05.
+  - Change point: `analyze.py::_run_analyze_parallel` job-build loop
+    (`entries_by_dir` → jobs) + `_build_per_dir_selection`.
+  - Recommended first cut: composite (field+footprint) weight,
+    dir-chains scheduling, merge-on-write preservation, behind
+    `--type-weight-budget`.
+
+---
+
+## §2026-06-06 — Mixed-scope manifest dirs under `out_of_scope.paths`
+
+### What
+
+The analyzers' manifests-list contract carries `scope: "port" | "wrap"`
+as a **per-manifest** tag, not a per-entry one. The orchestrator
+derives this tag from `compose()`'s `dir_scope` map (composer-emitted
+alongside `entries_by_dir`), which records per-stem-group scope based
+on the in-memory `is_port` flag of the entries it emits.
+
+This works because the file-mapper's stem-grouping
+(`utils/codeql/compose/path_partition.py:manifest_dir_for`) puts
+files with a shared basename stem under one manifest dir, and
+scope.json is typically authored at full-file granularity — every
+file in a stem-group falls on the same side of `port`.
+
+The contract assumes a stem-group never carries entries from BOTH
+scopes. The orchestrator collapses any mixed-scope dir to `"port"`
+(any port entry → dir is port) — which over-classifies wrap entries
+in mixed-scope dirs as port-scope, sending them through the
+port-scope rule branches (mutability=null forced; depends_on
+expected; ops global-footprint regime for types).
+
+### Why it can break
+
+`config.json.out_of_scope.paths` lets the user exclude individual
+files within an otherwise port-scope subsystem. If the excluded file
+shares a stem with a non-excluded file (e.g. excluding
+`foo_internal.c` while keeping `foo.c`/`foo.h`), the resulting stem
+manifest dir contains entries from both scopes:
+
+  - symbols defined in `foo.c`/`foo.h` → port-scope entries (carry
+    `used_by`/`depends_on`)
+  - symbols defined only in `foo_internal.c` → wrap-scope entries
+    (base shape only)
+
+Today's orchestrator tags the dir `"port"` and the agent applies
+port rules to all of them. Wrap entries get wrong mutability
+treatment, and wrap types get the wrong footprint regime.
+
+### Likely fix paths
+
+  1. **Composer-side split**: when emitting `entries_by_dir`,
+     partition any stem-group with mixed scopes into two distinct
+     manifest dirs (e.g. `<stem>__port/` and `<stem>__wrap/`). Keeps
+     the per-manifest scope invariant; complicates path-partition.
+  2. **Per-entry scope field**: persist `scope` to disk as a per-
+     entry field in `syms.json`/`types.json`. The agent dispatches
+     per entry. Cleanest at the cost of one extra always-emitted
+     field per entry.
+  3. **Per-entry orchestrator hints**: keep the on-disk shape
+     unchanged but pass per-entry scope via the `names` filter
+     value (`names: {"port": [...], "wrap": [...]}` instead of a
+     flat list/sentinel). Avoids schema change but distorts the
+     filter semantics.
+
+(2) is structurally cleanest and the prior `is_port` field on
+in-memory candidates already carries the info; we only dropped it at
+emission time. The merge primitive's never-overwrite rule keeps it
+safe across re-runs.
+
+### Tracker
+
+  - Change point: `utils/codeql/compose/syms_manifest.py` and
+    `types_manifest.py` `compose()` pass-4 emission step; orchestrator
+    `analyze.py::_run_subject_manifests_list` → `_build_chains`.
+  - Currently no test target exercises mixed scopes (libgit2 ODB
+    cluster has all-in-port-scope authoring; openssl ssl/statem same).
+    The bug is latent until someone authors a scope.json with
+    `out_of_scope.paths` that splits a stem.
+
+---
+
+## §2026-06-10 — Lifecycle/sync primitive migration C→Rust + pinned native handle
+
+### What
+
+The port stage (v1) keeps a ported type's **low-level lifecycle and
+synchronisation primitives in C**: the byte allocator / destructor, the
+refcount `up_ref` / `down_ref`, the deep clone (`*_dup`), and the lock
+acquire / release. Each is called through the crustify lifecycle traits /
+macros (`impl_ref_counted!` → `CArc`, `impl_freed!` → `CBox`,
+`impl_cloned!` → C `*_dup`, a `Guard` over the C lock), whose bodies just
+forward to `ffi::`. Only the *rest* of the ctor/dtor logic (field
+initialisation, validation, teardown) is ported to Rust. Migrating any of
+these primitives to Rust — Rust-side allocation (construct by-value, move
+into `Box`/`Arc`), a Rust atomic refcount, a Rust deep clone, a Rust
+`Mutex`/`RwLock` — is deferred.
+
+Two pieces of work are parked here:
+
+  1. **Allocator migration policy.** Decide *when* (if ever) a type's
+     allocation should move from C to Rust. The standalone move (Rust
+     allocates a still-C-layout struct) buys little soundness — the
+     crustify smart pointers already provide RAII + borrow-checking +
+     the field-access discipline regardless of who calls `malloc` — and
+     carries real downside: mismatched-allocator UB if alloc and free
+     don't move together, and, for projects with a **pluggable
+     allocator** (curl's `Curl_cmalloc`/`Curl_cfree` via
+     `curl_global_init_mem`), it breaks the user-override contract
+     outright. The real payoff is **layout sovereignty** (native Rust
+     fields with their own `Drop`), which is coupled to opacity
+     (`--opacify`) and is a *layout* decision, not an *allocator* one.
+     So: treat allocator migration only as an enabler of full
+     nativization, never as a standalone step.
+
+     The same "stay in C" logic covers the **refcount, clone, and lock**
+     primitives, for analogous reasons: a Rust atomic refcount must match
+     the C type's exact ordering/observable refcount, a Rust deep clone
+     must replicate the C `*_dup` semantics, and a Rust lock must honour
+     the C-side lock discipline other C callers still rely on — all
+     error-prone with no soundness gain over forwarding to the audited C
+     primitive through the crustify trait. Migrate them only as part of
+     full nativization (after layout sovereignty), never standalone.
+
+  2. **Pinned native handle in `crustify-crate`.** Once a type *is*
+     Rust-allocated but still exchanges its (opaque) handle with C, the
+     allocation must not move after exposure. Today this is expressible
+     with std `Pin<Box<T>>` over the `!Unpin` `CType` (`define_type!`
+     already bakes in `PhantomPinned`, see `crustify-crate/src/c_type.rs`),
+     but there is no ergonomic crate-level primitive (a `CPinBox<T>` /
+     pinned `CBox` analogue) that ties the pinned heap handle to the
+     crate's ownership model the way `CBox`/`CArc` do for C-allocated
+     pointers. Add one when the first real use site lands.
+
+### Why we're not doing it now
+
+v1 keeps allocation in C uniformly, which sidesteps both the
+mismatched-allocator hazard and the pluggable-allocator breakage, and
+needs no new crate primitive. The native/opacify path that *would* need
+(2) is gated behind `--opacify` and is not exercised by the first
+smoke-test batches.
+
+### Tracker
+
+  - Surfaced during the port-agent design discussion (synthetic-types /
+    native-vs-layout representation).
+  - Prompt contract: `prompts/port/port.md` §2 "Lifecycle ops (v1
+    scope)" states allocator/destructor stay in C and points here.
+  - Revisit (2) when the first `--opacify` type that re-exposes a
+    Rust-allocated handle to C is ported; revisit (1) alongside the
+    deterministic opacity classifier (the future replacement for the
+    manual `--opacify` flag).
+
+---
+
+## §2026-06-13 — LANDED: crate-per-`linked_in` + per-file `mod ffi_export` (replaces central `ffi-exports` crate)
+
+### What landed
+
+The central `rust/ffi-exports/` crate is **gone**. Two coupled changes:
+
+  1. **One port crate per linked library** (the `linked_in` field), not one
+     crate per top-level C source dir. The crate boundary *is* the library =
+     the ABI/linking unit. libgit2 → one `libgit2` crate; openssl →
+     `libssl` + `libcrypto`. The module tree mirrors the **full** vanilla C
+     path under the crate's `src/`, so a library's headers (`include/**`,
+     types) and sources (`src/**`, ops) **co-locate in the one crate**.
+  2. **Each ported file's C-ABI re-exports live in its own
+     `mod ffi_export { use super::*; … }`** submodule, beside the idiomatic
+     fn they delegate to — compiled into that file's library port crate. No
+     separate crate, no central list.
+
+This was the chosen resolution of the earlier "co-locate re-exports per file"
+proposal — and it **dissolved the linking crux** that blocked the v1 sketch.
+
+### Why crate-per-library beat the per-file-module-in-a-per-dir-crate sketch
+
+  - **The linking crux evaporates.** The v1 worry was that `#[no_mangle]`
+     symbols defined in a *dependency rlib* (`src`, `include`) get
+     dead-stripped from a downstream `ffi-exports` staticlib. With
+     crate-per-library the re-export is defined **directly in the staticlib
+     root crate** (the library port crate `lib<linked_in>.a`), so there is no
+     rlib→staticlib hop and nothing to strip — no `--whole-archive` needed.
+  - **The type/op cross-crate wrinkle dissolves.** Splitting per top-level
+     dir put a type (`include/git2/oid.h`) and its ops (`src/libgit2/oid.c`)
+     in *different* crates, forcing ops to be `pub` to reach the type's
+     `from_ptr`. Per library they land in the *same* crate, so methods/ops
+     can be `pub(crate)` inherent siblings. Cross-*library* type↔op deps are
+     vanishingly rare — measured **1 of 786** ops in openssl
+     (`ssl_evp_md_free`-style cross-`libssl`/`libcrypto` reference); that one
+     stays `pub` and the audit allowlists the seam.
+  - **No parallel-agent races on a shared `ffi-exports/src/lib.rs` /
+     `Cargo.toml`** — agents touch disjoint per-file modules. (Residual: the
+     per-crate `CRUSTIFY_<FILE>` `[features]` table is still shared by
+     same-crate agents, but a feature line merges trivially.)
+
+### Visibility outcome (decided)
+
+`from_ptr`/`as_ptr` stay **`pub`**, not `pub(crate)`. One `define_type!`
+emits a single modifier for all types/targets: `private` breaks multi-param
+re-exports (one module can't reach a *second* type's private `from_ptr`);
+`pub(crate)` breaks cross-library reconstruction (the 1/786 case). Only `pub`
+compiles everywhere — so call-site discipline is enforced by the **audit**
+(`naked_ffi_*`), not the type system. The hoped-for `pub(crate)` lockdown
+was traded away for uniform compilation; the audit covers it instead.
+
+### Implemented across (Phases 1–4)
+
+  - **Scaffolder** (`scaffold_manifest.py`): crate = `linked_in` (read from
+    the analyzer-annotated `syms/types.json`); module tree = full C path;
+    `_port_crate_cargo_toml` emits the `staticlib`/`rlib` per-library crate
+    (`name = <linked_in>`, `[features] default=[]`, deps on `crustify` +
+    every `*-sys`); in-tree-only filter (system libs excluded); dead
+    `_ensure_ffi_exports` + FFI_EXPORTS templates + `_crate_cargo_toml`
+    removed.
+  - **Prompts/agent**: `port.md` (gateway doctrine, Step 3 re-export, Step 4b
+    build wiring, validate), `agents/port.py` (dropped the `{ffi_exports}`
+    arg). DISCIPLINE §1.4/§7.4/§3/§2/§2.1/§4 + the top summary box.
+  - **Doc-strings**: `wrap.py`, `worktree.py`, `agents/merge.py`,
+    `port.py`, `prompts/merge/merge.md` — "central `ffi-exports`" →
+    "per-library port crate carrying `mod ffi_export`".
+
+### Still open
+
+  - **`ssl_evp_md_free` cross-library attribution** — the one openssl op that
+    references the other library's type. Decision deferred ("defer deciding
+    anything on this yet"): leave it `pub` + audit-allowlisted, or special-
+    case the placement. Revisit when porting openssl, not libgit2.
+  - **Build wiring is agent-written** (port.md Step 4b / `build_propose.md`),
+    not composer-emitted — there is no CMake template in the tool. The
+    libgit2 experiment-tree `CMakeLists.txt` (old `libffi_exports.a` rules)
+    is regenerated in Phase 5, so it is not hand-edited.
+
+### Tracker
+
+  - Phases 1–4 complete and committed; **Phase 5 (regenerate the libgit2 odb
+    cluster on the new layout + verify cargo check / OFF-ON ctest)** gated on
+    user approval.
+
+---
+
+## §2026-06-13 — LANDED: deterministic `audit` (entity-seeded, no LLM)
+
+### What landed
+
+`crustify <target> audit` — a deterministic, console-only soundness scan (no
+LLM). Replaced the parked `CrustifyAuditAgent` proposal (`docs/AUDIT_AGENT.md`
+**deleted**). The design pivoted from a file-centric counts manifest to an
+**entity-seeded, global-search** model that mirrors wrap/port selectors:
+
+  - **Seeds are types/symbols.** `--name T1 S1 …` seeds them directly;
+    `--file` / `--dir` / `--mod` / `--crate` seed every entity *homed* there;
+    `--all` seeds every wrapped type ∪ symbol (= naming them all). The naked-FFI
+    **search is always global** regardless of selector.
+  - **Per-entity report** (`utils/codeql/compose/audit_manifest.py` →
+    `src/crustify/audit.py`):
+      * `own` — the entity's *own implementation* surface (`unsafe_pub_fn`,
+        `unsafe_blocks`, `raw_ptr_ret`/`arg`/`as`, `ffi_self`), measured over
+        its impl region: a type's `define_type!` + `impl W`/`impl … for W`/
+        `impl_*!(W,…)`; a symbol's `/// Replaces:` fn + its `mod ffi_export`
+        re-export.
+      * `naked` + `naked_sites[{file,count,lines}]` — every `ffi::T` use /
+        `ffi::S(` call **outside** that impl region, tree-wide (the wrapper
+        being bypassed). The actionable signal.
+  - **Index** (`define_type!`/`CType<ffi::T>` → type home+wrapper;
+    `/// Replaces:` → symbol home, minus tags already in the type index since
+    `// Replaces:` anchors both). All regex over comment/string-stripped text.
+
+### Validation
+
+`--name git_oid` on the old generation → naked=37; on the **new-model regen
+tree** → naked=3 (the crate-per-`linked_in` + `mod ffi_export` model + cleaner
+prompts materially shrink raw `ffi::` bypass). `--crate src` (old gen) → 14
+types + 669 syms; `--all` → 23 types + 770 syms with rollup totals.
+
+### Deferred
+
+  - The 6 `own`-surface counts attribute to an entity's impl region; a file
+    hosting several entities can double-count a shared `unsafe` block across
+    them — acceptable for a trend signal, sharpen with `syn` if it matters.
+  - The LLM-adjudicator layer (verdict/severity/rationale per finding) was
+    dropped with `AUDIT_AGENT.md`; revisit only if the deterministic counts
+    prove insufficient.
+
+---
+
+## §2026-06-12 — Macro-family redesign: kill `*Stack`/`*Embed` companions + hand-written `impl Drop`
+
+> **Status (2026-06-13): IMPLEMENTED in `crustify-crate`, uncommitted, pending review.**
+> - `define_type!` base now emits `uninit()`/`zeroed()` (forward to `CType`);
+>   `as_ptr()` is the C-init handoff (no separate `as_mut_ptr` needed).
+> - New `CValued` trait + `CVal<T>` wrapper (inline-storage peer of `CBox`)
+>   + `impl_cvalued!` macro, for the **by-value owns-a-resource** shape — this
+>   replaces the 7 hand-written `impl Drop`s (`oidarray`/`map`/`pool`/`zstream`/
+>   `vector`/`git2_util`/`hash`). `CFreed` and `CValued` may coexist (a `*_free`
+>   that frees storage+fields vs a `*_dispose`/`*_cleanup` that frees fields
+>   only); the wrapper selects which runs. Unit + macro-path tests green.
+> - Prompts updated: `type_wrapper.md` lifecycle table (no companions; CVal
+>   routing) + DISCIPLINE §5 step 3 (forbid hand-written `impl Drop`).
+> - Remaining: migrate the 7 subjects to `CVal`/`impl_cvalued!` and verify.
+
+### What
+
+Agents hand-write a `<T>Stack` struct per type (`GitBufStack`, `GitOidStack`,
+`GitHashCtxStack`, …) for stack allocation. **These are redundant** — the
+layered storage model they reach for already exists in `crustify-crate`; the
+companions only exist because of one small macro gap.
+
+The existing model (no new infrastructure needed):
+
+| Storage | What it is today | Inherits `T`'s methods |
+|---|---|---|
+| base `T` | `define_type!` → `struct GitBuf(CType<ffi::git_buf>)` | — (is the methods) |
+| heap | `CBox<T: CFreed>` / `CArc<T: CRefCounted>`, `Deref<Target=T>` | yes, via `Deref` |
+| stack | `CType::uninit()` / `CType::zeroed()` | base *is* the value |
+| embed | base `T` by value (`PhantomPinned` + `repr(C)`) | base *is* the value |
+
+So "`THeap` inherits `T`, requires `CFreed`/`CRefCounted`" is literally
+`CBox<T>`/`CArc<T>` today (Deref-inherits, gated on those exact bounds). Stack
+is documented in `c_type.rs` as `CType::uninit`/`zeroed`. Embed is the base
+by value. There is no need for per-type `*Stack`/`*Heap`/`*Embed` types or
+`stack`/`embed` macro flags — the capability is universal (every `CType`-backed
+base is stack/embed-capable; heap is gated by the smart-pointer's trait bound).
+
+### The one real gap
+
+`define_type!` emits `as_ptr`/`from_ptr`/`from_ptr_mut`/`get`/`get_mut` on the
+base **but not `uninit`/`zeroed`** (grep `macros.rs`: absent), even though the
+inner `CType` has them (`c_type.rs:239/254`). So an agent can't write
+`GitBuf::uninit()` and instead mints `GitBufStack(MaybeUninit<ffi::git_buf>)`,
+re-implementing both the storage *and* the accessors the base already has.
+
+### Fix
+
+Add to `define_type!` base, forwarding to the inner `CType`:
+`uninit()`, `zeroed()`, `as_mut_ptr()` (the C-init handoff). Then:
+```rust
+let mut b = GitBuf::uninit();           // stack — no GitBufStack
+ffi::git_buf_init(b.as_mut_ptr());
+// heap:  CBox<GitBuf> / CArc<GitBuf>   — already works, Deref-inherits
+// embed: GitBuf as a #[repr(C)] field  — already works
+```
+The only per-type code left is the thin `new(args) { ffi::git_x_init(self.as_mut_ptr(), …) }`
+inherent constructor. Then update `prompts/wrapper/type_wrapper.md` to **stop
+emitting `*Stack` companions** and use the base `uninit`/`zeroed` + `CBox`/`CArc`.
+
+### Why it's more than convenience
+
+The audit found raw `as_mut_ptr() -> *mut ffi::T` returns scattered across the
+hand-written companions (`raw_ptr_ret` / `naked_ffi_type` hits). Collapsing them
+into the base macro's single `as_mut_ptr` makes that the **one allowlistable
+raw seam** with consistent visibility — composes with the per-file `ffi_export`
++ `pub(crate)` lockdown idea (§ above) and removes a whole category of per-type
+audit findings.
+
+### Tracker
+
+  - Surfaced from the `GitBufStack` boilerplate (`buffer.rs`) during the
+    audit/co-location discussions; sharpened on inspecting `crustify-crate`
+    (`smart_pointers.rs` `CBox`/`CArc` already Deref-inherit + bound on
+    `CFreed`/`CRefCounted`; `c_type.rs` already documents the stack/heap table).
+  - Change point: `crustify-crate/src/macros.rs` `define_type!` (forward
+    `uninit`/`zeroed`/`as_mut_ptr`); `prompts/wrapper/type_wrapper.md` (drop the
+    `*Stack` companion instruction).
+  - Change point: `crustify-crate/src/macros.rs` `define_type!` (add `stack`
+    / `embed` opt-in arms); update `prompts/wrapper/type_wrapper.md` to use
+    the flags instead of hand-writing companions.
+
+---
+
+## §2026-06-13 — LANDED: dropped placement booleans; lifecycle is split `dtor: {storage, fields}`
+
+> **Status (2026-06-13): IMPLEMENTED.** Removed `heap_allocated` /
+> `stack_allocatable` / `embeddable` and restructured `dtor` (flat string) →
+> `{storage, fields}`. Changed: `templates/types.json` (schema + comments),
+> `compose/types_manifest.py` (`_lifecycle_skeleton` + enum/callback skeletons),
+> the two dict-aware readers (`check_types_consistency.py`, `_schedule.py`
+> `load_type_meta` — tolerate legacy flat string during migration),
+> `type_analyzer.md` (§3 placement booleans → destructor-role classification;
+> §5 + field table), `type_wrapper.md` + `generics_wrapper.md` + `WRAP_STAGE_PLAN.md`
+> routing tables, `compose/README.md`, and a forward-note on `PITFALLS.md`
+> §2026-06-06. DISCIPLINE §5 already routed on the storage/fields roles (CVal
+> landing). Remaining: the on-disk libgit2 manifest migration + analyzer re-fill
+> (in progress).
+
+### Original note
+
+### What
+
+With the CVal harmonization (`CBox`=free storage+fields, `CVal`=dispose fields
+only, `CArc`=refcount), the manifest's three placement booleans —
+`heap_allocated`, `stack_allocatable`, `embeddable` — are redundant: the
+wrapper to emit is decided by *which destructor(s)* a type has, not by
+separately-classified placement flags. Replace the flat `dtor` + booleans with:
+
+```jsonc
+"dtor": { "storage": "<*_free or null>", "fields": "<*_dispose/*_cleanup or null>" }
+```
+
+Routing (subsumes all three booleans):
+
+| `dtor.storage` | `dtor.fields` | `up_ref` | → wrapper | old booleans |
+|---|---|---|---|---|
+| set | — | — | `CBox` (`CFreed`) | heap_allocated |
+| — | set | — | `CVal` (`CValued`) | stack/embed + owns resource |
+| set | set (≠) | — | both (`CBox` *or* `CVal`) | heap **and** stack/embed |
+| — | — | — | bare value (POD) | placement-anywhere |
+| set | — | set | `CArc` (`CRefCounted`) | refcounted |
+
+We expect `storage != fields` (different C functions: one frees the header,
+the other only its fields). `up_ref` stays orthogonal.
+
+### Why
+
+- The booleans were the *old* routing input; CVal routing keys on teardown
+  shape instead. `stack_allocatable ≈ embeddable ≈ (dtor.storage == null)` —
+  three fields collapse to one distinction (header is by-value-capable).
+- They're **noisy**: e.g. `git_oid` (a POD) gets `heap_allocated: true` merely
+  from living in heap arrays, irrelevant to its bare-value wrapper. Deriving
+  placement from dtor presence removes that noise.
+
+### What to adjust
+
+- `templates/types.json` — drop the 3 booleans; restructure `dtor`.
+- `prompts/analyzer/type_analyzer.md` — classify the **two** destructors ("does
+  this `*_free` free the header, or only its fields?") instead of the placement
+  booleans. The common single-`*_free`-does-both maps to `dtor.storage`
+  (`fields` null); a separate fields-only `*_dispose`/`*_cleanup` is
+  `dtor.fields`. (This semantic call is one the analyzer already makes for the
+  flat `dtor`; the split just makes it explicit.)
+- `compose/types_manifest.py` lifecycle skeleton + any composer reading the
+  booleans.
+- `prompts/wrapper/type_wrapper.md` lifecycle table + DISCIPLINE §5 — route on
+  `dtor.storage`/`dtor.fields`.
+
+### Tracker
+
+Surfaced reviewing `templates/types.json` after the CVal/CValued/impl_cvalued!
+landing. Not urgent — the booleans still work; this is a simplification +
+de-noising once the CVal routing is the norm.

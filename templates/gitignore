@@ -1,0 +1,20 @@
+# Crustify artifacts that are regenerable and/or read-only across a wrap/port
+# session. Excluded from git tracking so per-agent worktrees stay lean and the
+# `git worktree` snapshot only carries the actual mutation surface (`rust/`
+# source + build.json/alloc.json + the C edits).
+#
+# These are NOT hidden from agents: the analysis/codeql trees don't change
+# during a wave, so agents read the single shared copy via absolute paths into
+# the main checkout (their `analysis_root` / codeql args point there) rather
+# than a duplicated per-worktree copy.
+
+# No trailing slashes: these are real directories in the main checkout but
+# appear as symlinks inside per-agent worktrees (see worktree.link_shared) -
+# a `dir/` pattern would not match the symlink and git would stage it. A bare
+# name matches both the directory and the symlink, so neither is ever tracked.
+rust/target
+codeql
+analysis
+targets
+tmp
+.worktrees

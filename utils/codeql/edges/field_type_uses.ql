@@ -1,0 +1,106 @@
+/**
+ * Enumerate every user-defined type referenced from a struct/union
+ * field's declared type.
+ *
+ * One row per (struct, field, user_type) triple. The pattern is
+ * the field-level analogue of `edges/signature_type_uses.ql` — for
+ * each field of every named struct or union, walk the field's type
+ * (unwrapping pointers, arrays, qualifiers, and typedef aliases)
+ * and emit a row for each user-defined type reached.
+ *
+ * Why this exists: the type-manifest composer needs to know which
+ * user types a port-touched field exposes. Example: port code does
+ * `s->session->cipher` — the `cipher` field of `ssl_session_st` has
+ * type `SSL_CIPHER *`. To make the binding work on the Rust side,
+ * `SSL_CIPHER` must appear in `wrap/types.json` (at least as an
+ * opaque handle), even if no port-fn signature or body ever names
+ * `SSL_CIPHER` directly. The composer joins this query against the
+ * port-side `field_accesses` rows to discover such transitively-
+ * reachable types.
+ *
+ * Both the typedef alias and its underlying user-type at every
+ * chain step are emitted as separate rows (same convention as
+ * signature_type_uses.ql) — consumers reconcile via the type-index
+ * typedef walk.
+ *
+ * # cols:
+ *   struct_name      : C tag of the declaring struct/union
+ *   struct_def_file  : repository-relative path of the declaring
+ *                      struct's definition site, or "" if no
+ *                      full-body definition is in the DB
+ *   field_name       : the field's C identifier
+ *   type_name        : the user-defined type's C tag (struct tag,
+ *                      typedef name, etc. — whatever cpp-all
+ *                      surfaces at the chain step)
+ *   type_kind        : "struct" | "union" | "enum" | "typedef"
+ *   type_def_file    : repository-relative path of the type's
+ *                      definition site, or "" if no full-body
+ *                      definition is in the DB
+ *
+ * Consumer: `utils/codeql/compose/types_manifest.py` —
+ * field-driven reachability gate (scenarios 5+6 in the reach
+ * ruleset, per the design discussion).
+ *
+ * Anonymous-tag fields are emitted with `struct_name = ""` rather
+ * than the synthetic `(unnamed …)` placeholder so consumers can
+ * skip them at the join site rather than collide on the placeholder
+ * name.
+ */
+import cpp
+
+/**
+ * Repository-relative path, falling back to absolute for files outside the
+ * source root (system/external headers) — keeps system entities' identity
+ * consistent with the T1 entity CSVs.
+ */
+string pathOf(File f) {
+  if exists(f.getRelativePath())
+  then result = f.getRelativePath()
+  else result = f.getAbsolutePath()
+}
+
+string structDefFileOf(Field f) {
+  if exists(f.getDeclaringType().(Struct).getDefinition())
+  then result = pathOf(f.getDeclaringType().(Struct).getDefinition().getFile())
+  else if exists(f.getDeclaringType().(Union).getDefinition())
+  then result = pathOf(f.getDeclaringType().(Union).getDefinition().getFile())
+  else result = ""
+}
+
+string typeDefFileOf(UserType t) {
+  if exists(t.getDefinition())
+  then result = pathOf(t.getDefinition().getFile())
+  else result = ""
+}
+
+string typeKindOf(UserType t) {
+  if t instanceof Struct then result = "struct"
+  else if t instanceof Union then result = "union"
+  else if t instanceof Enum then result = "enum"
+  else if t instanceof TypedefType then result = "typedef"
+  else result = "other"
+}
+
+/**
+ * Unwrap pointers, arrays, and qualifiers from `outer` and bind `t`
+ * to every `UserType` reached along the way. Mirrors
+ * `signature_type_uses.ql`'s `reachableUserType`.
+ */
+predicate reachableUserType(Type outer, UserType t) {
+  outer = t
+  or
+  reachableUserType(outer.(DerivedType).getBaseType(), t)
+}
+
+from Field f, UserType t
+where
+  reachableUserType(f.getType(), t) and
+  t.getName() != "" and
+  not t.getName().prefix(1) = "(" and
+  typeKindOf(t) != "other"
+select f.getDeclaringType().getName() as struct_name,
+       structDefFileOf(f) as struct_def_file,
+       f.getName() as field_name,
+       t.getName() as type_name,
+       typeKindOf(t) as type_kind,
+       typeDefFileOf(t) as type_def_file

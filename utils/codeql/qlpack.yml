@@ -1,0 +1,9 @@
+name: crustify/scope-queries
+version: 0.0.1
+description: |
+  Reusable CodeQL queries for the crustify analyzer pipeline. Each
+  query answers one factual question about the codebase; analyzers
+  compose multiple query outputs to produce manifests.
+dependencies:
+  codeql/cpp-all: "*"
+library: false

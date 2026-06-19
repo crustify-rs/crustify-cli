@@ -1,0 +1,337 @@
+{
+  "_comment": [
+    "Example crustify/analysis/<dir>/<stem>/syms.json, produced by",
+    "compose/syms_manifest.py. One entry per symbol (function, macro, global, or",
+    "callback - a function-pointer typedef) whose definition - or, when the symbol",
+    "is never defined (a header typedef/decl), its declaration -",
+    "lives in a file of this stem-group. Two entry shapes share one schema: a BASE",
+    "shape carried by every entry, plus an optional PORT-SCOPE ADDITIONS layer",
+    "(used_by, depends_on) the composer adds when the entry's defining file is",
+    "listed in crustify/targets/<target>/scope.json. There is no separate wrap vs",
+    "port template: a wrap entry is simply base-only. The records below show both."
+  ],
+
+  "_comment_partition": [
+    "Files are grouped into one manifest dir per",
+    "path_partition.manifest_dir_for(file) - stem-grouped. ssl/record/record.c and",
+    "ssl/record/record.h both land in analysis/ssl/record/record/. System /",
+    "external files (CodeQL reports these by absolute path) route under",
+    "analysis/system/ (e.g. /usr/include/string.h ->",
+    "analysis/system/usr/include/string/syms.json)."
+  ],
+
+  "_comment_port_additions": [
+    "The two port-scope fields (used_by, depends_on) are emitted only when the",
+    "entry's defined_in - or declared_in[0] for declaration-only entries - is",
+    "listed under .port in crustify/targets/<target>/scope.json. Wrap-scope entries",
+    "omit both. A macro's body is never emitted; the agent reads the expansion from",
+    "source when it needs to classify or port it."
+  ],
+
+  "_comment_name": [
+    "name - the C identifier exactly as written at the definition site.",
+    "Composer-filled; agents never edit it."
+  ],
+
+  "_comment_kind": [
+    "kind - the symbol's category, and the field the CrustifySymbolAnalyzer agent",
+    "is responsible for finishing. For functions and globals the composer fills it",
+    "deterministically from CodeQL linkage: function_exported, function_static,",
+    "function_inline_header, function_inline_tu, global_static, global_extern. For",
+    "macros the composer can't know the subkind without reading the body, so it",
+    "emits the placeholder \"macro\"; the agent then refines it from the #define",
+    "body (read from source, per prompts/analyzer/symbol_analyzer.md Sec 4) into one",
+    "of four macro subkinds:",
+    "  macro_constant - expands to a typed compile-time constant: a numeric, char,",
+    "    or string literal, an enum value, or a substitution chain ending in one.",
+    "  macro_symbol - references one or more existing symbols (function calls or",
+    "    global reads/writes). Covers function-like wrappers and object-like",
+    "    aliases that resolve to a symbol. E.g. OPENSSL_malloc -> CRYPTO_malloc(...)",
+    "    and OPENSSL_free -> CRYPTO_free(...) are macro_symbol, NOT macro_misc.",
+    "  macro_typegen - declares a typedef + struct + function family per",
+    "    instantiation, expanded at file scope: DEFINE_STACK_OF(T),",
+    "    DEFINE_LHASH_OF_EX(T).",
+    "  macro_misc - everything else: token-paste utilities, header-guard sentinels,",
+    "    type aliases, pure-arithmetic expressions - an expansion that yields no",
+    "    typed constant, references no symbol, and declares no type family.",
+    "The final enum is function_{exported,static,inline_header,inline_tu},",
+    "macro_{constant,symbol,typegen,misc}, global_{static,extern}, callback. Wrap",
+    "output never carries the TU-bounded kinds function_static, function_inline_tu,",
+    "global_static.",
+    "  callback - a function-pointer typedef (CodeQL identifies it deterministically:",
+    "    a typedef whose unwrap chain reaches a RoutineType). Composer-filled kind;",
+    "    signature-shaped (carries ptr_args / ptr_ret / used_by.{call,ref} / a",
+    "    signature depends_on, NO body). defined_in is null (a header typedef). The",
+    "    agent fills ONLY its per-arg/return ownership (same ptr rules as functions),",
+    "    inferring it from used_by.call (the invokers). When invokers realize",
+    "    DIFFERENT ownership, the agent FORKS the callback: --update splits it into",
+    "    multiple kind:callback entries, same name/type but distinct ptr_args/ptr_ret,",
+    "    disambiguated by a `variant` index (0 = primary, composer-emitted; >=1 =",
+    "    agent-created fork) and a partitioned used_by.call. One entry = one Rust",
+    "    wrapper. The `variant` field is absent/0 for the common single-contract case."
+  ],
+
+  "_comment_declared_in": [
+    "declared_in - sorted list of header files that declare or export the symbol.",
+    "Composer-filled."
+  ],
+
+  "_comment_defined_in": [
+    "defined_in - the single file holding the definition: .c for functions and",
+    "globals, .h for inline functions and macros. Null when the symbol is declared",
+    "in the DB but never defined. Composer-filled."
+  ],
+
+  "_comment_type": [
+    "type - the full C signature for functions, the declared C type for globals,",
+    "and null for macros (a macro has no type). Composer-filled."
+  ],
+
+  "_comment_loc": [
+    "loc - body line span (endLine-startLine+1) of a function's definition; 1 for",
+    "a global, 0 for a macro; 0 when absent (a pre-loc extraction). Composer-filled",
+    "from functions.csv. Feeds the port bin-packer's lines-of-code batch budget",
+    "(config.PORT_MAX_LOC), which binds together with the symbol-count cap."
+  ],
+
+  "_comment_ptr_args": [
+    "ptr_args - per function_* entry; empty when the function has no pointer params,",
+    "else one record per pointer arg ordered by position (left-to-right). COMPOSER",
+    "fields (always set): position; name (param name as written, falling back to",
+    "arg<N>); type (verbatim innermost pointee type - a user tag like EVP_PKEY, a",
+    "primitive like char/void, or the synthetic markers (routine)/(array)); const",
+    "(is the innermost pointee const-qualified?); depth (1 for T*, 2 for T**, ...).",
+    "AGENT fields: array (buffer-style pointer?), string (NUL-terminated string?),",
+    "moved (does ownership transfer to the callee?), mutable (null/true/false),",
+    "note (free-form). Mutability rules: (i) const=true forces mutable=false; (ii)",
+    "port-scope entries -> mutable=null (the Rust author decides); (iii) wrap-scope",
+    "pointers to user-defined types -> mutable=null (opaque-handle wrappers); (iv)",
+    "wrap-scope buffers / out-scalars / void* -> agent decides true or false."
+  ],
+
+  "_comment_ptr_ret": [
+    "ptr_ret - per function_* entry; null when the return type isn't a pointer,",
+    "else a single record. COMPOSER fields: type, const, depth (same semantics as",
+    "ptr_args). AGENT fields: array, string, moved (does the caller own the",
+    "returned pointer?), borrowed (is the return bound to another entity's",
+    "lifetime?), mutable, lifetime (when borrowed=true: arg:<name>,",
+    "arg:<name>->path, static, or other), note. Invariants: moved and borrowed are",
+    "mutually exclusive; the valid (moved, borrowed) pairs are (true,false),",
+    "(false,true), and (false,false)."
+  ],
+
+  "_comment_used_by": [
+    "used_by - PORT-SCOPE addition; composer-filled (agents must not modify). call",
+    "and ref name the enclosing functions (or file paths for file-scope macro",
+    "expansions) that reach this entry. By kind: function_* -> {call:[callers],",
+    "ref:[addr-of users]}, where a site that both calls and takes the address is",
+    "listed only under call; global_* -> {call:null, ref:[accessors]}; macro_* ->",
+    "{call:[expansion sites], ref:[]}. The composer's default bucketing is fine for",
+    "most kinds; the analyzer may re-bucket call<->ref when a macro kind justifies it."
+  ],
+
+  "_comment_depends_on": [
+    "depends_on - PORT-SCOPE addition; composer ground-truth (agents must not",
+    "modify). depends_on.syms is the forward callee/reference set: each record is",
+    "{name, defined_in, declared_in}, with defined_in nullable for externals (e.g.",
+    "libc functions not in the DB) - resolve via defined_in first, else",
+    "declared_in[0]. depends_on.types is the forward type-use list: each record is",
+    "{type, fields}, where type is the canonical struct/union/enum tag (typedef",
+    "chains resolved) and fields are the accessed field names. The composer unions",
+    "signature types (parameters/return) with body-touched types from",
+    "t2/field_accesses.csv; signature types come first (signature order), body-only",
+    "types follow (first-encounter order); a signature type whose body touches no",
+    "field carries fields:[] (opaque use)."
+  ],
+
+  "_comment_provenance": [
+    "Illustrative slice only; a real run emits hundreds-to-thousands of entries per",
+    "manifest dir depending on stem-group density."
+  ],
+
+  "symbols": [
+    {
+      "_comment_example": [
+        "Port-scope function: base shape + port additions. defined_in is in",
+        "scope.json, so the composer emits used_by and depends_on."
+      ],
+      "name": "ossl_statem_connect",
+      "kind": "function_exported",
+      "declared_in": ["ssl/statem/statem.h"],
+      "defined_in": "ssl/statem/statem.c",
+      "type": "int ossl_statem_connect(SSL_CONNECTION *s)",
+      "ptr_args": [
+        {
+          "position": 0,
+          "name": "s",
+          "type": "SSL_CONNECTION",
+          "const": false,
+          "depth": 1,
+          "array": false,
+          "string": false,
+          "moved": false,
+          "mutable": null,
+          "note": null
+        }
+      ],
+      "ptr_ret": null,
+      "used_by": {
+        "call": ["state_machine"],
+        "ref": []
+      },
+      "depends_on": {
+        "syms": [
+          {"name": "SSL_new", "defined_in": "ssl/ssl_lib.c", "declared_in": ["include/openssl/ssl.h", "ssl/ssl_local.h"]},
+          {"name": "EVP_DigestInit_ex", "defined_in": "crypto/evp/digest.c", "declared_in": ["include/openssl/evp.h"]},
+          {"name": "memcpy", "defined_in": null, "declared_in": ["/usr/include/string.h"]}
+        ],
+        "types": [
+          {"type": "ssl_connection_st", "fields": ["statem", "version"]}
+        ]
+      }
+    },
+    {
+      "_comment_example": [
+        "Wrap-scope function: base shape only (FFI surface). Homed at",
+        "analysis/ssl/ssl_lib/syms.json. No used_by, no depends_on."
+      ],
+      "name": "SSL_new",
+      "kind": "function_exported",
+      "declared_in": ["include/openssl/ssl.h", "ssl/ssl_local.h"],
+      "defined_in": "ssl/ssl_lib.c",
+      "type": "SSL *SSL_new(SSL_CTX *ctx)",
+      "ptr_args": [
+        {
+          "position": 0,
+          "name": "ctx",
+          "type": "SSL_CTX",
+          "const": false,
+          "depth": 1,
+          "array": false,
+          "string": false,
+          "moved": false,
+          "mutable": null,
+          "note": null
+        }
+      ],
+      "ptr_ret": {
+        "type": "SSL",
+        "const": false,
+        "depth": 1,
+        "array": false,
+        "string": false,
+        "moved": true,
+        "borrowed": false,
+        "mutable": null,
+        "lifetime": null,
+        "note": null
+      }
+    },
+    {
+      "_comment_example": [
+        "Wrap-scope inline-header function: homed in the header's stem dir",
+        "(analysis/include/internal/packet/syms.json). Base only."
+      ],
+      "name": "PACKET_remaining",
+      "kind": "function_inline_header",
+      "declared_in": ["include/internal/packet.h"],
+      "defined_in": "include/internal/packet.h",
+      "type": "static inline size_t PACKET_remaining(const PACKET *pkt)",
+      "ptr_args": [
+        {
+          "position": 0,
+          "name": "pkt",
+          "type": "PACKET",
+          "const": true,
+          "depth": 1,
+          "array": false,
+          "string": false,
+          "moved": false,
+          "mutable": false,
+          "note": null
+        }
+      ],
+      "ptr_ret": null
+    },
+    {
+      "_comment_example": [
+        "Port-scope macro: base + port additions. kind is the composer placeholder",
+        "\"macro\"; the agent refines it to a macro_* subkind by reading the body.",
+        "The body itself is never emitted."
+      ],
+      "name": "TLS_MAX_VERSION_INTERNAL",
+      "kind": "macro",
+      "declared_in": ["ssl/statem/statem.h"],
+      "defined_in": "ssl/statem/statem.h",
+      "type": null,
+      "used_by": {
+        "call": ["ssl_choose_client_version"],
+        "ref": []
+      },
+      "depends_on": {
+        "syms": [],
+        "types": []
+      }
+    },
+    {
+      "_comment_example": [
+        "Wrap-scope macro: base only. kind is the placeholder \"macro\" until the",
+        "agent classifies it from source."
+      ],
+      "name": "SSL_OP_NO_TLSv1_3",
+      "kind": "macro",
+      "declared_in": ["include/openssl/ssl.h"],
+      "defined_in": "include/openssl/ssl.h",
+      "type": null
+    },
+    {
+      "_comment_example": [
+        "Wrap-scope global_extern: base only."
+      ],
+      "name": "tls11downgrade",
+      "kind": "global_extern",
+      "declared_in": ["ssl/ssl_local.h"],
+      "defined_in": "ssl/s3_lib.c",
+      "type": "const unsigned char tls11downgrade[8]"
+    },
+    {
+      "_comment_example": [
+        "Callback - a function-pointer typedef. Signature-shaped: defined_in null",
+        "(header typedef), type null (no C signature string; the structured ptr_args",
+        "/ ptr_ret carry the shape). The composer fills ptr_args/ptr_ret structure +",
+        "used_by.{call,ref} (call = indirect-invoke sites, ref = signature declarers)",
+        "+ a signature depends_on; the agent fills only the per-arg/return ownership",
+        "(moved/mutable/...), exactly as for a function. Homed in its declaring",
+        "header's stem dir."
+      ],
+      "name": "SSL_verify_cb",
+      "kind": "callback",
+      "declared_in": ["include/openssl/ssl.h"],
+      "defined_in": null,
+      "type": null,
+      "ptr_args": [
+        {
+          "position": 1,
+          "name": "x509_ctx",
+          "type": "X509_STORE_CTX",
+          "const": false,
+          "depth": 1,
+          "array": false,
+          "string": false,
+          "moved": null,
+          "mutable": null,
+          "note": null
+        }
+      ],
+      "ptr_ret": null,
+      "used_by": {
+        "call": ["ssl_verify_cert_chain"],
+        "ref": ["SSL_CTX_set_verify", "SSL_set_verify"]
+      },
+      "depends_on": {
+        "syms": [],
+        "types": [{"type": "x509_store_ctx_st", "defined_in": "crypto/x509/x509_local.h", "declared_in": ["ossl_typ.h"]}]
+      }
+    }
+  ]
+}
