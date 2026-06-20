@@ -52,7 +52,7 @@ scalar/aggregate), `includes`.
 | `deps_dag.py` | `deps-dag.json` - unified layered types+symbols DAG (cast-centrality + fallback/back-fill edges) | `analyze dag`, wrap/port scheduler |
 | `scaffold_manifest.py` | `crates.json` + `.rs` stub/module tree | `scaffold` |
 | `bindgen_manifest.py` | `<lib>-sys` crate skeletons, allowlists, macro worklists | `bindgen` |
-| `audit_manifest.py` | `audit.json` (unsafe / raw-ptr / naked-FFI counts) | `audit` |
+| `audit_manifest.py` | JSON to stdout (per-seed own + naked-ffi surface, tree-wide `global` scan, `totals`); nothing written to disk | `audit` |
 | `manifest_merge.py` | union-by-key merge of agent findings into a manifest | `query --update` |
 | `check_types_consistency.py` | consistency gate (every op homed once; acyclic) | standalone (`python -m`, manual) |
 

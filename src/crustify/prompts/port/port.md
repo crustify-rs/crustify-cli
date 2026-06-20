@@ -254,6 +254,12 @@ b. **Build wiring** - make `CRUSTIFY_<FILE>` definable from the build. Read
   undefined - the C-only build must stay green (catches guard mistakes).
 - **C flag ON:** `build.json` build + test with the feature defined - the Rust
   variant links and the suite passes.
+- Run `crustify audit --name {symbols}` to get potential sites that are still using
+  your `{symbols}` as naked `ffi::` calls, whether your own ports still use raw pointer
+  args, return, or in-body statements, which may be signals that they need to use the
+  ported function you wrote,
+  and your port should use the `define_type!` wrapped types and the
+  crustify-crate smart pointers / traits. Fix them, unless justified.
 
 Report which crates / gates passed and note anything left pending (its
 `// crustify:todo` anchor still in place) or owed to the wrap stage.

@@ -36,7 +36,7 @@ When `{tag}` is a generic generator (see Sec 2), also pull each cast-peer's reco
 | Path | Use |
 |---|---|
 | `{discipline}` | **`docs/DISCIPLINE.md`** - the hard rules (Sec 3/Sec 5/Sec 6/Sec 7/Sec 8/Sec 10 for lifecycle, field access, the FFI-borrow ladder; **Sec 12 / Sec 12.1 / Sec 12.2** for the generic-collection trait shape - base element trait + owning/borrowing marker subtrait). |
-| `{crustify_crate}` | the `crustify` crate API - `CArc`, `CBox`, `CVal`, `CVec`, `CStr`, `CType`, `SelfPtr`, `COwnable`, `CFreed`, `CValued`, and the `define_type!` / `impl_ref_counted!` / `impl_freed!` / `impl_cvalued!` / `impl_cloned!` macros. |
+| `{crustify_crate}` | the `crustify` crate API - `CArc`, `CBox`, `CVal`, `CVec`, `CStr`, `CType`, `CCell`, `SelfPtr`, `COwnable`, `CFreed`, `CValued`, and the `define_type!` / `impl_ref_counted!` / `impl_freed!` / `impl_cvalued!` / `impl_cloned!` macros. |
 
 Workspace: `{workspace_root}` (the Cargo workspace under `rust/`). Analysis
 tree: `{analysis_root}`.
@@ -67,15 +67,15 @@ header (`//! ...` ending `//! crustify:managed`).
 
 ### 1. Discover
 
-Run the commands above: the `--with-details` record (shapes / `ptr` blocks /
-lifecycle / `casted`), your windowed field worklist, your deps + naked sets, and
+Run the commands above: the `--with-details` record, 
+your windowed field worklist, your deps + naked sets, and
 your `.rs` path. Let the record drive the **details**; let the window drive
 **which** fields you take on.
 
 ### 2. Classify `{tag}` from its `casted` graph
 
 `casted.to` is the set of struct tags `{tag}` is cast **to**; `casted.from` is
-the set of tags cast **into** `{tag}`. The graph is raw and unclassified - read
+the set of tags cast **into** `{tag}`. Read
 its topology to decide whether it can be represented by a parametric generator:
 
 - **Generic generator** - `{tag}` is the convergence point of a large,
@@ -106,8 +106,7 @@ its topology to decide whether it can be represented by a parametric generator:
 ### 3. Locate the FFI binding
 
 Find the generated `bindings.rs` for the `<lib>-sys` crate of the crate that
-homes `{tag}` (its `sys_crate` companion; `scaffold --name {tag}` names the
-crate). Build it with `cargo check -p <lib>-sys` if needed. It exposes the FFI
+homes `{tag}` (the `{tag}` crate's `-sys` companion). It exposes the FFI
 struct (`ffi::<c_type>`) and the C functions your `ctors` / `dtor` / accessors
 call. Bring the FFI surface into scope at the top of your wrapper.
 
@@ -126,6 +125,8 @@ After the mandatory header, follow DISCIPLINE Sec 5.
 
 **Generic generator** (from Sec 2). Make `<Wrapper>` generic over the element type
 (`PhantomData<T>`) and suffix it **`Wrap`** (e.g. `stack_st` -> `StackWrap`).
+Use `CCell` to force instances to use `CType` for layout compatibility and interior mutability,
+instead of allowing `ffi::T`.
 Survey the cast-peers' records to fix the shared shape - fields, lifecycle, and
 element ownership (`ptr.owned_elem` on the element-bearing field). What is
 uniform becomes the generic. Choose the element API (document it):
@@ -159,11 +160,11 @@ fields) and a `*_dispose` / `*_cleanup` (fields **only**) registers **both**;
 value. Just never register the **same** C function under both (double-free).
 
 If any of the lifecycle ops is a macro that expands into a linkable symbol with
-a bindgen binding, then use the `ffi::` binding directly and not the macro.
+a bindgen binding, then use the `ffi::` binding directly instead of the macro.
 
 **Constructors.** One `pub fn` per `ctors[]` entry; params as safe wrappers;
 return `Option<CUniqueArc<Self>>` (refcounted) or `Option<CBox<Self>>` (freed).
-Construction is C-driven: wrap a C `*_new` return with `CBox::from_raw` /
+Construction is C-driven and stays in C: wrap a C `*_new` return with `CBox::from_raw` /
 `CUniqueArc::from_raw` for heap types; for by-value (`stack` / `embed`) types,
 construct the base with `<Wrapper>::zeroed()` / `<Wrapper>::uninit()` and
 initialise via `as_ptr()`. Each gets a `Replaces: <C_NAME>` doc line
@@ -187,16 +188,42 @@ getter for the field `&T` over `addr_of(...)`. The caller reads through
 Setters are the interior-mutability write path: they take `&self`, never
 `&mut self`.
 
-**Returning references** (from the field's `ptr` block):
+**Accessor reference args and returns** (from the field's `ptr` block):
 
-- `owned` -> an owning wrapper (`CArc<T>` if `up_ref` exists, else `CBox<T>`);
+- `owned` -> an owning wrapper: `CArc<T>` if shared ownership, `CBox<T>` if exclusive;
+  a generic `COwnable` (implemented by `CArc` and `CBox`) if reference is type-erased (`void *`)
+  and `into_foreign` / `from_foreign` to transfer / acquire ownership (setter must call
+  `from_foreign` on the older value otherwise it leaks; a take getter must call `from_foreign`
+  and null the field to transfer ownership on return; a view getter must call `borrow`
+  to return a borrowed view);
 - `borrowed` -> `SelfPtr<'this, T>` or an `&T` bound to `&self`, per `lifetime`;
   when it can't be expressed directly, use the DISCIPLINE Sec 10 ladder
   (input-tied borrow -> `CArc` handle -> owned snapshot) and Sec 7.2 (`SelfPtr`);
-- `array` -> a slice view or the **appropriate `CVec` variant** (plain / zeroing
-  / secure); `string` -> the **appropriate `CStr` variant**;
+  a `<C: CCell>` generic over `&C` if reference is type-erased (`void *`);
+- `array` -> a slice (borrowed) view or the **appropriate `CVec` variant**
+  (if ownership moved);
+- `string` -> a slice (borrowed) view or the **appropriate `CStr` variant**
+  (if ownership moved);
 - `nullable` -> wrap the above in `Option`; scalar -> return by value;
 - structural / self / back pointers -> `SelfPtr<'this, T>`.
+
+**Raw `ffi::` pointer policy**
+
+- use `query dag --name {tag} --depth 1` to find your deps and use their safe wrappers
+  over the appropriate smart-pointers from `{crustify_crate}`. **Do not use raw pointers
+  where safe wrappers exist**.
+- **hi-deps** that sit at a higher layer in the dag (`query dag --name {tag} --scc hi-deps`):
+  where your accessors' signatures touch one, reference it as raw `ffi::<dep>`
+  and document the gap - its wrapper doesn't exist yet. 
+- **lo-deps** that sit at a lower layer in the dag (`query dag --name {tag} --scc lo-deps`):
+  already-wrapped types that referenced *you* raw because you didn't exist when they were emitted.
+  Now that you do, open each one's `.rs` and switch those raw `ffi::{tag}` references
+  to this wrapper, keeping the surrounding code sound (`cargo check` stays
+  green).
+- **`// Alias: <cluster>` anchor** (if your window has one): you are an element of
+  array cluster `<cluster>` (an already-wrapped lo-dep). Fill the anchor with the
+  typed alias `pub type CVec<YourPascal><ClusterPascal> = crustify::CVec<<your
+  wrapper>, <cluster strategy ZST>>.
 
 **Do not return `&mut`** to a wrapped type. Writes go through `&self` setters
 (interior mutability); a returned `&mut` would assert an exclusivity the aliasing
@@ -206,27 +233,12 @@ C side can't honour (the `DerefMut` ban, DISCIPLINE Sec 8).
 behind the `<T>Guard` lock, or genuinely immutable-after-init), each with a
 SAFETY justification.
 
-**Scope.** Free functions that operate on `{tag}` - anything that is not a
-constructor, destructor, refcount, clone, or field accessor - are **not** this
-stage's surface. You emit the type, its lifecycle, and its field accessors;
-those free functions are wrapped separately as symbols.
-
-### 5. Cut cycle edges
-
-- **hi-deps** (`query dag --name {tag} --scc hi-deps`): where your signatures /
-  accessors touch one, reference it as raw `ffi::<dep>` and document the gap -
-  its wrapper doesn't exist yet. Do **not** invent or import one for it.
-- **lo-deps** (`query dag --name {tag} --scc lo-deps`): already-wrapped types
-  that referenced *you* raw because you didn't exist when they were emitted. Now
-  that you do, open each one's `.rs` and switch those raw `ffi::{tag}` references
-  to this wrapper, keeping the surrounding code sound (`cargo check` stays
-  green).
-- **`// Alias: <cluster>` anchor** (if your window has one): you are an element of
-  array cluster `<cluster>` (an already-wrapped lo-dep). Fill the anchor with the
-  typed alias `pub type CVec<YourPascal><ClusterPascal> = crustify::CVec<<your
-  wrapper>, <cluster strategy ZST>>.
-
-### 6. Validate
+### 5. Validate
 
 Run `cargo check` and `cargo clippy` over the **whole workspace**
 (`--workspace`). Fix errors before finishing.
+
+Run `crustify audit --name {tag}` to get potential sites that are still using
+your `{tag}` naked or in a raw pointer statements, which may be signals that
+they need to use the `define_type!` wrapped types and the crustify-crate
+smart pointers / traits. Fix them, unless justified.

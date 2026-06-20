@@ -439,9 +439,11 @@ def main() -> None:
 
     audit_p = sub.add_parser(
         "audit",
-        help="Deterministic audit (no LLM): scan the ported Rust tree → "
-             "audit.json, a crate→module→file aggregate-counts manifest of the "
-             "unsafe / raw-pointer / naked-FFI surface.",
+        help="Deterministic audit (no LLM): entity-seeded global scan of the "
+             "ported Rust tree, printed as JSON to stdout (nothing written to "
+             "disk). Per seed: its own unsafe / raw-pointer / naked-ffi surface; "
+             "plus a tree-wide `global` section (outside-impl raw ptrs, the "
+             "ffi:: type-surface partition, and a c_void filter) and `totals`.",
     )
     # Seed selectors (entity-seeded, global search) — mirror wrap/port. The
     # search is always global; the selector only picks the seed types/symbols.

@@ -788,3 +788,53 @@ fix is composer-side deterministic pre-fill of `polymorphic`
 (first-field-embedding + offset-0 downcast is CodeQL-able), which would
 prevent the symmetry miss at the source the same way composer pre-fill
 fixed `depends_on.types[*].fields` and `linked_in`.
+
+## 2026-06-19 — CrustifyTypeWrapper — Invented a dependency-ordering excuse for a raw `ffi::` exposure that was actually avoidable
+
+When wrapping `git_hashmap_oid` (a generic khash family, **dag layer
+L2**), the agent emitted the key-slot accessor as
+
+```rust
+pub fn keys(&self) -> Option<&[*const ffi::git_oid]> { … }
+```
+
+with the justification comment *"git_oid is not yet wrapped, so slots
+are exposed as raw `*const ffi::git_oid`."* That premise was **false**:
+`git_oid`'s wrapper `GitOid` was produced at **L1** — one layer *below*
+— committed, and therefore present on disk in the L2 worktree's base.
+`GitOid` is `#[repr(transparent)]` over the C `git_oid`, so the slots
+could have been typed `*const GitOid` at zero layout cost (the
+`keys()` accessor had no callers; the only `.keys()` in the tree is the
+unrelated `GitPackOffsetmap`'s).
+
+**Root cause.** An isolated wrap/port worktree forks from
+`snapshot_base`, which holds the **merged output of every lower layer**.
+So a dependency that sits at a *lower* dag layer than the unit being
+wrapped is **guaranteed already on disk** — a "not yet wrapped" excuse
+is categorically invalid for it. The rationale is only ever defensible
+for a *same-layer* concurrent unit or a cross-cycle FAS back-edge
+(where the dep's wrapper genuinely isn't merged yet). The agent reached
+for a layer-ordering story to license a raw shortcut **without checking
+the on-disk tree** (`scaffold --name GitOid` / grep for its
+`define_type!` would have refuted it in one command).
+
+**Why it's worse than the raw pointer.** A wrong *rationale* comment is
+more corrosive than the shortcut it defends: it asserts a constraint
+that doesn't exist, and it erodes trust in the agent's *other* SAFETY /
+ownership justifications (a reviewer now has to re-verify claims that
+read as authoritative). The naked-`ffi::T` itself is a routine
+idiomaticity miss; the fabricated dependency excuse is the real defect.
+
+**Mitigation.** (a) Prompt rule (`type_wrapper.md` / `symbol_wrapper.md`
+`Pitfalls`): a "not yet wrapped" / dependency-ordering justification for
+a raw `ffi::T` is only valid after confirming `T` has no `define_type!`
+on disk; for a **lower-layer** `T` it is never valid (the worktree base
+already holds it), so use the wrapper. (b) Deterministic detection: the
+audit's `naked` metric already lists every raw `ffi::T` outside the
+sanctioned region — cross-referencing each against an on-disk
+`define_type!(…, ffi::T)` would flag exactly the avoidable ones (wrapper
+exists but was bypassed) vs. the genuinely-unwrapped fallbacks. (c) This
+instance was back-filled: `keys()` now returns `Option<&[*const GitOid]>`
+(layout-sound retype; still raw *pointers* since slot occupancy lives in
+the `flags` bitmap, so a safe `&GitOid` borrow can't be formed at the
+buffer level — the flags-aware iterator is the eventual idiomatic API).

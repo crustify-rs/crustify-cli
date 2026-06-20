@@ -126,13 +126,17 @@ reconstructs each raw pointer at the FFI seam and exposes only these safe forms:
   - `moved=true` (callee takes ownership - frees, stores, or hands it off) -> take
     the **owning wrapper by value**: `CArc<T>` if the type has an `up_ref`, else
     `CBox<T>`; the caller relinquishes it. With `array`/`string`, the owning form
-    is `CVec<T>` / `CStr` by value.
+    is `CVec<T>` / `CStr` by value. If the reference is type-erased (`void *`) use
+    a `COwnable` parametric to allow generic owners (`CArc`/`CBox`), and call `into_foreign` to
+    transfer ownership to the C `ffi::`. 
   - `moved=false` (borrowed - used only for the duration of the call) -> take a
     **shared borrow** of the wrapper: `&T` (i.e. `&Wrapper`), or `SelfPtr` (Sec 7.2) /
     the DISCIPLINE Sec 10 ladder when a plain reference can't carry the C aliasing.
     **Pass `&T` even when `mutable=true`** - a wrapped type is `&self`-only; the C
     call mutates it through the raw pointer (interior mutability), so there is
     **no `&mut Wrapper`** (the Sec 8 `DerefMut` ban). `string=true` -> `&CStr` / `&str`.
+    If reference is type-erased (`void *`) use parametric `<C: CCell>` over `&C`
+    to allow generic types forcing layout-compatibility with `CType`.
   - **`&mut` is reserved for *non-wrapped* pointees** - a scalar out-param, an
     uninitialised slot, or a raw byte/element buffer that is *not* a wrapped type:
     `&mut T` / `&mut MaybeUninit<T>` / `&mut [T]` / `COut<T>` (Sec 9 A2), filled by the
@@ -141,18 +145,17 @@ reconstructs each raw pointer at the FFI seam and exposes only these safe forms:
     matching `CVec` variant by value if `moved`.
   - non-pointer scalar -> by value; a **nullable** pointer -> wrap the chosen form
     in `Option`.
-  - for a `void*` arg treated as one object consider turning this into a generic
-    `<C1: CCell, C2: CCell ...>` (a trait implemented by every `CType` to declare
-    interior mutability; see `crustify-crate`) over a shared reference (`&C`) that
-    would allow multiple callsites to use safe wrappers instead of raw pointers.
-    or the `CArc/CBox/CVec/CStr` family if the function moves ownership.
 
 - **Return (`ptr_ret`)** - the same rule as the type wrapper's returned-reference
   mapping:
   - `moved=true` (the return transfers ownership) -> an **owning wrapper**
-    (`CArc<T>` if `up_ref` exists, else `CBox<T>`);
+    (`CArc<T>` if `up_ref` exists, else `CBox<T>`); if the reference is type-erased
+    (`void *`) use `COwnable` to allow generic owners, and call `from_foreign` to acquire
+    ownership. 
   - `borrowed=true` -> `SelfPtr<'lifetime, T>` or an `&T` bound to `lifetime`, per
-    the Sec 10 ladder / Sec 7.2 when it can't be expressed directly;
+    the Sec 10 ladder / Sec 7.2 when it can't be expressed directly; if ref is
+    type-erased (`void *`) use parametric `<C: CCell>` over `&C` to allow borrowed
+    views over generic types.
   - `array=true` -> a slice view or the appropriate `CVec` variant (plain /
     zeroing / secure); `string=true` -> the appropriate `CStr` variant;
   - **nullable** -> wrap the above in `Option`; scalar -> return by value.
@@ -181,10 +184,13 @@ region, after the header). Find the generated `bindings.rs` for the record's
 `linked_in` library's `<lib>-sys` crate; derive module paths from it and the wrap
 deps' real locations (their `scaffold --name <dep>`). Do not invent module paths.
 
-## Discipline
+### 6. Validate
 
-- A `// SAFETY:` on every `unsafe` block - specific and falsifiable.
-- No raw `ffi::` in a public signature unless DISCIPLINE Sec 9 allowlists it.
-- If a needed wrap dep is genuinely missing (nothing from `query dag`, no wrapper
-  on disk), **stop and report it** - do not paper over the gap with raw FFI.
-- Do not modify any file other than the module(s) your symbols' anchors live in.
+Run `cargo check` and `cargo clippy` over the **whole workspace**
+(`--workspace`). Fix errors before finishing.
+
+Run `crustify audit --name {syms}` to get potential sites that are still using
+your wrappers' naked `ffi::` calls, whether your own wrappers still use raw pointer
+args or return, which may be signals that they need to use the wrappers you wrote,
+and your wrapper should use the `define_type!` wrapped types and the
+crustify-crate smart pointers / traits. Fix them, unless justified.
