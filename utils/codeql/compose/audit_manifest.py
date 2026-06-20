@@ -389,12 +389,24 @@ def _is_port_symbol(clean: str, c_fn: str) -> bool:
     gate the stage-dependent smells (a PORT body must not use raw ptrs / call
     `ffi::S`; a WRAP body legitimately does both at the FFI seam).
 
-    NB: anchored on `#[no_mangle]` + `fn <c_fn>`, NOT on `extern "C"` — comment/
-    string stripping blanks the `"C"` literal, so it is absent in ``clean``."""
+    The re-export comes in two forms, BOTH of which mean "port" (a wrap never
+    re-exports the symbol — it is additive):
+      - bare  `fn <c_fn>(`                     — exported C symbol, replaced directly;
+      - prefixed `fn crustify_<path>__<c_fn>(` — a TU-local / inline-static symbol
+        whose bare name would clash with the unfenced macro family, so the C side
+        `#define`-redirects callers to the collision-safe shim. Without matching
+        this form the khash `*_oidmap__resize` / `*_packmap__resize` etc. were
+        mislabeled `wrap`, hiding their native-body raw pointers.
+
+    NB: anchored on `#[no_mangle]` + `fn …`, NOT on `extern "C"` — comment/string
+    stripping blanks the `"C"` literal, so it is absent in ``clean``."""
     F = re.escape(c_fn)
+    # `fn <c_fn>(` or `fn crustify_<anything>__<c_fn>(` after the attribute.
+    pat = re.compile(rf"\bfn\s+(?:crustify_\w*?__)?{F}\s*\(")
     for m in _RE_NO_MANGLE.finditer(clean):
-        # the re-exported `fn <c_fn>(` follows the attribute within a line or two
-        if re.search(rf"\bfn\s+{F}\s*\(", clean[m.end():m.end() + 160]):
+        # the re-export follows the attribute within a line or two (the prefixed
+        # form is long: `pub unsafe extern "C" fn crustify_src_…__<c_fn>(`).
+        if pat.search(clean[m.end():m.end() + 240]):
             return True
     return False
 
