@@ -13,8 +13,14 @@
 # a `dir/` pattern would not match the symlink and git would stage it. A bare
 # name matches both the directory and the symlink, so neither is ever tracked.
 rust/target
+rust.bak
+bak
 codeql
 analysis
 targets
 tmp
 .worktrees
+alloc.json
+build.json
+crates.json
+stats.md
