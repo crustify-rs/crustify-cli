@@ -60,7 +60,7 @@ PORT_MAX_SYMS: int = 20
 """Maximum number of port-scope symbols (functions / globals / macros, plus a
 scheduled type's folded ops) in a single ``CrustifyPort`` batch."""
 
-PORT_MAX_LOC: int = 400
+PORT_MAX_LOC: int = 500
 """Maximum total lines-of-code (summed per-symbol body span) in a single
 ``CrustifyPort`` batch — binds together with ``PORT_MAX_SYMS`` (first cap hit
 closes the batch). Functions contribute their body line-span; globals 1; macros
