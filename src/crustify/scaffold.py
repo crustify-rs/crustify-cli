@@ -316,7 +316,7 @@ def _ensure_workspace_lints(ws_toml: Path) -> None:
     if not ws_toml.exists():
         return
     text = ws_toml.read_text()
-    if "[workspace.lints" in text:
+    if "undocumented_unsafe_blocks" in text:
         return
     if not text.endswith("\n"):
         text += "\n"

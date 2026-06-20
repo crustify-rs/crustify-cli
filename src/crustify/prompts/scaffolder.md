@@ -84,7 +84,7 @@ For each in-scope crate, emit its shell from `build.json` exactly per
 the template's crate contract: `kind` (`library` for a `libraries`
 entry, `executable` for an `executables` entry), `in_tree` (false for a
 `system` library / null `target`, true otherwise), `crate_path`,
-`sys_crate` (in-tree libraries only), and `depends_on`
+`sys_crate`, and `depends_on`
 (its `link_dependencies`). 
 
 ## 4. Modules - decompose into logical subsystems

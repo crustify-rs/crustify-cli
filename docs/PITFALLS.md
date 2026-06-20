@@ -892,3 +892,63 @@ frees; `into_raw_parts()` transfers the buffer to `h->flags` on success).
 (c) The wrap/port inference fix (treat a `crustify_`-prefixed re-export + a
 native body as a *port*) would make this class of raw buffer visible to the
 audit going forward.
+---
+
+## 2026-06-20 — CrustifyPort — Self-matching `pgrep -f "make test"` wait-loop hangs the validation matrix forever
+
+**Symptom.** A `port --dag-layer 0` run on `openssl/ssl/statem` appeared
+to hang for over an hour in the §5 two-variant validation matrix. The
+port agents themselves had finished (4 batch worktrees + merge produced,
+9 units), but the run never advanced to merge/finish. Process inspection
+showed no `make`, `gcc`, `cc1`, or `perl` running — the actual `make test`
+had completed ~90 min earlier (`/tmp/test-off.log` static, last write at
+the build's end) — yet a shell wait-loop was still spinning:
+
+```sh
+while pgrep -f "make test" >/dev/null 2>&1; do sleep 30; done
+```
+
+Killing it only made the agent re-emit the same shape:
+
+```sh
+for i in $(seq 1 60); do pgrep -f "make test" >/dev/null 2>&1 || break; sleep 30; done
+```
+
+**Root cause.** `pgrep -f` matches its pattern against each process's
+**full command line**. The wait-loop's *own* command line contains the
+literal string `make test` (inside the `pgrep -f "make test"` it runs),
+so `pgrep` always finds **itself** (the loop's `sh -c …`), returns a live
+PID, and the loop concludes the test is "still running" — forever. The
+backgrounded `make test` it was waiting on had long since exited; the
+loop was matching a ghost that is structurally guaranteed to exist for as
+long as the loop runs. A second, independent defect compounded it: the
+`make test` had run `Files=1, Tests=0, Result: NOTESTS`, i.e. it was
+invoked from a per-unit **worktree** with no configured build tree rather
+than the repo-root build that `build execute` had configured — so even on
+a clean exit the equivalence check had nothing to compare.
+
+**Where it came from.** The port prompt §5 says only "`build.json` build
++ test with the feature [un]defined"; it does **not** prescribe *how* to
+run a long test command. Faced with a multi-minute `make test`, the agent
+improvised a background-and-poll pattern and reached for the most obvious
+liveness probe (`pgrep -f "make test"`) without realising the probe's own
+argv satisfies its own match. The pattern is self-reinforcing: every
+regeneration after a kill reproduces it, because the lure (poll for the
+backgrounded job) and the obvious tool (`pgrep -f` on the command string)
+are unchanged.
+
+**Fix.** Not yet backported to the prompt (the candidate edit was reverted
+pending review). The intended guidance: (a) run build/test commands **in
+the foreground**, bounded by the `Bash` tool's own timeout — do not
+background a test and poll for it; (b) if a liveness check is truly needed,
+never `pgrep -f` a pattern that appears in the checking command's own argv
+— match the real PID (`… | grep -v $$`, or capture `$!` of the backgrounded
+job), or just run synchronously and read the exit code; (c) run the C
+build+test from the **configured repo-root build**, not a fresh per-unit
+worktree, or the suite reports `NOTESTS`.
+
+**Self-check.** Before emitting any `pgrep -f "<pat>"` poll: does `<pat>`
+appear verbatim in the command line doing the polling? If yes, it
+self-matches — the loop cannot terminate. Cheap detection on a stalled
+run: `pgrep -af "make test"` — if the only match is a `while`/`for` loop
+(not an actual `make`/`perl`/`cc1`), the wait is matching itself.
