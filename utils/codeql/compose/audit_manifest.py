@@ -39,7 +39,10 @@ Alongside the per-seed entries, a seed-independent **`global`** section
 signatures **outside** every impl/``ffi_export``/seam region (``outside_impl``),
 the ``ffi::Ident`` type surface partitioned into ``wrapped_bypass`` (a
 ``define_type!`` exists and was bypassed) vs ``unwrapped`` (``ffi_type_surface``),
-and a ``*c_void`` filter split into sanctioned vs smell (``void_ptr``).
+a ``*c_void`` filter split into sanctioned vs smell (``void_ptr``), and a
+**raw-field-projection** filter (``raw_field_proj``) — ``(*x.as_ptr()).field`` /
+``addr_of!((*p).field)`` sites split into sanctioned (accessor definitions, in an
+``impl``/``trait`` body or seam) vs smell (a port body bypassing the accessor).
 
 Selectors resolve to the seed set (``compose.audit_manifest.resolve_seeds``):
 ``--name`` (explicit), ``--file`` / ``--dir`` (entities homed there),
@@ -98,12 +101,17 @@ from pathlib import Path
 #                            "unwrapped_tags": {"git_object_t": 8, "pthread_key_t": 6}},
 #       # `*mut/const c_void`: sanctioned (ffi_export/seam) vs smell (elsewhere):
 #       "void_ptr": {"total": 65, "sanctioned": 23, "smell": 42, "smell_sites": [
-#         {"file": "libgit2/src/pack/pack_objects_h.rs", "count": 3, "lines": [489, 502, 530]}]}
+#         {"file": "libgit2/src/pack/pack_objects_h.rs", "count": 3, "lines": [489, 502, 530]}]},
+#       # `(*x.as_ptr()).field` / `addr_of!((*p).field)`: sanctioned (accessor
+#       # definition in an impl/trait body or seam) vs smell (port body bypass):
+#       "raw_field_proj": {"total": 14, "sanctioned": 11, "smell": 3, "smell_sites": [
+#         {"file": "libgit2/src/pack/mwindow.rs", "count": 3, "lines": [702, 806, 1012]}]}
 #     },
 #     "totals": {"naked_ffi": 6, "naked_type": 6, "naked_call": 0,
 #                "own_unsafe_blocks": 2, "own_raw_ptr": 0, "own_raw_ptr_void": 0,
 #                "own_raw_ptr_body_smell": 0, "own_ffi_self_smell": 0,
-#                "own_borrow_mut": 0, "unwrapped": 0}
+#                "own_borrow_mut": 0, "global_void_ptr_smell": 42,
+#                "global_raw_field_proj_smell": 3, "unwrapped": 0}
 #   }
 
 _RE_UNSAFE_PUB_FN = re.compile(r"\bpub(?:\([^)]*\))?\s+unsafe\s+fn\b")
@@ -112,6 +120,25 @@ _RE_RAW_PTR_RET = re.compile(r"->\s*\*\s*(?:const|mut)\b")
 _RE_FN_SIG = re.compile(r"\bfn\s+\w+\s*(?:<[^>]*>)?\s*\(")
 _RE_RAW_PTR = re.compile(r"\*\s*(?:const|mut)\b")
 _RE_BORROW_MUT_SELF = re.compile(r"&\s*(?:'\w+\s+)?mut\s+self\b")
+# Raw FIELD projection off a WRAPPER's pointer — the `*mut`/`*const` type literal
+# that `_RE_RAW_PTR` matches misses these *value-position* projections entirely:
+#   `(*x.as_ptr()).field` / `(*x.as_mut_ptr()).field`        — deref a wrapper's
+#       own raw pointer and reach into a field, bypassing its safe accessor;
+#   `addr_of!((*x.as_ptr()).field)` / `addr_of_mut!(…)`      — the macro form.
+# Rooted at `.as_ptr()`/`.as_mut_ptr()` ON PURPOSE: that marks the pointer as a
+# wrapper's own (a safe accessor exists or should), the case the user flagged.
+# A bare `addr_of!((*p).field)` on a raw FFI-struct pointer with NO wrapper
+# (e.g. a ported C-array header) is legitimate raw porting, not this smell, so it
+# is deliberately excluded. A projection inside an `impl`/`trait` body (an
+# accessor *definition*), a seam routine, or a `mod ffi_export` shim is
+# sanctioned; one in a free function (a port body) is the smell.
+_RE_RAW_FIELD_PROJ = re.compile(
+    r"\baddr_of(?:_mut)?!\s*\(\s*\(\s*\*\s*[\w.]+\.as_(?:mut_)?ptr\s*\(\s*\)\s*\)"  # addr_of!((*x.as_ptr())…)
+    # `(*x.as_ptr()).field` — but NOT `addr_of!(*x.as_ptr()).method()`, where the
+    # `(` is addr_of!'s call paren wrapping a place expr (a whole-pointee read,
+    # not a field projection); the lookbehinds drop that single-paren form.
+    r"|(?<!addr_of!)(?<!addr_of_mut!)\(\s*\*\s*[\w.]+\.as_(?:mut_)?ptr\s*\(\s*\)\s*\)\s*\.\w")
+_RE_TRAIT_HEAD = re.compile(r"\btrait\s+\w+[^{;]*\{")
 
 _RE_DEFINE_TYPE = re.compile(r"define_type!\s*[({](.*?)[)}]", re.DOTALL)
 # Any wrapper-binding macro — `define_type!` plus the lifecycle binders
@@ -199,7 +226,7 @@ def _strip_noise(text: str) -> str:
                 if out[k] != "\n":
                     out[k] = " "
             i = j
-        elif c in "\"'":
+        elif c == '"':
             q, j = c, i + 1
             while j < n:
                 if text[j] == "\\":
@@ -213,6 +240,34 @@ def _strip_noise(text: str) -> str:
                 if out[k] != "\n":
                     out[k] = " "
             i = j
+        elif c == "'":
+            # Disambiguate a Rust char literal (`'x'`, `'\n'`, `b'\0'`) from a
+            # lifetime (`'a`, `'static`, `'this`): a char literal is an escape
+            # (`'\…'`) or a single char closed by `'`; a lifetime is `'` + ident
+            # with NO closing quote. Blanking a lifetime as if it were a literal
+            # eats the `(` / `{` / `)` up to the next `'` and truncates every
+            # brace span downstream (e.g. an `impl` body with a `<'a>` method).
+            if i + 1 < n and text[i + 1] == "\\":
+                j = i + 1
+                while j < n:
+                    if text[j] == "\\":
+                        j += 2
+                        continue
+                    if text[j] == "'":
+                        j += 1
+                        break
+                    j += 1
+                for k in range(i, min(j, n)):
+                    if out[k] != "\n":
+                        out[k] = " "
+                i = j
+            elif i + 2 < n and text[i + 2] == "'":
+                for k in (i, i + 1, i + 2):
+                    if out[k] != "\n":
+                        out[k] = " "
+                i += 3
+            else:
+                i += 1  # Rust lifetime — not a literal, leave intact
         else:
             i += 1
     return "".join(out)
@@ -262,6 +317,15 @@ def _all_impl_spans(clean: str) -> list[tuple[int, int]]:
     `\\bimpl\\b` excludes `impl_*!` macros (the `_` defeats the word boundary)."""
     return [(m.start(), _match_brace(clean, m.end() - 1))
             for m in _RE_IMPL_HEAD.finditer(clean)]
+
+
+def _all_trait_spans(clean: str) -> list[tuple[int, int]]:
+    """Byte ranges of every ``trait … { … }`` block body. A trait's default
+    methods are accessor *definitions* (the sanctioned home for raw field
+    projection), so they are excluded from the global raw-field-projection smell
+    just like ``impl`` bodies are."""
+    return [(m.start(), _match_brace(clean, m.end() - 1))
+            for m in _RE_TRAIT_HEAD.finditer(clean)]
 
 
 def _raw_ptr_args_where(text: str, want) -> tuple[int, list[int]]:
@@ -577,7 +641,14 @@ def _global_scan(clean_files, types_idx, ffx_spans) -> dict:
         still lacking a wrapper (``unwrapped``; ``unwrapped_tags`` by frequency).
       - **void_ptr** — ``*mut/const c_void`` tree-wide, split into ``sanctioned``
         (inside ``ffi_export`` / a seam routine) and ``smell`` (everywhere else),
-        with smell sites."""
+        with smell sites.
+      - **raw_field_proj** — raw field projections (``(*x.as_ptr()).field`` /
+        ``addr_of!((*p).field)``) tree-wide, split into ``sanctioned`` (an
+        accessor *definition* — inside an ``impl``/``trait`` body, a seam routine,
+        or ``ffi_export``) and ``smell`` (a free-function/port body that should
+        call the accessor instead), with smell sites. This catches the
+        value-position projections that the ``*mut``/``*const`` type-literal
+        ``raw_ptr_*`` filters structurally miss."""
     wrapped = set(types_idx)
     g = {
         "outside_impl": {"raw_ptr_ret": 0, "raw_ptr_arg": 0, "sites": []},
@@ -585,10 +656,12 @@ def _global_scan(clean_files, types_idx, ffx_spans) -> dict:
         "ffi_type_surface": {"naked_total": 0, "wrapped_bypass": 0,
                              "unwrapped": 0, "scalar": 0, "unwrapped_tags": {}},
         "void_ptr": {"total": 0, "sanctioned": 0, "smell": 0, "smell_sites": []},
+        "raw_field_proj": {"total": 0, "sanctioned": 0, "smell": 0, "smell_sites": []},
     }
-    fts, vp = g["ffi_type_surface"], g["void_ptr"]
+    fts, vp, rfp = g["ffi_type_surface"], g["void_ptr"], g["raw_field_proj"]
     for rel, c in clean_files.items():
         impl_spans = _all_impl_spans(c)
+        trait_spans = _all_trait_spans(c)
         seam_spans = _seam_spans(c)
         ffx = ffx_spans.get(rel, [])
         decl_spans = [(m.start(), m.end()) for m in _RE_DEFINE_TYPE.finditer(c)]
@@ -645,8 +718,24 @@ def _global_scan(clean_files, types_idx, ffx_spans) -> dict:
         if vlines:
             vp["smell_sites"].append({"file": rel, "count": len(vlines), "lines": vlines})
 
+        # raw field projections: sanctioned (impl/trait accessor body, seam,
+        # ffi_export) vs smell (a free-function/port body bypassing the accessor)
+        plines = []
+        for m in _RE_RAW_FIELD_PROJ.finditer(c):
+            pos = m.start()
+            rfp["total"] += 1
+            if (_in_spans(pos, impl_spans) or _in_spans(pos, trait_spans)
+                    or _in_spans(pos, seam_spans) or _in_spans(pos, ffx)):
+                rfp["sanctioned"] += 1
+            else:
+                rfp["smell"] += 1
+                plines.append(_line_of(c, pos))
+        if plines:
+            rfp["smell_sites"].append({"file": rel, "count": len(plines), "lines": plines})
+
     g["outside_impl"]["sites"].sort(key=lambda s: -s["count"])
     vp["smell_sites"].sort(key=lambda s: -s["count"])
+    rfp["smell_sites"].sort(key=lambda s: -s["count"])
     fts["unwrapped_tags"] = dict(sorted(fts["unwrapped_tags"].items(),
                                         key=lambda kv: -kv[1]))
     return g
@@ -708,6 +797,8 @@ def audit(rust_root: Path, *, all=False, names=None, crate=None, mod=None,
         "own_raw_ptr_body_smell": sum((e["own"] or {}).get("raw_ptr_body_smell", 0) for e in entries),
         "own_ffi_self_smell": sum((e["own"] or {}).get("ffi_self_smell", 0) for e in entries),
         "own_borrow_mut": sum((e["own"] or {}).get("borrow_mut", 0) for e in entries),
+        "global_void_ptr_smell": glob["void_ptr"]["smell"],
+        "global_raw_field_proj_smell": glob["raw_field_proj"]["smell"],
         "unwrapped": unwrapped,
     }
     return {
