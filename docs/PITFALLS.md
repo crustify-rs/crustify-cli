@@ -952,3 +952,149 @@ appear verbatim in the command line doing the polling? If yes, it
 self-matches — the loop cannot terminate. Cheap detection on a stalled
 run: `pgrep -af "make test"` — if the only match is a `while`/`for` loop
 (not an actual `make`/`perl`/`cc1`), the wait is matching itself.
+
+---
+
+## 2026-06-21 — CrustifyPort + interactive debug — Self-referential C type (`z_stream`) wrapped in by-value `CVal`: move after `inflateInit` breaks zlib's `state->strm` check; then mis-framed as a data race for hours; then **a careless `git checkout` deleted 19 uncommitted files**
+
+This entry has three nested lessons, in increasing order of cost: a
+**port defect** (the actual bug), a **diagnosis anti-pattern** (the wrong
+mental model that burned the investigation budget), and a **destructive
+recovery mistake** (working-tree files erased with no reflog backstop).
+All three came out of one session on libgit2 W9 (the L9 pack-reader
+batch).
+
+### 1. The port defect — by-value `CVal<GitZstream>` moves a self-referential `z_stream`
+
+**Symptom.** The `object::cache` test suite segfaulted ~100% of the time
+under threads (`threadmania` / `fast_thread_rush`), in teardown. Reading
+the lone *pack-only* object in `testrepo.git`
+(`0266163a…`, a 51-byte non-delta blob — every other object the test
+reads is also loose, so only this one exercises the Rust pack reader)
+returned `GIT_ERROR_ZLIB "error inflating zlib stream"`.
+
+**Root cause.** zlib ≥ 1.2.12 (runtime here **1.2.13**) makes `z_stream`
+**self-referential**: `inflateInit` stores a `state->strm` back-pointer
+into the inflate state, and `inflateStateCheck` rejects any later
+`inflate()` whose `&z` no longer equals that stored address — returning
+`Z_STREAM_ERROR`, **consuming 0 input, producing 0 output**. The ported
+`packfile_unpack_compressed` (`pack/pack.rs`) built its stream with the
+generated `GitZstream::init` constructor:
+
+```rust
+let s = Self::zeroed();
+git_zstream_init(s.as_ptr(), direction);   // inflateInit binds state->strm = &s.z
+Some(CVal::new(s))                          // CVal is #[repr(transparent)] INLINE → MOVES z
+```
+
+`CVal<T>` stores `T` by value, so returning `CVal::new(s)` relocates the
+`z_stream`; `state->strm` now dangles at the pre-move address. The C
+original keeps `git_zstream zstream` as a stack local that is **never
+moved** from init to free. `odb_loose.rs` (ported earlier) already
+documented this exact hazard and inits in-place — that is why loose reads
+always worked and only the pack path broke. The deferred pack-reader
+batch was the one site that reached for the by-value constructor.
+
+**Fix.** Initialise the stream **in place** in its final slot, matching
+the C stack-local and `odb_loose`'s established pattern:
+
+```rust
+let zstream = crustify::CVal::new(GitZstream::zeroed());   // placed first
+git_zstream_init(zstream.as_ptr(), GitZstreamType::Inflate.to_raw());
+// `zstream` is never moved afterwards → state->strm stays valid
+```
+
+Verified: `object::cache` went 25/25-crash → 25/25-pass at 6×6 threads
+and 10/10 at the stock 50×20; `object`/`odb`/`pack` suites green.
+`GitZstream::init` is now unused but remains a footgun — the **generator**
+must never emit a by-value `CVal` init for a self-referential C type
+(anything that stores `&self` after construction: zlib streams, types
+with intrusive list nodes pointing at themselves, etc.). Such types are
+effectively `Pin`-only; init must happen at the final address.
+
+**Self-check (port agent).** Before wrapping a C type in by-value `CVal`
+and running its C constructor *before* the wrapper reaches its final
+resting place: does the constructor store a pointer to the object inside
+the object (or inside heap state the object owns)? zlib `*Init`,
+`*StateCheck`-guarded APIs, and any `x->self = x` / intrusive-node idiom
+qualify. If so, init **in place** (`CVal::new(T::zeroed())` then C-init
+through `.as_ptr()`), never `init()-then-return-by-value`. Grep the
+constructor for `strm`, `->self`, `&` of the subject stored into a field.
+
+### 2. The diagnosis anti-pattern — "threaded crash" ⇒ assumed "data race"
+
+The crash only manifested **with** threads, so the investigation spent
+hours on the data-race hypothesis: built ThreadSanitizer (fighting an
+ASLR-disabled-by-sandbox `FATAL`, `setarch -R` blocked by seccomp),
+re-ran ASan with Rust instrumentation, audited every lock
+(`p->lock`, `p->mwf.lock`, `git_mwindow__mutex` symbol sharing),
+and read every function on the path looking for a racing access. **TSan
+correctly reported 0 races** — which was *true*, not a tooling gap. The
+bug is **deterministic**: the inflate fails on *every* read of that
+object, single-threaded included (the main-thread `cache_counts`
+instrumentation showed the identical `out_rc=-1, consumed=0` failure).
+Threads only changed the *crash signature*: a worker's `cl_git_pass`
+failure does a cross-thread `longjmp`, derailing the worker into a
+teardown use-after-free. Single-threaded it failed *gracefully* (test
+failure, no segfault), which is why it read as "threaded-only".
+
+**Lesson.** "Only crashes under concurrency" ≠ "is a data race." Threads
+can merely change how a *deterministic* failure is *reported* (here:
+graceful error-return vs. cross-thread `longjmp`-into-freed-memory).
+Before committing to race tooling, **reproduce at the lowest thread count
+that still fails and instrument the single-threaded path** — a print of
+the actual failing values (`out_rc`, bytes-consumed, the input bytes vs.
+the on-disk truth) located the root cause in three edits, after TSan/ASan
+had found nothing. Reducing the test to 6×6 threads (from 50×20) made it
+**more** reliable (25/25), not less — high contention was never the
+trigger; *any* second reader was.
+
+### 3. The destructive mistake — `git checkout` erased 19 uncommitted files
+
+**What happened.** Mid-bisection, to test whether reverting the pack
+reader fixed the crash, the working tree was reset with:
+
+```sh
+git checkout HEAD -- <paths…>
+```
+
+over a broad set of paths. Those paths held the **uncommitted** W9 port
+output — 7 `odb/`, 4 `object/`, 8 `pack/` Rust files — none of it staged
+or committed. `git checkout -- <path>` overwrites the working copy from
+the index/HEAD **with no confirmation and no reflog entry**: unlike commit
+rewrites, an obliterated *working-tree* file is not recoverable from
+`git reflog`. 19 files of un-snapshotted work vanished instantly.
+
+**Why recovery was possible anyway (this time).** The same content had,
+earlier in the session, been part of a *merge* whose tip became a
+**dangling commit** when the branch moved. `git fsck --lost-found`
+surfaced it (`e82320a2d1…`), and `git checkout e82320a2d1 -- <files>`
+restored every file; faithfulness was confirmed by re-reproducing the
+crash 6/6. Pure luck that a dangling commit happened to carry the bytes —
+had the work never been committed in any form, it was simply gone.
+
+**Lesson / self-check.** `git checkout -- <path>`, `git restore <path>`,
+`git stash` (drops untracked unless `-u`), and `git clean` are all
+**working-tree destroyers with no reflog backstop**. Before running any of
+them over paths that may hold uncommitted work:
+
+1. **Snapshot first, always.** `git stash -u` or a throwaway
+   `git add -A && git commit -m wip` (or even `cp -r` / `git diff >
+   /tmp/x.patch`) costs seconds and converts an irreversible loss into a
+   recoverable one. Do this *especially* during bisection, whose whole
+   premise is repeatedly mutating the tree.
+2. **Scope the revert to tracked-and-committed paths only.** Never hand a
+   broad path set to `checkout`/`restore`/`clean` without first checking
+   `git status --short` for `??` (untracked) and ` M`/`MM` (unstaged)
+   entries in that set — those are exactly what gets destroyed.
+3. **If it's already gone:** `git fsck --lost-found` for dangling commits/
+   blobs (works only if the content was ever objectified — committed,
+   stashed, or merged); editor swap/undo history; build artifacts that
+   embedded the source. None of these is guaranteed — which is why (1) is
+   the only real defense.
+
+The meta-lesson tying all three together: the costly part of this session
+was **not** the subtle zlib bug — it was (a) anchoring on the wrong
+failure model and (b) mutating un-backed-up state to test hypotheses. A
+single-threaded instrumented print and a `git stash -u` before the first
+bisection step would each have saved hours.

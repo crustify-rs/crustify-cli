@@ -7,6 +7,47 @@ re-discovering the context.
 
 ---
 
+## §2026-06-20 — Per-agent "relevant tests only" instead of full ctest per port batch
+
+### The idea
+
+port.md §5 currently has every port agent run the **full** `build.json` test
+(`ctest`) twice — C-flag OFF (regression guard) and ON (Rust linked). With many
+batches per wave that's a lot of redundant full-suite runs. Since the variant is
+selected **per C file** (`CRUSTIFY_<FILE>`), an agent's ON build only swaps in its
+own file's symbols — so it could run just the clar suites that exercise those
+symbols (`libgit2_tests -s<suite>`) as a fast per-changeset smoke.
+
+### Why it's not a drop-in
+
+- **Global symbol swap:** a ported low-level primitive (alloc / khash / str /
+  vector / oid) is called by ~every suite, so its "relevant" set is "everything"
+  — and a regression surfaces in a suite the agent skipped. Core/util ports need
+  the full suite as a fallback.
+- **Combined linkage is never agent-tested:** each agent flips only its own flag,
+  so no agent tests the full combined shim (the whole wave ON together). That's
+  what the post-wave OFF/ON gate does — narrowing per-agent is only safe if that
+  comprehensive gate stays an explicit wave-level step.
+- **Speedup is bounded:** per-agent cost is build + relink + test-run; narrowing
+  cuts only the test-run, and the relink often dominates. Measure first.
+- **Attribution moves later:** cross-area breaks shift from the causing agent to
+  the post-wave gate, where you must bisect across N parallel agents.
+
+### Shape if pursued
+
+port.md §5 → run the relevant clar suite(s) for the ON smoke (full-suite fallback
+for core/util), drop the per-agent full OFF run to a build-guard, and make the
+comprehensive post-wave OFF/ON gate over the combined shim an explicit step.
+Compose with sharding the post-wave gate (clar isolates each `-s<suite>` process,
+so it parallelises safely).
+
+### Tracker
+
+Surfaced 2026-06-20 looking at wave wall-clock. Orthogonal to (and better than)
+parallelising ctest, since it removes redundant work rather than spreading it.
+
+---
+
 ## §2026-06-20 — Capture typegen polymorphic relationships for pure-macro-generated families
 
 ### The gap
