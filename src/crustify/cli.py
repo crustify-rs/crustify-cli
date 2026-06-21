@@ -681,6 +681,25 @@ def main() -> None:
         "--with-details", action="store_true", dest="with_details",
         help="Emit full records (kind, layer, depth) instead of bare names.",
     )
+    dag_q.add_argument(
+        "--loc", action="store_true", dest="loc",
+        help="LoC view (with --name or --layer): a type seed → its struct "
+             "field count + op count; a function seed → its body LoC; "
+             "--layer N → the layer's total translated LoC (types valued as "
+             "fields+ops; the bodies of folded type-ops are excluded — they "
+             "ride their type at 1 each, not ported standalone).",
+    )
+    dag_scope = dag_q.add_mutually_exclusive_group()
+    dag_scope.add_argument(
+        "--wrap-only", action="store_true", dest="wrap_only",
+        help="Restrict the node set (slice / --loc) to wrap-scope entities "
+             "(scope.json wrap closure ∪ synthetic string/array clusters).",
+    )
+    dag_scope.add_argument(
+        "--port-only", action="store_true", dest="port_only",
+        help="Restrict the node set (slice / --loc) to port-scope entities "
+             "(scope.json port closure; synthetics are never port).",
+    )
 
     # -- wrap ------------------------------------------------------------
     wrap_p = sub.add_parser(
@@ -1149,6 +1168,9 @@ def _handle_query(args: argparse.Namespace, target: Path) -> None:
             scc=getattr(args, "scc", None),
             layer=getattr(args, "layer", None),
             as_json=bool(getattr(args, "with_details", False)),
+            loc=bool(getattr(args, "loc", False)),
+            wrap_only=bool(getattr(args, "wrap_only", False)),
+            port_only=bool(getattr(args, "port_only", False)),
         )
         return
     from crustify.query import query

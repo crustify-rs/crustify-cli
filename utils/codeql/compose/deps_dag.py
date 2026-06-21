@@ -87,7 +87,7 @@ def _sym_filekey(defined_in: Any, declared_in: Any) -> str | None:
 class TypeNode:
     __slots__ = ("tag", "kind", "defined_in", "declared_in",
                  "ctype_refs", "ops", "ctors", "dtor_syms", "dep_types", "dep_syms",
-                 "used_by_call", "cast_to", "cast_from", "elem_refs")
+                 "used_by_call", "cast_to", "cast_from", "elem_refs", "nfields")
 
     def __init__(self, tag: str) -> None:
         self.tag = tag
@@ -104,6 +104,7 @@ class TypeNode:
         self.cast_to: set[str] = set()      # casted.to tags (this -> T)
         self.cast_from: set[str] = set()    # casted.from tags (T -> this)
         self.elem_refs: set[str] = set()    # array cluster: raw elem type strings
+        self.nfields: int = 0               # full struct field count (its port LoC)
 
     def cast_degree(self) -> int:
         """Cast-graph centrality: how many distinct types this one is cast
@@ -577,6 +578,7 @@ def _build_graph(types, syms, ext_syms, ext_types):
             "defined_in": n.origin(),
             "ops": _op_objs(n.ops),
             "ctors": list(n.ctors),
+            "loc": n.nfields,           # struct field count (a type's own LoC)
             "_dt": n.dep_types, "_ds": n.dep_syms,
         })
     for key, n in syms.items():
@@ -742,6 +744,8 @@ def _emit_node(nodes, comp):
         if rec["node_kind"] == "type":
             out["ops"] = rec.get("ops", [])
             out["ctors"] = rec.get("ctors", [])
+            if rec.get("loc"):
+                out["loc"] = rec["loc"]
         elif rec.get("loc"):
             out["loc"] = rec["loc"]
         return out  # deps filled by caller
@@ -751,14 +755,44 @@ def _emit_node(nodes, comp):
         if m["node_kind"] == "type":
             d["ops"] = m.get("ops", [])
             d["ctors"] = m.get("ctors", [])
+            if m.get("loc"):
+                d["loc"] = m["loc"]
         elif m.get("loc"):
             d["loc"] = m["loc"]
         return d
     return {"scc": [member(nodes[c]) for c in comp]}
 
 
+def _populate_nfields(analysis_root: Path, types: dict[str, TypeNode]) -> None:
+    """Set each type's ``nfields`` to its **full** struct field count from the
+    T1 ``fields.csv`` (``<crustify>/codeql/t1/fields.csv``, a sibling of the
+    analysis tree). This is the whole struct, NOT the port-accessed subset that
+    ``types.json``'s ``fields[]`` narrows to — a struct's translated surface
+    (``define_type!`` + accessors) scales with its field layout, so a type's
+    own LoC is its field count. fields.csv attributes anonymous-struct fields to
+    the naming typedef, so ``struct_name`` matches the type tag. Missing CSV →
+    every ``nfields`` stays 0 (still deterministic, no CodeQL)."""
+    fcsv = analysis_root.parent / "codeql" / "t1" / "fields.csv"
+    if not fcsv.is_file():
+        return
+    by_key: dict[tuple[str, str], int] = collections.Counter()
+    by_name: dict[str, int] = collections.Counter()
+    for row in _scope.load_csv(fcsv):
+        sn = row.get("struct_name") or ""
+        if not sn:
+            continue
+        by_key[(sn, row.get("struct_def_file") or "")] += 1
+        by_name[sn] += 1
+    for tag, n in types.items():
+        cnt = by_key.get((tag, n.defined_in or ""))
+        if cnt is None:
+            cnt = by_key.get((tag, n.declared_in or ""))
+        n.nfields = cnt if cnt is not None else by_name.get(tag, 0)
+
+
 def compose(analysis_root: Path) -> dict[str, Any]:
     types, syms = _collect(analysis_root)
+    _populate_nfields(analysis_root, types)
     amap = _alias_map(analysis_root, types)
     ext_syms, ext_types, wedge, forced_back = _build_edges(types, syms, amap)
     nodes, adj = _build_graph(types, syms, ext_syms, ext_types)

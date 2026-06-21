@@ -1230,6 +1230,99 @@ def _load_sym_entry(analysis: Path, name: str, defined_in: str | None) -> dict |
     return fallback
 
 
+def _dag_loc(by_key, by_name, names, files, layer, as_json, keep=None) -> None:
+    """``query dag --loc`` — translated-LoC accounting over the dag.
+
+    A **type**'s LoC is ``node.loc`` (its struct field count, Rule 1) **plus**
+    its op count (each lifecycle/method op rides the type at 1 line — its real
+    body is folded in, not ported standalone). A **function**'s LoC is its body
+    span (``node.loc``).
+
+      * ``--name T`` (type)     → fields + ops.
+      * ``--name S`` (function) → body LoC.
+      * ``--layer N``           → Σ over the layer: types as fields+ops, plus
+        standalone (non-folded) function bodies. The bodies of functions that
+        are some type's op are excluded — they're counted once, as +1 in their
+        owning type (which may sit on another layer), never as a body here.
+    """
+    # Identity of every folded type-op, gathered globally (an op can sit a layer
+    # below its type). Ops with a resolved file match by (name, file); ambiguous
+    # ones (file None) match by name, mirroring the scheduler's fallback.
+    op_keys: set = set()
+    op_names: set = set()
+    for n in by_key.values():
+        if n.node_kind == "type":
+            for nm, df in n.ops:
+                op_keys.add((nm, df)) if df else op_names.add(nm)
+
+    def is_folded_op(n) -> bool:
+        return (n.id, n.defined_in) in op_keys or n.id in op_names
+
+    def nops(n) -> int:
+        # distinct ops ∪ ctors (ctors are a subset of ops for most types, but
+        # the synthetic allocator-array clusters carry an allocator ctor not in
+        # ops — so union both to avoid undercounting).
+        return len({nm for nm, _ in n.ops} | set(n.ctors))
+
+    def val(n) -> int:
+        # type: field count (node.loc) + 1 per op; function: its body LoC.
+        return n.loc + nops(n) if n.node_kind == "type" else n.loc
+
+    if layer is not None:
+        if names:
+            raise SystemExit("query dag --loc: --layer and --name are mutually exclusive.")
+        rows = [n for n in by_key.values() if n.layer == layer
+                and (n.node_kind == "type" or not is_folded_op(n))
+                and (keep is None or keep(n))]
+    elif names:
+        file_set = set(files or [])
+        rows, unknown = [], []
+        for nm in names:
+            hits = [by_key[k] for k in by_name.get(nm, [])
+                    if not file_set or (by_key[k].defined_in or "") in file_set]
+            rows.extend(hits) if hits else unknown.append(nm)
+        if unknown:
+            extra = " matching --file" if file_set else ""
+            raise SystemExit(f"query dag --loc: no node{extra} for: {', '.join(unknown)}")
+    else:
+        raise SystemExit("query dag --loc: pass --name T/S or --layer N.")
+
+    rows.sort(key=lambda n: (n.layer, n.id))
+    total = sum(val(n) for n in rows)
+    if as_json:
+        recs = []
+        for n in rows:
+            r = {"id": n.id, "kind": n.node_kind, "layer": n.layer, "loc": val(n)}
+            if n.node_kind == "type":
+                r["nfields"], r["nops"] = n.loc, nops(n)
+            recs.append(r)
+        print(json.dumps({"rows": recs, "total": total}, indent=2))
+    else:
+        for n in rows:
+            print(f"{val(n)}\t{n.id}")
+        print(f"{total}\tTOTAL")
+
+
+def _scope_predicate(layout, target, wrap_only: bool, port_only: bool):
+    """A node-keeping predicate for `--wrap-only` / `--port-only`, or None when
+    neither is set. The dag is scope-agnostic; scope is read from scope.json on
+    demand. `origin_key(id, defined_in)` is exactly the node's serialized origin
+    (`Node.origin()`), so dag nodes and scope entries collide on the same key.
+    Synthetic string/array clusters are never in scope.json — they are *always*
+    wrap-scope, never port (mirrors `query types --wrap-only`)."""
+    if not (wrap_only or port_only):
+        return None
+    from compose import scope as _sc
+    sj = layout.scope(target)
+    keys = _sc.scope_membership(sj, "port" if port_only else "wrap") if sj.exists() else set()
+
+    def keep(n) -> bool:
+        if (getattr(n, "subkind", "") or "") in _sc.SYNTHETIC_KINDS:
+            return bool(wrap_only)
+        return _sc.origin_key(n.id, n.defined_in, None) in keys
+    return keep
+
+
 def query_dag(
     target: Path,
     *,
@@ -1239,6 +1332,9 @@ def query_dag(
     scc: str | None = None,
     layer: int | None = None,
     as_json: bool = False,
+    loc: bool = False,
+    wrap_only: bool = False,
+    port_only: bool = False,
 ) -> None:
     """Structural views over the dag. Three mutually-exclusive modes:
 
@@ -1266,6 +1362,12 @@ def query_dag(
             f"Run `crustify {target} analyze dag` first.")
     dag = json.loads(dag_path.read_text())
     by_key, by_name = S.load_nodes(dag)
+    keep = _scope_predicate(layout, target, wrap_only, port_only)
+
+    # ── mode: LoC view ─────────────────────────────────────────────────
+    if loc:
+        _dag_loc(by_key, by_name, names, files, layer, as_json, keep)
+        return
 
     def _emit(rows: list) -> None:
         """rows: list[(node, depth|None)] — print bare ids, or --json records."""
@@ -1292,7 +1394,8 @@ def query_dag(
     if layer is not None:
         if names:
             raise SystemExit("query dag: --layer and --name are mutually exclusive.")
-        _emit([(n, None) for n in by_key.values() if n.layer == layer])
+        _emit([(n, None) for n in by_key.values()
+               if n.layer == layer and (keep is None or keep(n))])
         return
 
     if not names:
@@ -1320,7 +1423,7 @@ def query_dag(
         rows = []
         for t in dict.fromkeys(tags):               # dedup, preserve order
             for dk in by_name.get(t, []):
-                if by_key[dk].node_kind == "type":
+                if by_key[dk].node_kind == "type" and (keep is None or keep(by_key[dk])):
                     rows.append((by_key[dk], None))
         _emit(rows)
         return
@@ -1346,7 +1449,8 @@ def query_dag(
                 hop[dk] = h + 1
                 q.append((dk, h + 1))
 
-    _emit([(by_key[k], hop[k]) for k in hop if k not in start_keys])
+    _emit([(by_key[k], hop[k]) for k in hop
+           if k not in start_keys and (keep is None or keep(by_key[k]))])
 
 
 # ---------------------------------------------------------------------------

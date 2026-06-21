@@ -64,8 +64,13 @@ class Node:
     # raw and should switch to its wrapper once it lands.
     fallback: list[str] = field(default_factory=list)
     back_fill: list[str] = field(default_factory=list)
+    # A type's ctor symbol names (a subset of `ops` for most types, but NOT for
+    # the synthetic allocator-array clusters whose ctor is its allocator). Kept
+    # alongside `ops` so an op-count unions both.
+    ctors: list[str] = field(default_factory=list)
     # Per-symbol lines-of-code (CodeQL body span; global=1, macro=0, 0 when the
-    # `loc` column is absent). Summed per batch against the port LoC budget.
+    # `loc` column is absent — for a type node it is the struct field count).
+    # Summed per batch against the port LoC budget.
     loc: int = 0
 
     @property
@@ -93,6 +98,7 @@ def load_nodes(dag: dict) -> tuple[dict[SymKey, Node], dict[str, list[SymKey]]]:
             defined_in=rec.get("defined_in"),
             layer=layer,
             ops=[(o["name"], o.get("defined_in")) for o in rec.get("ops") or []],
+            ctors=list(rec.get("ctors") or []),
             dep_types=list(deps.get("types") or []),
             dep_syms=[(d["name"], d.get("defined_in")) for d in deps.get("syms") or []],
             fallback=list((rec.get("fallback") or {}).get("types") or []),
