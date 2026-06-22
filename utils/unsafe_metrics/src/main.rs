@@ -25,12 +25,14 @@ use rustc_hir::intravisit::{self, Visitor};
 use rustc_middle::ty::{self, Ty, TyCtxt, TypeckResults};
 use rustc_span::def_id::DefId;
 use rustc_span::hygiene::{ExpnKind, MacroKind};
+use rustc_span::Span;
 use std::collections::HashSet;
 
 /// FFI-seam conversion routines (audit `_SEAM_FN_NAMES`): raw pointers in
 /// these signatures are the expected boundary, not a smell.
 const SEAM_FNS: &[&str] = &[
-    "as_ptr", "as_mut_ptr", "as_c_ptr", "as_raw", "from_ptr", "from_raw",
+    "as_ptr", "as_mut_ptr", "as_c_ptr", "as_raw", "as_buf_ptr",
+    "from_ptr", "from_ptr_mut", "from_raw",
     "to_ptr", "to_raw", "into_raw", "from_foreign", "into_foreign",
 ];
 
@@ -181,6 +183,56 @@ struct Counts {
     void_ptr_smell: u64,
     raw_ptr_derefs: u64,
     total_stmts: u64,
+    code_lines: u64, // crate-wide physical LoC: non-blank, non-`//`-comment source lines
+}
+
+/// Per-category source sites `(file, 1-based line)` — the actionable locations
+/// the `crustify audit` consumer (wrap/port agents) act on. Mirrors audit.py's
+/// `naked_sites` / `*_smell_sites` shape after `sites_json` aggregation.
+#[derive(Default)]
+struct Sites {
+    naked: Vec<(String, usize)>,       // tree-wide naked `ffi::C` / `*-sys` use
+    raw_ptr: Vec<(String, usize)>,     // raw ptr to a wrapped C type in a signature
+    void_ptr: Vec<(String, usize)>,    // `*c_void` smell
+    field_proj: Vec<(String, usize)>,  // `(*p).field` bypassing the accessor
+}
+
+/// `(file, 1-based line)` for a span, local-path filename.
+fn span_site(tcx: TyCtxt<'_>, span: Span) -> (String, usize) {
+    let sm = tcx.sess.source_map();
+    let file = sm
+        .span_to_filename(span)
+        .into_local_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let line = sm.lookup_char_pos(span.lo()).line;
+    (file, line)
+}
+
+/// Aggregate `(file, line)` sites into audit.py's
+/// `[{"file":..,"count":N,"lines":[..]}]` JSON (one row per file, lines sorted/deduped).
+fn sites_json(sites: &[(String, usize)]) -> String {
+    use std::collections::BTreeMap;
+    let mut by_file: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (f, l) in sites {
+        by_file.entry(f.as_str()).or_default().push(*l);
+    }
+    let rows: Vec<String> = by_file
+        .iter()
+        .map(|(f, lines)| {
+            let mut ls = lines.clone();
+            ls.sort_unstable();
+            ls.dedup();
+            let arr: Vec<String> = ls.iter().map(|l| l.to_string()).collect();
+            format!(
+                "{{\"file\":\"{}\",\"count\":{},\"lines\":[{}]}}",
+                f,
+                ls.len(),
+                arr.join(",")
+            )
+        })
+        .collect();
+    format!("[{}]", rows.join(","))
 }
 
 struct BodyVisitor<'a, 'tcx> {
@@ -192,6 +244,7 @@ struct BodyVisitor<'a, 'tcx> {
     in_impl: bool,    // this body is inside any impl/trait
     wrapped_c: &'a HashSet<DefId>,
     c: &'a mut Counts,
+    sites: &'a mut Sites,
 }
 
 impl<'a, 'tcx> Visitor<'tcx> for BodyVisitor<'a, 'tcx> {
@@ -260,6 +313,7 @@ impl<'a, 'tcx> Visitor<'tcx> for BodyVisitor<'a, 'tcx> {
                             self.c.field_proj_wrapped += 1;
                             if !self.in_impl {
                                 self.c.field_proj_outside_impl += 1;
+                                self.sites.field_proj.push(span_site(self.tcx, e.span));
                             }
                         }
                     }
@@ -461,21 +515,43 @@ fn count_ty_did(t: Ty<'_>, target: DefId) -> u64 {
     n
 }
 
-/// Collect free-fn call callee `DefId`s in a body (for `ffi::S(` naked detection).
+/// Collect free-fn call callee `DefId`s + their call-site spans in a body
+/// (for `ffi::S(` / `*-sys` naked detection with locations).
 struct CallCollector<'a, 'tcx> {
     typeck: &'tcx TypeckResults<'tcx>,
-    out: &'a mut Vec<DefId>,
+    out: &'a mut Vec<(DefId, Span)>,
 }
 impl<'a, 'tcx> Visitor<'tcx> for CallCollector<'a, 'tcx> {
     fn visit_expr(&mut self, e: &'tcx hir::Expr<'tcx>) {
         if let hir::ExprKind::Call(f, _) = e.kind {
             if let hir::ExprKind::Path(ref qp) = f.kind {
                 if let hir::def::Res::Def(_, did) = self.typeck.qpath_res(qp, f.hir_id) {
-                    self.out.push(did);
+                    self.out.push((did, e.span));
                 }
             }
         }
         intravisit::walk_expr(self, e);
+    }
+}
+
+/// Collect spans of HIR type-references that resolve to `target` (a seed's
+/// wrapped C type), for type-seed `naked_sites`. The naked COUNT stays
+/// typeck-based (`count_ty_did`, alias-proof); these spans are the syntactic
+/// occurrences the agent actually edits.
+struct NakedTyVisitor<'a> {
+    target: DefId,
+    out: &'a mut Vec<Span>,
+}
+impl<'a, 'v> Visitor<'v> for NakedTyVisitor<'a> {
+    fn visit_ty(&mut self, t: &'v hir::Ty<'v, hir::AmbigArg>) {
+        if let hir::TyKind::Path(hir::QPath::Resolved(_, path)) = t.kind {
+            if let hir::def::Res::Def(_, did) = path.res {
+                if did == self.target {
+                    self.out.push(t.span);
+                }
+            }
+        }
+        intravisit::walk_ty(self, t);
     }
 }
 
@@ -492,6 +568,7 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
     }
     let seeds = resolve_seeds(tcx);
     let mut metrics: Vec<Counts> = (0..seeds.len()).map(|_| Counts::default()).collect();
+    let mut sites: Vec<Sites> = (0..seeds.len()).map(|_| Sites::default()).collect();
     let mut region_owners: Vec<u64> = vec![0; seeds.len()];
     let mut naked: Vec<u64> = vec![0; seeds.len()];
 
@@ -514,19 +591,32 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
                 let body = tcx.hir_body_owned_by(owner);
                 let mut v = BodyVisitor {
                     tcx, typeck, depth: 0, in_wrapper, in_ffi, in_impl,
-                    wrapped_c: &wrapped_c, c: &mut metrics[i],
+                    wrapped_c: &wrapped_c, c: &mut metrics[i], sites: &mut sites[i],
                 };
                 v.visit_body(body);
             }
             if matches!(tcx.def_kind(did), DefKind::Fn | DefKind::AssocFn) {
                 let sig = tcx.fn_sig(did).skip_binder().skip_binder();
                 let seam = is_seam_fn(tcx, did);
+                let span = tcx.def_span(did);
                 for t in sig.inputs().iter().copied().chain(std::iter::once(sig.output())) {
                     if is_mut_ref_wrapper(tcx, t) {
                         metrics[i].mut_borrow_wrapper += 1;
                     }
                     if is_void_ptr(tcx, t) && !(seam || in_ffi) {
                         metrics[i].void_ptr_smell += 1;
+                        sites[i].void_ptr.push(span_site(tcx, span));
+                    }
+                    // raw ptr to a wrapped C type in a non-seam region signature:
+                    // a "use the wrapper" smell, recorded with its site.
+                    if !seam {
+                        if let Some(p) = raw_pointee(t) {
+                            if matches!(p.kind(), ty::TyKind::Adt(def, _)
+                                if wrapped_c.contains(&def.did()))
+                            {
+                                sites[i].raw_ptr.push(span_site(tcx, span));
+                            }
+                        }
                     }
                 }
             }
@@ -539,28 +629,50 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
         if sanctioned {
             continue;
         }
-        // type-seed naked: refs to `ffi::C` in this fn's signature.
+        // type-seed naked: refs to `ffi::C` in this fn's signature. COUNT via
+        // typeck (`count_ty_did`, alias-proof); SITES via the HIR signature
+        // (`NakedTyVisitor`, the syntactic occurrences the agent edits).
         if matches!(tcx.def_kind(did), DefKind::Fn | DefKind::AssocFn) {
             let sig = tcx.fn_sig(did).skip_binder().skip_binder();
+            let hir_id = tcx.local_def_id_to_hir_id(owner);
+            let decl = tcx.hir_node(hir_id).fn_decl();
             for (i, s) in seeds.iter().enumerate() {
                 if let (SeedKind::Type, Some(c)) = (s.kind, s.c_did) {
                     for t in sig.inputs().iter().copied().chain(std::iter::once(sig.output())) {
                         naked[i] += count_ty_did(t, c);
+                    }
+                    if let Some(decl) = decl {
+                        let mut spans: Vec<Span> = Vec::new();
+                        let mut v = NakedTyVisitor { target: c, out: &mut spans };
+                        for t in decl.inputs {
+                            if let Some(at) = t.try_as_ambig_ty() {
+                                v.visit_ty(at);
+                            }
+                        }
+                        if let hir::FnRetTy::Return(t) = decl.output {
+                            if let Some(at) = t.try_as_ambig_ty() {
+                                v.visit_ty(at);
+                            }
+                        }
+                        for sp in spans {
+                            sites[i].naked.push(span_site(tcx, sp));
+                        }
                     }
                 }
             }
         }
         // func-seed naked: calls to a `*-sys` fn matching the C tag, in this body.
         let typeck = tcx.typeck(owner);
-        let mut callees = Vec::new();
+        let mut callees: Vec<(DefId, Span)> = Vec::new();
         CallCollector { typeck, out: &mut callees }.visit_body(tcx.hir_body_owned_by(owner));
-        for cdid in callees {
+        for (cdid, cspan) in callees {
             let kn = tcx.crate_name(cdid.krate);
             if kn.as_str().ends_with("_sys") {
                 let nm = tcx.item_name(cdid);
                 for (i, s) in seeds.iter().enumerate() {
                     if s.kind == SeedKind::Func && s.c_name == nm.as_str() {
                         naked[i] += 1;
+                        sites[i].naked.push(span_site(tcx, cspan));
                     }
                 }
             }
@@ -569,13 +681,16 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
 
     let entries: Vec<String> = seeds.iter().enumerate().map(|(i, s)| {
         let m = &metrics[i];
+        let st = &sites[i];
         let kind = if s.kind == SeedKind::Type { "type" } else { "func" };
         format!(
-            "{{\"name\":\"{}\",\"kind\":\"{}\",\"region_owners\":{},\"unsafe_blocks\":{},\"unsafe_block_code_lines\":{},\"wrapper_macro\":{},\"wrapper_handwritten\":{},\"raw_ptr_derefs\":{},\"field_proj\":{},\"field_proj_outside_impl\":{},\"mut_borrow_wrapper\":{},\"void_ptr_smell\":{},\"naked\":{}}}",
+            "{{\"name\":\"{}\",\"kind\":\"{}\",\"region_owners\":{},\"unsafe_blocks\":{},\"unsafe_block_code_lines\":{},\"wrapper_macro\":{},\"wrapper_handwritten\":{},\"raw_ptr_derefs\":{},\"field_proj\":{},\"field_proj_outside_impl\":{},\"mut_borrow_wrapper\":{},\"void_ptr_smell\":{},\"naked\":{},\"naked_sites\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{}}}",
             s.name, kind, region_owners[i], m.unsafe_blocks, m.unsafe_block_code_lines,
             m.wrapper_impl_macro, m.wrapper_impl_handwritten, m.raw_ptr_derefs,
             m.field_proj_wrapped, m.field_proj_outside_impl, m.mut_borrow_wrapper,
             m.void_ptr_smell, naked[i],
+            sites_json(&st.naked), sites_json(&st.raw_ptr),
+            sites_json(&st.void_ptr), sites_json(&st.field_proj),
         )
     }).collect();
     format!("{{\"crate\":\"{krate}\",\"seeds\":[{}]}}", entries.join(","))
@@ -598,9 +713,12 @@ impl Callbacks for MetricsCallbacks {
             println!("{}", usage_json(tcx, krate));
             return Compilation::Continue;
         }
+        // Seed mode prints the per-seed JSON, then FALLS THROUGH to also emit the
+        // tree-wide global block below — so `crustify audit` gets both the seed
+        // surface and the global section + totals from a single compilation
+        // (the dispatcher merges the two stdout lines per crate).
         if std::env::var("UM_MODE").as_deref() == Ok("seed") {
             println!("{}", seed_json(tcx, krate));
-            return Compilation::Continue;
         }
         if std::env::var_os("UM_DEBUG").is_some() {
             let (mut ns, mut nw, mut shown) = (0u32, 0u32, 0u32);
@@ -642,6 +760,7 @@ impl Callbacks for MetricsCallbacks {
         }
 
         let mut c = Counts::default();
+        let mut sites = Sites::default();
         // Every body owner (fn, closure, const/static initializer, ...). Each is
         // a separate typeck context; intravisit does not descend into nested
         // bodies, so visiting every owner covers the whole crate exactly once.
@@ -655,7 +774,7 @@ impl Callbacks for MetricsCallbacks {
                 let body = tcx.hir_body_owned_by(owner);
                 let mut v = BodyVisitor {
                     tcx, typeck, depth: 0, in_wrapper, in_ffi, in_impl,
-                    wrapped_c: &wrapped_c, c: &mut c,
+                    wrapped_c: &wrapped_c, c: &mut c, sites: &mut sites,
                 };
                 v.visit_body(body);
             }
@@ -673,21 +792,39 @@ impl Callbacks for MetricsCallbacks {
                             c.void_ptr_sanctioned += 1;
                         } else {
                             c.void_ptr_smell += 1;
+                            sites.void_ptr.push(span_site(tcx, tcx.def_span(did)));
                         }
                     }
                 }
                 // Raw-pointer args/rets, region-classified.
                 let cat_wrap = in_wrapper && !seam;
                 let cat_out = !in_wrapper && !in_ffi;
+                // Resolution-based self-boundary: a raw ptr to the method's OWN
+                // wrapper type (`*mut Self` in `free`/`dispose`/`dup`/…) is the
+                // type's raw-form lifecycle seam, not a "use the wrapper" smell
+                // (you can't pass `&Self` while destroying/duplicating it). Skip.
+                let own_self = enclosing_impl_self(tcx, did);
                 if cat_wrap || cat_out {
-                    let tally = |p: Ty<'_>, is_ret: bool, c: &mut Counts| {
-                        let w = pointee_has_wrapper(tcx, p, &wrapped_c);
+                    let mut tally = |p: Ty<'_>, is_ret: bool, c: &mut Counts| {
+                        if let Some(s) = own_self {
+                            if p.ty_adt_def().map(|d| d.did()) == Some(s) { return; }
+                        }
+                        // The actionable smell is a raw ptr to the *C type* when a
+                        // wrapper exists (`*mut ffi::git_oid` → should be GitOid).
+                        // A raw ptr to the *wrapper itself* (`*mut GitOid`) already
+                        // uses the wrapper — kept raw deliberately (stored back-ptr
+                        // / array boundary), not a smell. So count only the C case.
+                        let w = matches!(p.kind(),
+                            ty::TyKind::Adt(def, _) if wrapped_c.contains(&def.did()));
                         if cat_wrap {
                             if is_ret { c.rp_wrap_nonseam_rets += 1 } else { c.rp_wrap_nonseam_args += 1 }
                             if w { c.rp_wrap_nonseam_wrapped += 1 }
                         } else {
                             if is_ret { c.rp_outside_rets += 1 } else { c.rp_outside_args += 1 }
                             if w { c.rp_outside_wrapped += 1 }
+                        }
+                        if w {
+                            sites.raw_ptr.push(span_site(tcx, tcx.def_span(did)));
                         }
                     };
                     for inp in sig.inputs() {
@@ -697,9 +834,29 @@ impl Callbacks for MetricsCallbacks {
                 }
             }
         }
+        // Crate-wide physical LoC: count non-blank, non-`//`-comment source lines
+        // across the local crate's own files. Imported/external-crate files carry
+        // `src == None` (their text lives in `external_src`), so filtering on
+        // `src.is_some()` isolates exactly the crate being compiled. Same filter
+        // as `unsafe_block_code_lines`, so the two are apples-to-apples.
+        {
+            let sm = tcx.sess.source_map();
+            for sf in sm.files().iter() {
+                if let Some(src) = &sf.src {
+                    c.code_lines += src
+                        .lines()
+                        .filter(|l| {
+                            let t = l.trim();
+                            !t.is_empty() && !t.starts_with("//")
+                        })
+                        .count() as u64;
+                }
+            }
+        }
         println!(
-            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"rp_wrap_nonseam_args\":{},\"rp_wrap_nonseam_rets\":{},\"rp_wrap_nonseam_wrapped\":{},\"rp_outside_args\":{},\"rp_outside_rets\":{},\"rp_outside_wrapped\":{},\"mut_borrow_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"total_stmts\":{}}}",
-            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.rp_wrap_nonseam_args, c.rp_wrap_nonseam_rets, c.rp_wrap_nonseam_wrapped, c.rp_outside_args, c.rp_outside_rets, c.rp_outside_wrapped, c.mut_borrow_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.total_stmts
+            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"rp_wrap_nonseam_args\":{},\"rp_wrap_nonseam_rets\":{},\"rp_wrap_nonseam_wrapped\":{},\"rp_outside_args\":{},\"rp_outside_rets\":{},\"rp_outside_wrapped\":{},\"mut_borrow_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{}}}",
+            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.rp_wrap_nonseam_args, c.rp_wrap_nonseam_rets, c.rp_wrap_nonseam_wrapped, c.rp_outside_args, c.rp_outside_rets, c.rp_outside_wrapped, c.mut_borrow_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.total_stmts, c.code_lines,
+            sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj)
         );
         Compilation::Continue
     }
