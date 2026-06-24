@@ -623,13 +623,19 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
             check_fn(fn, "clone")
         d = f.get("dtor") or {}
         if isinstance(d, dict):
-            ds, df = d.get("storage"), d.get("fields")
-            if ds and df and ds == df:
-                errors.append("dtor.storage and dtor.fields name the same "
-                              "function (must differ)")
-            for v, r in ((ds, "dtor.storage"), (df, "dtor.fields")):
-                if v:
-                    check_fn(v, r)
+            # New schema {shared, exclusive, fields}; `storage` tolerated until
+            # on-disk migration. No single C function may fill two dtor roles.
+            seen_dtor: dict[str, str] = {}
+            for role in ("shared", "exclusive", "fields", "storage"):
+                v = d.get(role)
+                if not v:
+                    continue
+                if v in seen_dtor:
+                    errors.append(f"dtor.{seen_dtor[v]} and dtor.{role} name "
+                                  f"the same function (must differ)")
+                else:
+                    seen_dtor[v] = role
+                    check_fn(v, f"dtor.{role}")
 
         # Per-field checks.
         for fname, fa in (f.get("fields") or {}).items():
@@ -966,10 +972,13 @@ def _create_type(layout, target, src: str) -> None:
         named.append(f["up_ref"])
     d = f.get("dtor") or {}
     if isinstance(d, dict):
-        ds, df = d.get("storage"), d.get("fields")
-        if ds and df and ds == df:
-            errors.append("dtor.storage and dtor.fields name the same function")
-        named += [v for v in (ds, df) if v]
+        # New schema {shared, exclusive, fields}; `storage` tolerated. Collect
+        # role names; no function may fill two roles.
+        present = [v for r in ("shared", "exclusive", "fields", "storage")
+                   if (v := d.get(r))]
+        if len(present) != len(set(present)):
+            errors.append("dtor roles name the same function (must differ)")
+        named += present
 
     # ARRAY-only element surface. `elems` rows are {type, note} — the concrete
     # element types the buffer holds at call sites, for the wrapper's typed
@@ -1011,7 +1020,7 @@ def _create_type(layout, target, src: str) -> None:
         "declared_in": f["declared_in"], "defined_in": defined_in,
         "ctors": f.get("ctors") or [], "up_ref": f.get("up_ref"),
         "clones": f.get("clones") or [],
-        "dtor": f.get("dtor") or {"storage": None, "fields": None},
+        "dtor": f.get("dtor") or {"shared": None, "exclusive": None, "fields": None},
         "locking": f.get("locking"),
         "conditional_drop": f.get("conditional_drop"),
         "casted": {"to": [], "from": []}, "fields": [],

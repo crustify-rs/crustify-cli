@@ -109,8 +109,10 @@ def _null_ptr_skeleton() -> dict[str, Any]:
     return {
         "array": None,
         "string": None,
+        "elems": None,
         "owned": None,
         "exclusive": None,
+        "shared": None,
         "borrowed": None,
         "nullable": None,
         "mutable": None,
@@ -426,11 +428,15 @@ def _lifecycle_skeleton() -> dict[str, Any]:
     return {
         "ctors": [],
         "up_ref": None,
-        # Split destructor: `storage` = a `*_free` releasing the heap header +
-        # fields (→ CBox/CArc); `fields` = a `*_dispose`/`*_cleanup` releasing
-        # owned fields only, by-value header (→ CVal). See types.json
-        # `_comment_lifecycle`.
-        "dtor": {"storage": None, "fields": None},
+        # Split destructor:
+        #   `exclusive` = a plain `*_free` releasing a solely-owned heap header
+        #     + fields (-> CBox);
+        #   `shared`    = a refcount-decrementing free (the dual-ownership /
+        #     refcounted teardown, pairs with `up_ref`; -> CArc);
+        #   `fields`    = a `*_dispose`/`*_cleanup` releasing owned fields only,
+        #     by-value header, POD-style (-> CVal).
+        # See types.json `_comment_lifecycle`.
+        "dtor": {"shared": None, "exclusive": None, "fields": None},
         "clones": [],
         "locking": None,
         "conditional_drop": None,

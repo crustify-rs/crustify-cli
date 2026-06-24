@@ -302,12 +302,42 @@ def scope_membership(
 SYNTHETIC_KINDS = ("string", "array")  # buffer-pass clusters
 
 
+# Destructor role keys across schema versions. The dual-ownership split is
+# `shared` (refcount-decrementing free, pairs with up_ref -> CArc) and
+# `exclusive` (sole-owner plain free -> CBox); `fields` is the by-value POD
+# disposer (*_dispose / *_cleanup -> CVal). `storage` is the pre-split legacy
+# single free, tolerated until the on-disk types.json schemas are migrated.
+_DTOR_ROLE_KEYS = ("shared", "exclusive", "fields", "storage")
+
+
+def dtor_op_names(d) -> list[str]:
+    """Destructor op function names from a `dtor` value, schema-tolerant.
+
+    New schema: ``{shared, exclusive, fields}``. Legacy: ``{storage, fields}``
+    (single pre-split free) or a bare string. Returns the non-null names in
+    role order, deduped — so a type's `*_free` / `*_dispose` folds into its
+    lifecycle regardless of which schema version produced the record. This is
+    the single dtor-extraction primitive the dag / scope / consistency stages
+    share, so the dual-dtor split lands uniformly.
+    """
+    if isinstance(d, dict):
+        seen: set[str] = set()
+        out: list[str] = []
+        for k in _DTOR_ROLE_KEYS:
+            v = d.get(k)
+            if v and v not in seen:
+                seen.add(v)
+                out.append(v)
+        return out
+    return [d] if d else []
+
+
 def type_method_syms(entry: dict) -> list[str]:
     """The C function names that are this type's methods — its method surface,
     deduped, lifecycle-first.
 
     For a concrete type (struct/union/enum) this is DERIVED, not stored: its
-    **lifecycle** (ctors ∪ dtor.{storage,fields} ∪ up_ref ∪ clones ∪
+    **lifecycle** (ctors ∪ dtor.{shared,exclusive,fields} ∪ up_ref ∪ clones ∪
     locking.{acquire,release}). Field accessors are NOT part of the surface —
     the wrapper derives per-field accessors from the field layout directly, so a
     C field-accessor function is an ordinary free function here. There is no
@@ -321,11 +351,7 @@ def type_method_syms(entry: dict) -> list[str]:
     if entry.get("kind") in SYNTHETIC_KINDS:
         return list(entry.get("ops") or [])
     out: list[str] = list(entry.get("ctors") or [])
-    d = entry.get("dtor")
-    if isinstance(d, dict):
-        out += [v for v in (d.get("storage"), d.get("fields")) if v]
-    elif d:
-        out.append(d)
+    out += dtor_op_names(entry.get("dtor"))
     if entry.get("up_ref"):
         out.append(entry["up_ref"])
     out += entry.get("clones") or []

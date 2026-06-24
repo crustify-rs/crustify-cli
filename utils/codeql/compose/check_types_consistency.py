@@ -96,13 +96,10 @@ def lifetime_set(by_type) -> set[str]:
     for entries in by_type.values():
         for entry, _ in entries:
             out |= set(entry.get("ctors") or [])
-            # `dtor` is `{storage, fields}` (both names are lifecycle funcs);
-            # tolerate the legacy flat string during migration.
-            d = entry.get("dtor")
-            if isinstance(d, dict):
-                out |= {v for v in (d.get("storage"), d.get("fields")) if v}
-            elif d:
-                out.add(d)
+            # `dtor` is `{shared, exclusive, fields}` (all lifecycle funcs);
+            # `scope.dtor_op_names` tolerates the legacy `{storage, fields}`
+            # and flat-string shapes during migration.
+            out |= set(scope.dtor_op_names(entry.get("dtor")))
             if entry.get("up_ref"):
                 out.add(entry["up_ref"])
             out |= set(entry.get("clones") or [])
