@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-from crustify.layout import Layout
+from crustify.layout import Layout, manifest_name
 
 # The composer package lives at `utils/codeql/compose/` in the crustify
 # checkout, not as an installed Python package. Add the parent dir to
@@ -328,7 +328,7 @@ def _run_subject_manifests_list(
         from compose.syms_manifest import compose as compose_fn
         from compose.syms_manifest import _COMMENT as COMMENT
         from compose.manifest_merge import merge_manifest_file, symbol_key as key_fn
-        manifest_filename = "syms.json"
+        manifest_filename = manifest_name("symbols")
         entries_key = "symbols"
         entry_tag_key = "name"
         agent_cls = CrustifySymbolAnalyzer
@@ -336,7 +336,7 @@ def _run_subject_manifests_list(
         from compose.types_manifest import compose as compose_fn
         from compose.types_manifest import _COMMENT as COMMENT
         from compose.manifest_merge import merge_manifest_file, type_key as key_fn
-        manifest_filename = "types.json"
+        manifest_filename = manifest_name("types")
         entries_key = "types"
         entry_tag_key = "type"
         agent_cls = CrustifyTypeAnalyzer
@@ -746,7 +746,7 @@ def redo_syms(
     file / name is deleted).
     """
     _delete_entries(
-        target, "syms.json",
+        target, manifest_name("symbols"),
         entries_key="symbols",
         name_key="name",
         dirs=dirs, files=files, names=names,
@@ -761,7 +761,7 @@ def redo_types(
 ) -> None:
     """Delete types.json entries matching the narrowing flags."""
     _delete_entries(
-        target, "types.json",
+        target, manifest_name("types"),
         entries_key="types",
         name_key="type",
         dirs=dirs, files=files, names=names,

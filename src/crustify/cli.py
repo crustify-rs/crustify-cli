@@ -59,8 +59,10 @@ def _add_analyze_filter_flags(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument(
         "--name", nargs="+", action="extend", metavar="NAME", default=None,
-        help="Narrow to specific symbol or type names. Pass all names as a "
-             "space-separated list after a single --name (e.g. "
+        help="Seed ONLY the given symbol or type names -- precise, no "
+             "transitive closure (the named entities are emitted/annotated "
+             "alone; use --dir/--file to pull a region's closure). Pass all "
+             "names as a space-separated list after a single --name (e.g. "
              "`--name a b c`); repeating the flag keeps only the last group.",
     )
     post_filter = p.add_mutually_exclusive_group()
@@ -85,6 +87,18 @@ def _add_analyze_filter_flags(p: argparse.ArgumentParser) -> None:
         help="Run only the deterministic composer (emit/merge the manifest "
              "skeletons) and skip the analyzer agent — a fresh analysis tree "
              "with no LLM spend. For types this also skips the buffer pass.",
+    )
+    p.add_argument(
+        "--out-suffix", dest="out_suffix", default=None, metavar="SUFFIX",
+        help="Write/read manifests as types_<SUFFIX>.json / syms_<SUFFIX>.json "
+             "instead of the canonical types.json / syms.json, isolating this "
+             "run from the real tree (and from other suffixed runs). The "
+             "composer emits a fresh suffixed skeleton; the agents -- which "
+             "shell out to `crustify query` with no pushed path -- pick up the "
+             "suffix via the CRUSTIFY_OUT_SUFFIX env var. Lets several analyzer "
+             "runs (e.g. model-comparison instances) execute in parallel "
+             "without clobbering; downstream stages (dag/wrap/port) read only "
+             "the canonical names and ignore suffixed artifacts.",
     )
 
 
@@ -890,6 +904,21 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
     # symbols / types — these are the agent-bearing subjects with full
     # narrowing flag support.
     _validate_narrowing(args)
+
+    # --out-suffix isolates this run onto types_<suffix>.json / syms_<suffix>.json.
+    # Export it so the composer emit, the agents' `crustify query` subprocesses
+    # (env-inherited; no path is pushed to them), and redo all resolve the same
+    # suffixed file. Validate as a filename-safe token.
+    out_suffix = getattr(args, "out_suffix", None)
+    if out_suffix:
+        import os
+        import re
+        from crustify.layout import OUT_SUFFIX_ENV
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", out_suffix):
+            print("error: --out-suffix must match [A-Za-z0-9._-]+",
+                  file=sys.stderr)
+            sys.exit(2)
+        os.environ[OUT_SUFFIX_ENV] = out_suffix
 
     # Resolve --file basenames to repo-rel paths before building the
     # selection / filter (so composer, agent, and redo all see the

@@ -20,10 +20,30 @@ CLI's second positional — and a whole-repo target uses the reserved name
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 CRUSTIFY = "crustify"
 ROOT_TARGET = "_root"  # reserved targets/ name for a whole-repository target
+
+OUT_SUFFIX_ENV = "CRUSTIFY_OUT_SUFFIX"
+
+
+def manifest_name(kind: str) -> str:
+    """Per-stem manifest filename for a manifest `kind` (``type``/``types``
+    -> ``types.json``; anything else -> ``syms.json``), honoring the
+    ``CRUSTIFY_OUT_SUFFIX`` env var for isolated parallel analyzer runs.
+
+    With ``CRUSTIFY_OUT_SUFFIX=opus`` the names become ``types_opus.json`` /
+    ``syms_opus.json`` so concurrent runs write disjoint files: the canonical
+    (suffix-less) tree is left untouched and downstream consumers
+    (``rglob("types.json")``) ignore the suffixed artifacts. Set by
+    ``analyze types/syms --out-suffix``; read by both the composer emit and
+    every ``crustify query`` the agents shell out to (env inheritance) - the
+    agents pass no path, so the suffix must travel through the environment."""
+    base = "types" if kind in ("type", "types") else "syms"
+    suffix = os.environ.get(OUT_SUFFIX_ENV, "").strip()
+    return f"{base}_{suffix}.json" if suffix else f"{base}.json"
 
 
 _REPO_ROOT: Path | None = None  # pinned once by the CLI; never marker-walked

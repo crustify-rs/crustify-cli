@@ -767,9 +767,11 @@ def compose(
 
     # Pass 3: compute closure from port seeds (seed mode + scope_enabled).
     # Closure = union of forward_syms for each port seed, minus the
-    # seed set itself.
+    # seed set itself. Skipped when `--name` is the selector: name seeds
+    # are precise (the named symbol only, no closure). See
+    # FilterSpec.expand_closure.
     closure_keys: set[tuple[str, str]] = set()
-    if seed_mode and scope_enabled:
+    if seed_mode and scope_enabled and filter_spec.expand_closure():
         for c in candidates:
             if c["key"] in seed_keys and c["is_port"] and c["forward"]:
                 for fwd_key in c["forward"]:

@@ -681,21 +681,24 @@ def compose(
         # edges — including wrap types, via their port-narrowed fields
         # — so the full reached surface (e.g. a wrap type reached
         # through another wrap type's accessed field) is captured.
+        # Skipped when `--name` is the selector: name seeds are precise
+        # (the named type only, no closure). See FilterSpec.expand_closure.
         closure_keys: set[tuple[str, str]] = set()
-        worklist = [c for c in candidates if c["key"] in seed_keys and c["is_port"]]
-        visited_tags: set[str] = set()
-        while worklist:
-            c = worklist.pop()
-            for tag in c["forward"]:
-                if tag in visited_tags:
-                    continue
-                visited_tags.add(tag)
-                nbr = by_tag.get(tag)
-                if nbr is None:
-                    continue
-                if nbr["key"] not in seed_keys:
-                    closure_keys.add(nbr["key"])
-                worklist.append(nbr)
+        if filter_spec.expand_closure():
+            worklist = [c for c in candidates if c["key"] in seed_keys and c["is_port"]]
+            visited_tags: set[str] = set()
+            while worklist:
+                c = worklist.pop()
+                for tag in c["forward"]:
+                    if tag in visited_tags:
+                        continue
+                    visited_tags.add(tag)
+                    nbr = by_tag.get(tag)
+                    if nbr is None:
+                        continue
+                    if nbr["key"] not in seed_keys:
+                        closure_keys.add(nbr["key"])
+                    worklist.append(nbr)
         emit_keys = seed_keys | closure_keys
     else:
         for c in candidates:

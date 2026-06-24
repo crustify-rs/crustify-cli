@@ -21,6 +21,8 @@ import os
 import sys
 from pathlib import Path
 
+from crustify.layout import manifest_name
+
 # The composer package lives at ``utils/codeql/compose/`` in the crustify
 # checkout, not as an installed package. Put its parent on sys.path so
 # ``from compose import scope`` works from this orchestrator (mirror wrap.py).
@@ -138,8 +140,9 @@ def _enumerate(
     sj = layout.scope(target)
     synth_sel = {k for k, on in zip(_SYNTH, (strings, arrays)) if on}
     file_set = set(files or [])
-    manifest, arr, tagkey = (("types.json", "types", "type") if kind == "type"
-                             else ("syms.json", "symbols", "name"))
+    arr, tagkey = (("types", "type") if kind == "type"
+                   else ("symbols", "name"))
+    manifest = manifest_name(kind)
 
     # Scope membership is read straight from scope.json — the authoritative,
     # deduped port/wrap closures — NOT a re-derived "not-port ⇒ wrap"
@@ -1022,7 +1025,7 @@ def _create_type(layout, target, src: str) -> None:
 
     import fcntl
     import tempfile
-    path = layout.analysis / mdir / "types.json"
+    path = layout.analysis / mdir / manifest_name("type")
     path.parent.mkdir(parents=True, exist_ok=True)
     dirfd = os.open(str(path.parent), os.O_RDONLY)
     try:
@@ -1080,7 +1083,7 @@ def _load_type_entry(analysis: Path, tag: str, defined_in: str | None) -> dict |
     """The raw ``types.json`` manifest entry for ``tag`` (preferring the one whose
     ``defined_in`` matches, to disambiguate a same-tag collision)."""
     fallback = None
-    for f in analysis.rglob("types.json"):
+    for f in analysis.rglob(manifest_name("type")):
         try:
             doc = json.loads(f.read_text())
         except (OSError, ValueError):
@@ -1099,8 +1102,9 @@ def _manifest_path(analysis: Path, kind: str, tag: str,
     """The manifest file that homes ``tag`` (the file an annotating agent writes
     back to) — ``types.json`` for a type, ``syms.json`` for a symbol — preferring
     the one whose entry matches ``defined_in``."""
-    manifest, arr, tagkey = (("types.json", "types", "type") if kind == "type"
-                             else ("syms.json", "symbols", "name"))
+    arr, tagkey = (("types", "type") if kind == "type"
+                   else ("symbols", "name"))
+    manifest = manifest_name(kind)
     fallback = None
     for f in analysis.rglob(manifest):
         try:
@@ -1153,8 +1157,9 @@ def _resolve(target, *, kind: str, name: str, files: list[str] | None):
     file_set = set(files or [])
 
     # walk the manifest tree (existence + defined_in are composer-filled).
-    manifest, arr, tagkey = (("types.json", "types", "type") if kind == "type"
-                             else ("syms.json", "symbols", "name"))
+    arr, tagkey = (("types", "type") if kind == "type"
+                   else ("symbols", "name"))
+    manifest = manifest_name(kind)
     uniq: dict = {}                                   # defined_in -> entry (dedup)
     for f in layout.analysis.rglob(manifest):
         try:
@@ -1202,7 +1207,7 @@ def _resolve(target, *, kind: str, name: str, files: list[str] | None):
 def _syms_index(analysis: Path) -> dict:
     """``name -> first syms.json entry`` for pre-dag op resolution."""
     idx: dict = {}
-    for f in analysis.rglob("syms.json"):
+    for f in analysis.rglob(manifest_name("symbols")):
         try:
             doc = json.loads(f.read_text())
         except (OSError, ValueError):
@@ -1216,7 +1221,7 @@ def _load_sym_entry(analysis: Path, name: str, defined_in: str | None) -> dict |
     """The raw ``syms.json`` manifest entry for ``name`` (preferring the one whose
     ``defined_in`` matches, to disambiguate same-named file-local statics)."""
     fallback = None
-    for f in analysis.rglob("syms.json"):
+    for f in analysis.rglob(manifest_name("symbols")):
         try:
             doc = json.loads(f.read_text())
         except (OSError, ValueError):

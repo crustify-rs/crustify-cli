@@ -80,6 +80,18 @@ class FilterSpec:
         """True iff any of `--dir` / `--file` / `--name` is set."""
         return bool(self.dirs or self.files or self.names)
 
+    def expand_closure(self) -> bool:
+        """In seed mode, whether to pull the transitive field-type /
+        dependency closure of the seeds into the emitted manifest.
+
+        `--name` is **precise**: it seeds ONLY the named entities, with NO
+        closure expansion (focused single-entity analysis - e.g. one type
+        for a model-comparison run). `--dir` / `--file` still expand the
+        closure of the region they select. When `--name` is combined with a
+        dir/file selector, the precise (no-closure) semantics win.
+        """
+        return self.is_seed_mode() and not self.names
+
 
 def _normalize_dir(d: str) -> str:
     return d if d.endswith("/") else d + "/"
