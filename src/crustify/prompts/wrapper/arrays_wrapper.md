@@ -67,7 +67,9 @@ header.
 - When you fill an anchor, **promote** its `// Replaces:` line to a `/// ...` doc
   comment on the item you emit and **delete its `// crustify:todo`** (a surviving
   todo = still pending).
-- You emit **only the generic `CVec<T, S>`** - never per-element typed aliases.
+- You emit **the generic `CVec<T, S>`** and aliases for primitive types (u32,
+  char, etc.) 
+  that are part of this strategy's `elems[]` - never per-typed-element aliases.
   Those are owned by each element type's own wrapper (it knows its `CVec<Self,
   S>` alias when it lands, after you); you stay element-agnostic.
 
@@ -135,6 +137,11 @@ FFI call in `unsafe {{ ... }}` with a SAFETY comment.
 
 **Clone.** If `clones` is non-empty, bind the deep-copy op (`impl_cloned!`
 or a `from_slice`-style copy) per the record.
+
+**Primitive type aliases.** Emit `pub type CVec<PrimitivePascal><Cluster> =
+*CVec<<the scalar>, <cluster strategy ZST>>` aliases for the primitive types
+*identified in each cluster's `elems[]` and place them in the same TU as
+the cluster definition.
 
 **Discipline reminders.** No `Deref`/`Index` on the wrapper - element access is
 through `as_slice() -> &[T]` / `as_mut_slice() -> &mut [T]` (each bound to the

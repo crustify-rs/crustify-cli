@@ -147,7 +147,7 @@ prevent). Pick from the record:
 |---|---|
 | `dtor.storage` set **and** `up_ref` set | `impl_ref_counted!` -> shared `CArc<T>` (`CUniqueArc<T>` is the construction-window handle) - refcounted release |
 | `dtor.storage` set (no `up_ref`) | `impl_freed!` -> owned `CBox<T>` - the `*_free` releases the heap header |
-| `dtor.fields` set | `impl_cvalued!` -> owned `CVal<T>` - the `*_dispose` / `*_cleanup` releases owned fields; the header is by-value (caller-/stack-/embed-owned). Stack-construct via `<Wrapper>::zeroed()` (all-zero-valid) or `<Wrapper>::uninit()` + C-init via `as_ptr()`, then wrap in `CVal<T>` for RAII disposal |
+| `dtor.fields` set | `impl_cvalued!` -> owned `CVal<T>` - the `*_dispose` / `*_cleanup` releases owned fields; the header is by-value (caller-/stack-/embed-owned). Stack-construct via `<Wrapper>::zeroed()` (all-zero-valid) or `<Wrapper>::uninit()` + C-init via `as_ptr()`, then wrap in `CVal<T>` for RAII disposal; **if not movable use Pin<...> or in-place initialization**|
 | `dtor` both null | POD value - **no companion, no trait**: stack-construct via `zeroed()` / `uninit()`, or embed the bare `<Wrapper>` by value (`#[repr(C)]` field, no `Drop`, parent owns teardown) |
 | `clones` non-empty | also `impl_cloned!` (binds `CBox` clone to the C `*_dup`) |
 | `conditional_drop` set | hand-rolled `unsafe impl CFreed` / `CValued` overriding `needs_cleanup` (gate from `conditional_drop.skip_when`) instead of the macro |
@@ -201,9 +201,12 @@ Setters are the interior-mutability write path: they take `&self`, never
   (input-tied borrow -> `CArc` handle -> owned snapshot) and Sec 7.2 (`SelfPtr`);
   a `<C: CCell>` generic over `&C` if reference is type-erased (`void *`);
 - `array` -> a slice (borrowed) view or the **appropriate `CVec` variant**
-  (if ownership moved);
+  (if ownership moved); use `query types --arrays --with-details` to find
+  the identified array families and the `elems` that instantiate them; if
+  the `CVec` alias of an elem you need is missing add it.
 - `string` -> a slice (borrowed) view or the **appropriate `CStr` variant**
-  (if ownership moved);
+  (if ownership moved); use `query types --strings --with-details` to find
+  the identified strings families.
 - `nullable` -> wrap the above in `Option`; scalar -> return by value;
 - structural / self / back pointers -> `SelfPtr<'this, T>`.
 

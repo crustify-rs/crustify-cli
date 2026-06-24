@@ -156,8 +156,13 @@ reconstructs each raw pointer at the FFI seam and exposes only these safe forms:
     the Sec 10 ladder / Sec 7.2 when it can't be expressed directly; if ref is
     type-erased (`void *`) use parametric `<C: CCell>` over `&C` to allow borrowed
     views over generic types.
-  - `array=true` -> a slice view or the appropriate `CVec` variant (plain /
-    zeroing / secure); `string=true` -> the appropriate `CStr` variant;
+  - `array=true` -> a slice (borrowed) view or the **appropriate `CVec` variant**
+    (if ownership moved); use `query types --arrays --with-details` to find
+    the identified array families and the `elems` that instantiate them; if
+    the `CVec` alias of an elem you need is missing add it.
+  - `string=true` -> a slice (borrowed) view or the **appropriate `CStr` variant**
+    (if ownership moved); use `query types --strings --with-details` to find
+    the identified strings families.
   - **nullable** -> wrap the above in `Option`; scalar -> return by value.
 
 Never expose raw `*mut`/`*const ffi::T` in the public signature (except a

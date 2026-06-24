@@ -135,14 +135,6 @@ For each symbol in `{symbols}`: pull its record (`query syms --name <name>
 `ffi::`. For any **type** a body touches, read its wrapped accessor API
 (`scaffold --name <tag>` + `query types --name <tag> --with-details`).
 
-**Synthetic primitives (strings / arrays).** A `char *`, a raw byte
-buffer, or a generic-collection use site carries no dependency edge, so decide
-per use site: a value that **crosses the FFI seam** (still read/written by
-remaining C, or passed to/returned from a C function) uses the matching synthetic
-wrapper (`CStr` / the right `CVec` variant / the generic-over-`Element` type - at
-its `scaffold --name <synth>` module); a value **fully internal to ported
-Rust** uses native `String` / `Vec<T>`.
-
 ### 2. Port the symbols
 
 Translate each function / global body to **idiomatic** safe Rust per the
@@ -201,8 +193,15 @@ representing the raw pointers of your target set:
     `COut<T>`, Sec 9 A2), an uninitialised slot (`&mut MaybeUninit<T>`), or a raw
     byte/element buffer that is *not* a wrapped type (`&mut [T]`), filled by the
     call. Never `&mut` a wrapped type.
-  - `array=true` (over a wrapped element or read-only buffer) -> `&[T]`, or the
-    matching `CVec` variant by value if `moved`.
+  - `array=true` (over a wrapped element or native scalar) -> `&[T]` if not moved, 
+    or the matching `CVec` variant by value if moved. Use `query types --arrays --with-details`
+    to get a list of array families that we've identified and the `elems` that
+    instantiate them; you should reach for the alias wrapping a `CVec<Elem>`,
+    typically in the elem's def file; scalar aliases should be with the array family,
+    if the scalar alias does not exist, add it.
+  - `string=true` -> the NUL-terminated `CStr` family with the appropriate dtor if
+    moved, otherwise `&CStr`. Use `query types --strings --with-details` to identify the list of
+    string families identified.  
   - non-pointer scalar -> by value; a **nullable** pointer -> wrap the chosen form
     in `Option`.
 
