@@ -93,6 +93,10 @@ class _Index:
         # name (external linkage ⇒ unique program-wide; a same-named static only
         # over-includes, which add_type then re-filters to wrap aggregates).
         self.sig_types: dict[str, set[str]] = {}
+        # Reach object — exposed so compose_wrap can use its query API
+        # (e.g. functions_using_type / is_function_port_reachable) for the
+        # callback walk that runs after build_index returns.
+        self.reach = None
 
 
 def _decls(v: Any) -> list[str]:
@@ -210,6 +214,7 @@ def build_index(
            lambda r: [r["def_file"]] if r.get("def_file") else [],
            port_macros,
            lambda r: reach.is_macro_port_reachable(r["name"], r["def_file"]))
+    idx.reach = reach
     return idx
 
 
@@ -422,6 +427,57 @@ def compose_wrap(
     for tag, meta in type_meta.items():
         if meta["def_file"] in port_paths:
             walk_type(tag, meta["def_file"])
+
+    # Callback typedefs (unaliased_kind == "callback" in types.csv): function-
+    # pointer typedefs that are wrap-scope. They are excluded from add_type (not
+    # an aggregate) and never appear in functions.csv (so ingest() misses them),
+    # but they ARE part of the wrap surface — bindgen emits them and the wrap
+    # stage needs safe type aliases for them. Emit each as a plain sym entry so
+    # it lands in wrap.functions alongside regular functions with no extra tag.
+    #
+    # Reachability gate: at least one function that mentions this callback in
+    # its signature (reach.functions_using_type) must itself be port-reachable
+    # — the same criterion the syms_manifest uses to decide whether to emit a
+    # callback entry. This avoids pulling in every callback in transitively
+    # included headers (which the include-closure gate would do).
+    for tag, tmeta in type_meta.items():
+        if tmeta.get("uak") != "callback":
+            continue
+        decls = tmeta["decls"]
+        df = tmeta["def_file"]
+        # Skip port-scope callbacks — they're already collected in
+        # port.functions by scope_manifest. Only emit wrap-scope callbacks here
+        # to avoid bucket overlap.
+        if scope.classify(df, decls, port_paths) != "wrap":
+            continue
+        reach_ = idx.reach
+        # Try both the real def_file and "" (callback typedefs often have
+        # no def_file in the T1 table since they're header-only typedefs).
+        users = reach_.functions_using_type(tag, df) | reach_.functions_using_type(tag, "")
+        # Mirror the _wrap_port_reachable gate from types_manifest: a type is
+        # wrap-reachable if any function that mentions it (sig or body) is
+        # defined in a port file OR is port-reachable from a port file.
+        body_users = reach_.functions_using_type_in_body(tag, df) | \
+                     reach_.functions_using_type_in_body(tag, "")
+        all_users = users | body_users
+        reachable = (
+            any(fn_df in port_paths for _, fn_df in all_users)
+            or any(reach_.is_function_port_reachable(fn, fn_df) for fn, fn_df in all_users)
+        )
+        if not reachable:
+            continue
+        # find a port TU that actually includes a declaring header to get the
+        # narrowed declared_in (mirrors narrow() used in add_sym).
+        # add_sym re-checks scope.classify — bypass it and insert directly into
+        # sym_items (the classify guard above already ensures wrap-scope only).
+        for port_path in port_paths:
+            via = [d for d in decls if d in closure(port_path)]
+            if via:
+                rec = sym_items.setdefault((tag, df), {
+                    "name": tag, "defined_in": df, "declared_in": set()})
+                rec["declared_in"].update(via)
+                files.update(via)
+                break
 
     # Canonicalize a null-def `extern` item onto its real definition. A port
     # caller that saw only a prototype records the dep as (name, ""); another

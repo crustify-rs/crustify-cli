@@ -157,10 +157,17 @@ def _port_entities(t1_dir: Path, candidate_files: set[str]) -> dict[str, list[di
         df = r["def_file"] or ""
         if _scope.entry_scope("macro", df, [df] if df else [], candidate_files) == "port":
             port_macros.append(_ent(r))
-    port_types = [
-        _ent(r, kind=r["kind"]) for r in types_rows
-        if _scope.classify_type(r, by_name, candidate_files) == "port"
-    ]
+    # Types split: a callback is a function-pointer typedef — symbol-shaped, not
+    # a layout type — so it is bucketed with `functions` (untagged), matching how
+    # wrap_closure emits wrap-scope callbacks. Everything else is a real type.
+    port_types = []
+    for r in types_rows:
+        if _scope.classify_type(r, by_name, candidate_files) != "port":
+            continue
+        if r.get("unaliased_kind") == "callback":
+            port_funcs.append(_ent(r))
+        else:
+            port_types.append(_ent(r, kind=r["kind"]))
     keyf = lambda e: (e["defined_in"], e["name"])
     return {
         "functions": sorted(port_funcs, key=keyf),
