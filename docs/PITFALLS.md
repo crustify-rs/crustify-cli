@@ -1098,3 +1098,118 @@ was **not** the subtle zlib bug — it was (a) anchoring on the wrong
 failure model and (b) mutating un-backed-up state to test hypotheses. A
 single-threaded instrumented print and a `git stash -u` before the first
 bisection step would each have saved hours.
+
+---
+
+## 2026-06-21b — CrustifyTypeWrapper — by-value `CVal` ctor for a struct embedding a `pthread_rwlock_t` — move-after-in-place-init, generalised from z_stream to POSIX sync objects
+
+The §2026-06-21 z_stream entry is the *self-referential-back-pointer*
+instance of this hazard. This is the **embedded-OS-primitive** instance —
+broader, because the address-sensitivity is invisible at the Rust type
+level (no `x->self = x` to grep for; the pin comes from inside libc).
+
+**Symptom.** `GitCache::init` in `odb/cache_h.rs` was emitted as:
+
+```rust
+pub fn init() -> Option<crustify::CVal<Self>> {
+    let cache = Self::zeroed();
+    let rc = unsafe { ffi::git_cache_init(cache.as_ptr()) };  // memset + pthread_rwlock_init(&cache->lock)
+    if rc != 0 { return None; }
+    Some(crustify::CVal::new(cache))                          // MOVES the init'd rwlock to a new address
+}
+```
+
+No crash observed — because the function has **zero callers** (caught by
+inspection, not a failure). But it is unsound by construction.
+
+**Root cause.** `git_cache` embeds `git_rwlock lock`, and this build is
+`GIT_THREADS 1` / `GIT_THREADS_PTHREADS 1` (`git2_features.h`), so
+`git_rwlock` is a real `pthread_rwlock_t` and `git_cache_init` runs
+`pthread_rwlock_init` on it **in place** at the stack address
+`cache.as_ptr()`. Then `CVal::new(cache)` consumes `cache` by value (and
+the by-value return may move again — NRVO is not guaranteed), relocating
+the freshly-initialised `pthread_rwlock_t` to a different address. POSIX
+gives no guarantee that an initialised sync object is relocatable → UB.
+The other embedded field, the khash `git_cache_oidmap map` (heap pointers
++ counts, no self-reference), *is* movable, so the lock is the sole
+hazard. It "would have worked" on glibc/x86-64 only by accident: an
+**unlocked, no-waiters** rwlock has no self-pointers and its futex words
+aren't yet registered in any kernel wait-queue, so the byte-copy survives
+— an implementation detail, not a contract.
+
+**Where it came from.** The generator treated `git_cache` as a value type
+and emitted the generic *"zeroed → C-init through `.as_ptr()` → wrap in
+`CVal` → return"* constructor template. That template is correct for
+trivially-movable POD aggregates but wrong for any type whose C
+constructor initialises an **address-pinned** sub-object. Unlike z_stream
+(where `inflateInit` writes a visible `state->strm` back-pointer), here
+the pin lives entirely inside `pthread_rwlock_t`; nothing in `git_cache`'s
+own layout reveals it. The lure is that the SAFETY comment even reasons
+correctly about the *failure* path ("zeroed header with no initialised
+rwlock has nothing to release") while missing the *success* path's move.
+
+**Why it isn't biting, and what the port does right elsewhere.** In C,
+`git_cache` is never a standalone value — it is the by-value first/inner
+member of a parent and is init'd in place at the parent's final heap
+address: `odb.c:388 git_cache_init(&db->own_cache)`,
+`repository.c:313 git_cache_init(&repo->objects)`. The rest of the Rust
+port mirrors exactly that: `GitOdb::cache(&self) -> &GitCache` reads
+`own_cache` embedded by value via an `addr_of!` projection (`odb_h.rs`),
+never constructing or moving a standalone cache. The `init() -> CVal<Self>`
+ctor is the lone artifact that contradicts the embedded-in-place model.
+
+**Fix.** A struct that embeds a `pthread_{mutex,rwlock,cond}_t` (or any
+type whose C ctor binds an address) is **not** a movable `CVal` once
+initialised — it is `Pin`-only, init at its final resting address. So:
+
+1. **Don't emit `init() -> CVal<Self>` for such types.** Either drop the
+   standalone ctor (mirror the embedded path — init at
+   `&parent.own_cache` after the parent is placed), or make the ctor
+   *init-in-place*: take the destination place / heap slot, `git_cache_init`
+   there, and return a borrow — never "build a value, then move it."
+2. **Classification rule:** a C type with an embedded OS sync primitive,
+   or whose constructor stores any pointer into the object, must not be
+   registered as a by-value-constructible `CVal`. It is in-place-init
+   only (its movability ends at the first `*_init` call).
+
+**Self-check (generator / type wrapper).** Before emitting a
+`zeroed()→C-init→CVal::new→return` constructor for type `T`, check `T`'s
+fields and its C constructor for an **address-pinned sub-object**:
+`pthread_mutex_t` / `pthread_rwlock_t` / `pthread_cond_t` (directly or via
+a `git_mutex`/`git_rwlock`/`git_cond` typedef under `GIT_THREADS`), a
+`*_init` that takes `&field`, or any `field = &self` store. If present,
+`T` is move-unsafe after init: emit an **in-place** initialiser at the
+final address (the embedded-in-parent path), not a by-value `CVal` ctor.
+Grep the C ctor for `pthread_`, `mutex_init`, `rwlock_init`, `cond_init`,
+and `&` of the subject stored into a field — same probe as the z_stream
+self-check, widened to OS primitives.
+
+**Addendum (2026-06-21) — a codebase sweep found two more of the same, both
+fixed.** Auditing every `CValued` type for the *(embeds an address-bound
+sub-object)* × *(has a by-value `init()→CVal` that moves it)* shape turned up,
+beyond `git_cache`:
+
+- **`GitPackfileStream::open` (`pack/pack_h.rs`)** — `git_packfile_stream`
+  embeds a `git_zstream zstream` (pack.h:160); `open()` ran
+  `git_packfile_stream_open` (→ `inflateInit`, binds `zstream.state->strm` to
+  the local's address) then `Some(CVal::new(stream))` **moved it**. This is the
+  W9 z_stream corruption (§2026-06-21) verbatim, in a different type — its
+  SAFETY comment reasoned about the failure path's zeroed zstream and missed the
+  success-path move, the exact same blind spot. It is the embedded `idx->stream`
+  field of `git_indexer` (and a stack local in `git_packfile_unpack`), so the
+  fix is the in-place `open(&self) -> c_int` (mirroring C
+  `git_packfile_stream_open(&idx->stream, …)`).
+- **`GitPackCache::cache_init` (`pack/pack_h.rs`)** — `git_pack_cache` embeds a
+  `git_mutex lock` (= `pthread_mutex_t`); `cache_init()` ran `git_mutex_init`
+  in place then `CVal::new` moved it. It is the embedded `bases` field of
+  `git_pack_file` (pack.h:131), so the fix is `cache_init(&self) -> c_int`
+  (mirroring C `cache_init(&p->bases)`).
+
+Also: **`GitZstream::init`** (the original W9 footgun) was deleted outright — its
+callers already init in place, and a comment now documents why no by-value ctor
+exists. All three were **dead** (no by-value caller wired), so the fixes were
+non-breaking. Note every one of these is exactly what a primitive-level guard
+(`CVal::new` bounded `T: CMovable`, address-bound `T` non-`CMovable` + `!Unpin`,
+standalone heap address-bound built via `CBox::emplace`) would reject at compile
+time — three real instances now argue for the primitive fix over case-by-case
+review.
