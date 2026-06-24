@@ -7,6 +7,9 @@
 //!   * `raw_ptr_derefs`       - dereferences `*p` where `p: *const T | *mut T`
 //!                              (decided by the *type* of the operand via typeck,
 //!                              so `*Box`/`*&`/`Deref` impls are NOT counted)
+//!   * `raw_ptr_derefs_outside_impl` - of those, the subset outside any
+//!                              `impl`/trait body (port-body raw access vs. the
+//!                              sanctioned accessor/seam centralisation)
 //!
 //! Run as a rustc-compatible front end: it compiles the given file/crate and
 //! prints the metrics as JSON in `after_analysis`. See `run.sh`.
@@ -182,6 +185,7 @@ struct Counts {
     void_ptr_sanctioned: u64,
     void_ptr_smell: u64,
     raw_ptr_derefs: u64,
+    raw_ptr_derefs_outside_impl: u64, // ...of those, the subset NOT in any impl/trait body
     total_stmts: u64,
     code_lines: u64, // crate-wide physical LoC: non-blank, non-`//`-comment source lines
 }
@@ -195,6 +199,7 @@ struct Sites {
     raw_ptr: Vec<(String, usize)>,     // raw ptr to a wrapped C type in a signature
     void_ptr: Vec<(String, usize)>,    // `*c_void` smell
     field_proj: Vec<(String, usize)>,  // `(*p).field` bypassing the accessor
+    raw_deref: Vec<(String, usize)>,   // `*p` (raw ptr) outside any impl/trait body
 }
 
 /// `(file, 1-based line)` for a span, local-path filename.
@@ -302,6 +307,13 @@ impl<'a, 'tcx> Visitor<'tcx> for BodyVisitor<'a, 'tcx> {
             hir::ExprKind::Unary(hir::UnOp::Deref, inner) => {
                 if self.typeck.expr_ty(inner).is_raw_ptr() {
                     self.c.raw_ptr_derefs += 1;
+                    // The actionable split: derefs in wrapper accessor / seam
+                    // bodies (inside an impl) are the sanctioned centralisation;
+                    // those outside any impl are port-body raw access.
+                    if !self.in_impl {
+                        self.c.raw_ptr_derefs_outside_impl += 1;
+                        self.sites.raw_deref.push(span_site(self.tcx, e.span));
+                    }
                 }
             }
             // `(*p).field` where `p: *C` and `C` has a wrapper (also covers the
@@ -352,11 +364,46 @@ fn count_ty(tcx: TyCtxt<'_>, t: Ty<'_>, m: &mut std::collections::BTreeMap<Strin
 ///    (fn signatures, struct/enum/union fields, const/alias types)
 ///  - `trait_impls`: `impl <crustify trait> for T` counts
 ///  - `macros`: distinct invocations of the crustify `*!` macros
+///  - `ffi_calls`: per-`crate::symbol` count of every call to a foreign fn
+///    (`tcx.is_foreign_item` — declared in an `extern` block), crate-agnostic
+///    (bindgen `*-sys`, `libc`, local `extern "C"`). Calling one is unsafe, so
+///    this is the crate-wide unsafe-FFI-call surface.
+///  - `ffi_call_sites`: those calls grouped `{crate::symbol: {region: [{file,count,lines}]}}`
+///    where region is `free_fn` / `inherent_impl` / `trait_impl:<Trait>` — so a
+///    `git__free` in `trait_impl:CFreed` (a sanctioned wrapper dtor) is separable
+///    from one in a `free_fn` port body (actionable smell)
 fn usage_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
     use std::collections::BTreeMap;
     let mut types: BTreeMap<String, u64> = BTreeMap::new();
     let mut trait_impls: BTreeMap<String, u64> = BTreeMap::new();
     let mut macros: BTreeMap<String, HashSet<rustc_span::ExpnId>> = BTreeMap::new();
+    // Crate-wide scan: every call to a foreign fn — one declared in an `extern`
+    // block (`tcx.is_foreign_item`), which is the FFI boundary itself and is
+    // crate-agnostic (bindgen `*-sys`, `libc`, or a local `extern "C"` block all
+    // resolve to it). Calling one is an unsafe op, so this is the unsafe-FFI-call
+    // surface. Resolution-based (callee `DefId`), so alias-/re-export-proof and
+    // multi-line-safe. Keyed `crate::symbol` so same-named foreign fns from
+    // different crates (e.g. `libc::close` vs a sys binding) stay distinct.
+    let mut ffi_calls: BTreeMap<String, u64> = BTreeMap::new();
+    // crate::symbol -> region ("free_fn" | "inherent_impl" | "trait_impl:<Trait>")
+    // -> sites. The region separates wrapper-teardown chokepoints (a `git__free`
+    // in `trait_impl:CFreed` / `:CLenFreed`) from port-body smell (`free_fn` /
+    // `inherent_impl`), so the actionable subset is a filter, not a judgement.
+    let mut ffi_sites: BTreeMap<String, BTreeMap<String, Vec<(String, usize)>>> = BTreeMap::new();
+    for owner in tcx.hir_body_owners() {
+        let region = call_region(tcx, owner.to_def_id());
+        let typeck = tcx.typeck(owner);
+        let mut callees: Vec<(DefId, rustc_span::Span)> = Vec::new();
+        CallCollector { typeck, out: &mut callees }.visit_body(tcx.hir_body_owned_by(owner));
+        for (did, sp) in callees {
+            if tcx.is_foreign_item(did) {
+                let key = format!("{}::{}", tcx.crate_name(did.krate), tcx.item_name(did));
+                *ffi_calls.entry(key.clone()).or_default() += 1;
+                ffi_sites.entry(key).or_default().entry(region.clone()).or_default()
+                    .push(span_site(tcx, sp));
+            }
+        }
+    }
 
     for ld in tcx.hir_crate_items(()).definitions() {
         let did = ld.to_def_id();
@@ -399,9 +446,21 @@ fn usage_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
         .map(|(k, s)| format!("\"{k}\":{}", s.len()))
         .collect::<Vec<_>>()
         .join(",");
+    let ffi_sites_obj = ffi_sites
+        .iter()
+        .map(|(sym, by_region)| {
+            let inner = by_region
+                .iter()
+                .map(|(region, sites)| format!("\"{region}\":{}", sites_json(sites)))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("\"{sym}\":{{{}}}", inner)
+        })
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        "{{\"crate\":\"{krate}\",\"types\":{{{}}},\"trait_impls\":{{{}}},\"macros\":{{{}}}}}",
-        obj(&types), obj(&trait_impls), macros_obj
+        "{{\"crate\":\"{krate}\",\"types\":{{{}}},\"trait_impls\":{{{}}},\"macros\":{{{}}},\"ffi_calls\":{{{}}},\"ffi_call_sites\":{{{}}}}}",
+        obj(&types), obj(&trait_impls), macros_obj, obj(&ffi_calls), ffi_sites_obj
     )
 }
 
@@ -494,6 +553,29 @@ fn enclosing_impl_self(tcx: TyCtxt<'_>, mut did: DefId) -> Option<DefId> {
         }
     }
     None
+}
+
+/// Classify a body owner's enclosing region, for grouping ffi-call sites:
+/// `trait_impl:<Trait>` (a call inside `impl Trait for T` — e.g. the
+/// `CFreed` / `CLenFreed` wrapper-teardown chokepoints), `inherent_impl`
+/// (a method in `impl T { .. }`), or `free_fn` (a free function or any
+/// other body not in an impl).
+fn call_region(tcx: TyCtxt<'_>, mut did: DefId) -> String {
+    while let Some(parent) = tcx.opt_parent(did) {
+        match tcx.def_kind(parent) {
+            DefKind::Impl { of_trait } => {
+                return if of_trait {
+                    let tdid = tcx.impl_trait_ref(parent).skip_binder().def_id;
+                    format!("trait_impl:{}", tcx.item_name(tdid))
+                } else {
+                    "inherent_impl".to_string()
+                };
+            }
+            DefKind::Mod | DefKind::ForeignMod => break,
+            _ => did = parent,
+        }
+    }
+    "free_fn".to_string()
 }
 
 /// Recursive count of `target` Adt occurrences in a type.
@@ -854,9 +936,9 @@ impl Callbacks for MetricsCallbacks {
             }
         }
         println!(
-            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"rp_wrap_nonseam_args\":{},\"rp_wrap_nonseam_rets\":{},\"rp_wrap_nonseam_wrapped\":{},\"rp_outside_args\":{},\"rp_outside_rets\":{},\"rp_outside_wrapped\":{},\"mut_borrow_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{}}}",
-            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.rp_wrap_nonseam_args, c.rp_wrap_nonseam_rets, c.rp_wrap_nonseam_wrapped, c.rp_outside_args, c.rp_outside_rets, c.rp_outside_wrapped, c.mut_borrow_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.total_stmts, c.code_lines,
-            sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj)
+            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"rp_wrap_nonseam_args\":{},\"rp_wrap_nonseam_rets\":{},\"rp_wrap_nonseam_wrapped\":{},\"rp_outside_args\":{},\"rp_outside_rets\":{},\"rp_outside_wrapped\":{},\"mut_borrow_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"raw_deref_sites\":{}}}",
+            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.rp_wrap_nonseam_args, c.rp_wrap_nonseam_rets, c.rp_wrap_nonseam_wrapped, c.rp_outside_args, c.rp_outside_rets, c.rp_outside_wrapped, c.mut_borrow_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
+            sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj), sites_json(&sites.raw_deref)
         );
         Compilation::Continue
     }

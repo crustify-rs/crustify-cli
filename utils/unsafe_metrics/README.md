@@ -38,6 +38,7 @@ the regex pass in `audit.py` for the subset of properties below.
 | field | meaning |
 |---|---|
 | `raw_ptr_derefs` | `*p` where `p: *const/*mut T`, decided by the **operand's type** (excludes `*Box`/`*&`/`Deref`) |
+| `raw_ptr_derefs_outside_impl` | ...of those, the subset **not** inside any `impl`/trait body — i.e. port-body raw access, vs. the sanctioned centralisation in wrapper accessor/seam method bodies (same split as `field_proj_outside_impl`) |
 | `total_stmts` | `hir::Stmt` nodes crate-wide (denominator) |
 
 ## Classification model (all resolution-based, not textual)
@@ -65,15 +66,33 @@ crustify-crate primitive usage. Emits a different JSON shape:
 {"crate":"libgit2",
  "types":{"CType":118,"CBox":58,"SelfPtr":55,"CVec":38,...},   // struct refs in type positions
  "trait_impls":{"CCell":113,"CValued":27,"CFreed":20,...},      // impl <crustify trait> for T
- "macros":{"define_type":112,"impl_cvalued":23,"impl_freed":18,...}}  // distinct invocations
+ "macros":{"define_type":112,"impl_cvalued":23,"impl_freed":18,...},  // distinct invocations
+ "ffi_calls":{"libgit2_sys::git__free":48,"libc::close":6,...},   // per-crate::symbol counts
+ "ffi_call_sites":{"libgit2_sys::git__free":{"free_fn":[{"file":"...","count":2,"lines":[804,805]}],
+                                             "trait_impl:CLenFreed":[...]}, ...}}
 ```
 - `types` — references to the smart-pointer/cell **structs** in type positions
   (fn signatures, struct/enum/union fields), counted by resolved `DefId` (crate == `crustify`).
 - `trait_impls` — `impl <crustify trait> for T` counts (gated on `DefKind::Impl{of_trait}`).
 - `macros` — distinct `ExpnId`s per crustify `*!` macro (items from one invocation share an id).
+- `ffi_calls` — crate-wide tally of every **call to a foreign fn**
+  (`tcx.is_foreign_item`, i.e. declared in an `extern` block), keyed `crate::symbol`. This is
+  the FFI boundary itself, **crate-agnostic**: bindgen `*-sys` bindings, `libc`, and local
+  `extern "C"` blocks all resolve to it (a name heuristic like `*-sys` would miss `libc` and
+  local externs, and over-count Rust helpers living in a sys crate). Calling a foreign fn is
+  unsafe, so this is the **unsafe-FFI-call surface** (allocators/frees included).
+  Resolution-based (callee `DefId`), so alias-/re-export-proof and multi-line-safe. Free-fn
+  path calls (`ExprKind::Call` with a `Path` callee).
+- `ffi_call_sites` — the same calls grouped `{crate::symbol: {region: [{file,count,lines}]}}`,
+  where `region` is the **enclosing body's** kind: `free_fn`, `inherent_impl`, or
+  `trait_impl:<Trait>`. This separates a sanctioned wrapper chokepoint (a `git__free` inside
+  `trait_impl:CFreed` / `trait_impl:CLenFreed`) from port-body smell (`free_fn` /
+  `inherent_impl`), making the actionable subset a filter rather than a judgement. Pair with
+  the symbol to triage manual `git__malloc` / `git__free` / `git__*array` uses vs. their safe
+  `CVec` / `CBox` / `COwn` wrappers.
 - Cross-checks: `CType` refs ~= `define_type!` ~= `CCell` impls; trait-impl counts > macro
   counts where lifecycle impls are hand-written rather than macro-generated.
-- Not counted: `COut` (a type alias -> typeck-transparent), and expr-level call sites.
+- Not counted: `COut` (a type alias -> typeck-transparent).
 
 ```
 UM_MODE=usage  RUSTC=.../unsafe_metrics ... cargo +nightly build
