@@ -1,374 +1,463 @@
 {
-  "_comment": "Example `<target>/.crustify/alloc.json` produced by `CrustifyAllocAnalyzer`. Catalogues a codebase's allocator surface (Phase 0.3 of the C-to-Rust porting plan) as a machine-parseable allocator universe. Four top-level categories - `allocators`, `duplicators`, `refcounts`, `locks` - plus a small `cleansers` list for standalone zero-without-free primitives. Downstream consumers: the buffer pass of `CrustifyTypeAnalyzer` (synthesizes `string` / `array` cluster entries in types.json), the strings/arrays type-wrapper prompts, and lifecycle classification (refcount-field / lock-field recognition). Values below are GENERIC - libc primitives (universal) plus a fictional `proj_*` / `PROJ_*` project-wrapper layer that illustrates every archetype's JSON shape without committing to any one codebase's naming. A real run substitutes the target project's actual symbols; one cluster per archetype found, not one per call-site.",
-
-  "_comment_syms_base": "Every primitive (alloc, free, copy, refcount op, lock op, refcount type, lock type) carries the **syms.json base shape**: `{name, kind, linked_in, declared_in[], defined_in, type}`. The `kind` field uses the same 10-value taxonomy as syms.json (function_{exported,static,inline_header,inline_tu}, macro_{constant,symbol,typegen,misc}, global_{static,extern}) and is `null` for typedefs/structs that aren't classifiable as a `kind` (plain typedefs, struct declarations). External symbols (libc, pthread, ...) carry `defined_in: null` with `declared_in` populated. `linked_in` is composer-emitted null; future link-time attribution may fill it. Downstream agents resolve any primitive against the syms tree by walking `<repo_root>/.crustify/analysis/<defined_in-stem>/syms.json` (or `<declared_in[0]>-stem>/syms.json` when defined_in is null).",
-
-  "_comment_macro_variants": "**Decision**: macro variants (e.g. a `PROJ_malloc(n)` user-facing macro that expands to `proj_malloc(n, __FILE__, __LINE__)`) appear as their own clusters. There is **no `expands_to` field** - macro clusters stand alone. The agent enumerates both the macro family and the underlying function family when both are real call sites in port-scope code; downstream type-wrapper prompts pick whichever the codebase actually calls (Rust FFI typically targets the function, not the macro). This keeps each cluster a self-contained allocation/release pairing the buffer agent can match against.",
-
-  "_comment_allocators": "**Category 1.** One cluster per (alloc-routine, free-routine) pair. Booleans `zeroing` (alloc zero-fills, true for zalloc/calloc), `clearing` (free zeroes the buffer before releasing, true for clear-free variants), `sized` (alloc takes `(count, size)` and overflow-checks: true for `*_array` variants and calloc - these are **separate clusters** from the base `*_malloc`, not folded in, so the buffer pass can ambiguously identify each `{alloc, free}` pair), `aligned` (alloc honours an alignment argument). `family` is a free-form grouping string (e.g. `libc`, `<projname>`, `<projname>_secure`, `<projname>_aligned`). `realloc` and `clear_realloc` are **optional fields on the cluster** carrying a syms-base entry each - they're the resize companions of the alloc/free pair, not a separate category. Omit (or set to null) when the family has no realloc.",
-
-  "_comment_duplicators": "**Category 2.** One cluster per copy/dup primitive. Booleans `string` (copies a NUL-terminated string), `sized` (takes an explicit length), `bounded` (memcpy-style bounded copy that doesn't necessarily NUL-terminate), `allocates` (the copy itself allocates the dest: true for `*dup`, false for `memcpy`). `alloc` / `free` are **name-reference strings** into `allocators[*].alloc.name` / `allocators[*].free.name` (e.g. `\"proj_malloc\"`), or `null` when the copy is caller-owned (memcpy-style). Name references - not full sub-entries - to keep JSON compact; downstream agents resolve the reference back into the `allocators` list for full metadata.",
-
-  "_comment_refcounts": "**Category 3.** One cluster per (refcount type, primitive family). Booleans `atomic` (backend uses hardware atomics on the common platform), `has_lock_fallback` (a non-atomic backend uses a lock). `fallback_lock` is a name-reference into `locks[*].type.name` (e.g. `\"PROJ_RWLOCK\"`) or null. `type` is the syms-base entry for the C type (struct or typedef declaration; `kind: null` is normal). `field_layout` is `{field: <name>, type: <C type>}` describing the in-struct integer field the primitives manipulate (composer hint for the buffer/lifecycle agent; not a full type description). The primitive set: `new`, `up`, `down`, `get`, `free` - each a syms-base entry, all required when present in the codebase. `assert` is an **optional** sanity-check macro (e.g. an `ASSERT_NOT_NEGATIVE`-style guard) for catching double-frees.",
-
-  "_comment_locks": "**Category 4.** One cluster per (lock type, primitive family). `kind` is one of `\"rwlock\"`, `\"mutex\"`, `\"spinlock\"`. Booleans `reentrant` (recursive acquisition allowed) and `opaque` (type is opaque to callers - true for `typedef void *` style). `type` carries the syms-base entry for the lock type. Primitives: `new`, `read_lock` (or null when `kind != \"rwlock\"`), `write_lock` (also acts as the single `lock` for non-rwlock kinds - still called `write_lock` for schema uniformity), `unlock`, `free`. The buffer/lifecycle agent resolves `refcounts[*].fallback_lock` references against this list's `type.name` values.",
-
-  "_comment_cleansers": "Standalone zero-without-free primitives (e.g. a `proj_cleanse` that uses a volatile memset to defeat dead-store elimination) - small enough to keep at the top level instead of a full category. One cluster per primitive: `{note, op: <syms-base entry>}`. Used by the buffer pass when a cluster needs a length-aware sensitive-data wipe separate from its dtor.",
-
-  "allocators": [
+  "_comment": [
+    "Example `<target>/.crustify/alloc.json` produced by `CrustifyAllocAnalyzer`.",
+    "Catalogues a codebase's allocator surface organised BY DEALLOCATOR FAMILY: each",
+    "`families` entry is ONE free/deallocator plus the FLAT list of routines whose",
+    "output it releases. Every buffer-producer is one `allocators[]` entry - a plain",
+    "allocation, a resize (`realloc`, a `(ptr,size)` signature), or a duplicator",
+    "(`*strdup`/`*memdup`) alike - with the operation read from its `type` signature",
+    "and qualifier flags, NOT an explicit `op` tag. An allocator may appear under",
+    "MORE THAN ONE family when its output can be released by more than one",
+    "deallocator (e.g. a plain free and a clearing free - distinct families because",
+    "the wrapper's drop strategy is fixed by which C free it calls). Non-allocating",
+    "copies (`memcpy`) that write into a CALLER-owned dest are attached to each",
+    "family's `copies[]` (the families whose buffers they fill). Plus `refcounts`,",
+    "`locks`, `cleansers`. Macro variants are RESOLVED to the underlying symbols they",
+    "expand to (FFI never calls macros). Downstream: the buffer pass of",
+    "`CrustifyTypeAnalyzer` (synthesizes `string`/`array` clusters), the",
+    "strings/arrays type-wrapper prompts, lifecycle classification. Values are",
+    "GENERIC (libc + a fictional `proj_*` layer) illustrating every archetype; a real",
+    "run substitutes the target's symbols, one family per deallocator."
+  ],
+  "_comment_syms_base": [
+    "Every primitive (alloc, free, copy, refcount op, lock op, refcount type, lock",
+    "type) carries the **syms.json base shape**: `{name, kind, linked_in,",
+    "declared_in[], defined_in, type}`. The `kind` field uses the same 10-value",
+    "taxonomy as syms.json (function_{exported,static,inline_header,inline_tu},",
+    "macro_{constant,symbol,typegen,misc}, global_{static,extern}) and is `null` for",
+    "typedefs/structs that aren't classifiable as a `kind` (plain typedefs, struct",
+    "declarations). External symbols (libc, pthread, ...) carry `defined_in: null`",
+    "with `declared_in` populated. `linked_in` is composer-emitted null; future",
+    "link-time attribution may fill it. Downstream agents resolve any primitive",
+    "against the syms tree by walking",
+    "`<repo_root>/.crustify/analysis/<defined_in-stem>/syms.json` (or",
+    "`<declared_in[0]>-stem>/syms.json` when defined_in is null)."
+  ],
+  "_comment_macro_variants": [
+    "**Macro resolution**: a user-facing macro (e.g. `PROJ_malloc(n)` expanding to",
+    "`proj_malloc(n, __FILE__, __LINE__)`) is RESOLVED to the underlying function",
+    "symbol it expands to - there is no separate macro entry and no `expands_to`",
+    "field. Rust FFI never calls macros, so the catalogue records only the callable",
+    "function/global symbols. Resolve every allocator / dup / refcount / lock macro",
+    "to its underlying primitive before emitting."
+  ],
+  "_comment_families": [
+    "**Allocator families.** One entry per deallocator/`free`. `family` is a",
+    "free-form grouping string. `free` is the syms-base entry for THE deallocator",
+    "that anchors the family. `allocators[]` is the flat list of every routine",
+    "producing a buffer this `free` releases (alloc / resize / dup alike); `copies[]`",
+    "lists the non-allocating copy primitives that write INTO this family's buffers.",
+    "A cleansing or secure deallocator (`*_clear_free`, `*_secure_free`) is a",
+    "SEPARATE family from the plain free even when they share an allocator (e.g.",
+    "`proj_zalloc` released by both `proj_free` and `proj_clear_free`): the wrapper's",
+    "drop strategy is monomorphic in the C free it calls, so a different `free`",
+    "symbol means a different `CVec<_, S>` type. The cleansing itself is done C-side",
+    "by the `*_clear_free`; the porter just binds the family's `free` (its `(ptr,",
+    "size_t)` signature carries the length). The SAME allocator may appear under",
+    "multiple families."
+  ],
+  "_comment_allocator_entry": [
+    "An `allocators[]` element - ONE routine producing a buffer owned by this family",
+    "(released by its `free`). Each entry IS a syms-base record",
+    "(`name`/`kind`/`linked_in`/`declared_in[]`/`defined_in`/`type`, exactly as in",
+    "syms.json - see `_comment_syms_base`) EXTENDED with allocator qualifier flags:",
+    "`zeroing` (result zero-filled - zalloc/calloc), `sized` (takes `(count,size)`,",
+    "overflow-checked - `*_array`/calloc), `aligned` (honours an alignment arg),",
+    "`string` (duplicates a NUL-terminated string), `bounded` (bounded copy that need",
+    "not NUL-terminate). The operation - plain alloc vs resize (`realloc`, a",
+    "`(ptr,size)` signature) vs duplicator (`*strdup`/`*memdup`, a source-to-copy",
+    "signature) - is read from the routine's `type` and these flags; there is no",
+    "separate `op` tag. Macro variants are resolved to the underlying symbol. The",
+    "SAME allocator may appear under multiple families when its output is released by",
+    "more than one deallocator."
+  ],
+  "_comment_copies": [
+    "A family `copies[]` element - a non-allocating copy primitive used to fill this",
+    "family's buffers (caller owns the dest; nothing is allocated or freed). Each is",
+    "a syms-base record (fields at top, as in syms.json) plus",
+    "`string`/`sized`/`bounded` flags. The buffer pass uses these to recognise",
+    "copy-INTO-existing-buffer call-sites (no cluster synthesized); the safe Rust",
+    "shim is a `CCell`-parametric `mem_copy` over shared interior-mutable borrows,",
+    "not an owned constructor. A copy primitive may be listed under multiple",
+    "families."
+  ],
+  "_comment_refcounts": [
+    "**Category 3.** One cluster per (refcount type, primitive family). Booleans",
+    "`atomic` (backend uses hardware atomics on the common platform),",
+    "`has_lock_fallback` (a non-atomic backend uses a lock). `fallback_lock` is a",
+    "name-reference into `locks[*].type.name` (e.g. `\"PROJ_RWLOCK\"`) or null. `type`",
+    "is the syms-base entry for the C type (struct or typedef declaration; `kind:",
+    "null` is normal). `field_layout` is `{field: <name>, type: <C type>}` describing",
+    "the in-struct integer field the primitives manipulate (composer hint for the",
+    "buffer/lifecycle agent; not a full type description). The primitive set: `new`,",
+    "`up`, `down`, `get`, `free` - each a syms-base entry, all required when present",
+    "in the codebase. `assert` is an **optional** sanity-check macro (e.g. an",
+    "`ASSERT_NOT_NEGATIVE`-style guard) for catching double-frees."
+  ],
+  "_comment_locks": [
+    "**Category 4.** One cluster per (lock type, primitive family). `kind` is one of",
+    "`\"rwlock\"`, `\"mutex\"`, `\"spinlock\"`. Booleans `reentrant` (recursive acquisition",
+    "allowed) and `opaque` (type is opaque to callers - true for `typedef void *`",
+    "style). `type` carries the syms-base entry for the lock type. Primitives: `new`,",
+    "`read_lock` (or null when `kind != \"rwlock\"`), `write_lock` (also acts as the",
+    "single `lock` for non-rwlock kinds - still called `write_lock` for schema",
+    "uniformity), `unlock`, `free`. The buffer/lifecycle agent resolves",
+    "`refcounts[*].fallback_lock` references against this list's `type.name` values."
+  ],
+  "_comment_cleansers": [
+    "Standalone zero-without-free primitives (e.g. a `proj_cleanse` that uses a",
+    "volatile memset to defeat dead-store elimination) - small enough to keep at the",
+    "top level instead of a full category. One cluster per primitive: `{note, op:",
+    "<syms-base entry>}`. Used by the buffer pass when a cluster needs a length-aware",
+    "sensitive-data wipe separate from its dtor."
+  ],
+  "families": [
     {
-      "_comment_example": "libc archetype - the universal ground-truth allocator every C project sits atop. Most projects wrap libc behind a `proj_*` layer (see the next cluster) and only the wrapper appears at port-scope call sites; libc itself is still catalogued because some code paths bypass the wrapper. External - `defined_in: null`.",
-      "note": "libc malloc/free - the universal ground-truth allocator.",
+      "_comment_example": [
+        "libc archetype - the universal `free` and the routines it releases: `malloc`",
+        "(plain), `calloc` (zeroing+sized), `realloc` (a resize - a peer allocator, not a",
+        "field of malloc). External: defined_in null."
+      ],
       "family": "libc",
-      "zeroing": false,
-      "clearing": false,
-      "sized": false,
-      "aligned": false,
-      "alloc": {
-        "name": "malloc",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["/usr/include/stdlib.h"],
-        "defined_in": null,
-        "type": "void *malloc(size_t size)"
-      },
       "free": {
         "name": "free",
         "kind": "function_exported",
         "linked_in": null,
-        "declared_in": ["/usr/include/stdlib.h"],
+        "declared_in": [
+          "/usr/include/stdlib.h"
+        ],
         "defined_in": null,
         "type": "void free(void *ptr)"
       },
-      "realloc": {
-        "name": "realloc",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["/usr/include/stdlib.h"],
-        "defined_in": null,
-        "type": "void *realloc(void *ptr, size_t size)"
-      }
+      "allocators": [
+        {
+          "name": "malloc",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "/usr/include/stdlib.h"
+          ],
+          "defined_in": null,
+          "type": "void *malloc(size_t size)",
+          "zeroing": false,
+          "sized": false,
+          "aligned": false,
+          "string": false,
+          "bounded": false
+        },
+        {
+          "name": "calloc",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "/usr/include/stdlib.h"
+          ],
+          "defined_in": null,
+          "type": "void *calloc(size_t nmemb, size_t size)",
+          "zeroing": true,
+          "sized": true,
+          "aligned": false,
+          "string": false,
+          "bounded": false
+        },
+        {
+          "name": "realloc",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "/usr/include/stdlib.h"
+          ],
+          "defined_in": null,
+          "type": "void *realloc(void *ptr, size_t size)",
+          "zeroing": false,
+          "sized": false,
+          "aligned": false,
+          "string": false,
+          "bounded": false
+        }
+      ],
+      "copies": []
     },
     {
-      "_comment_example": "libc zeroing archetype - `calloc` is `zeroing: true` AND `sized: true` (takes `(count, size)`, overflow-checked, zero-fills). One cluster, both flags set; pairs with libc `free`.",
-      "note": "libc calloc - overflow-checked, zero-filled array allocator.",
-      "family": "libc",
-      "zeroing": true,
-      "clearing": false,
-      "sized": true,
-      "aligned": false,
-      "alloc": {
-        "name": "calloc",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["/usr/include/stdlib.h"],
-        "defined_in": null,
-        "type": "void *calloc(size_t nmemb, size_t size)"
-      },
-      "free": {
-        "name": "free",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["/usr/include/stdlib.h"],
-        "defined_in": null,
-        "type": "void free(void *ptr)"
-      }
-    },
-    {
-      "_comment_example": "Project-wrapper archetype - the typical `proj_*` layer most non-trivial C codebases interpose between source code and libc (debug tracking, dispatch indirection, error reporting). Replace `proj_` with the target's actual prefix (e.g. `CRYPTO_`, `apr_`, `g_`, `xml`, `nspr_`, ...). `realloc` and `clear_realloc` are the optional resize companions.",
-      "note": "Primary project allocator layer - wraps libc with debug tracking and a replaceable dispatch table. Every project allocation funnels through this pair unless explicitly using a secure / aligned / array variant.",
+      "_comment_example": [
+        "Project-wrapper archetype anchored on `proj_free`. One flat allocator list: the",
+        "plain/zeroing/array/aligned allocs, BOTH reallocs, and the string/mem",
+        "duplicators - all peers, all freed by `proj_free`. `proj_zalloc` also appears",
+        "under `proj_clear`."
+      ],
       "family": "proj",
-      "zeroing": false,
-      "clearing": false,
-      "sized": false,
-      "aligned": false,
-      "alloc": {
-        "name": "proj_malloc",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "src/mem.c",
-        "type": "void *proj_malloc(size_t num, const char *file, int line)"
-      },
-      "free": {
-        "name": "proj_free",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "src/mem.c",
-        "type": "void proj_free(void *ptr, const char *file, int line)"
-      },
-      "realloc": {
-        "name": "proj_realloc",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "src/mem.c",
-        "type": "void *proj_realloc(void *addr, size_t num, const char *file, int line)"
-      },
-      "clear_realloc": {
-        "name": "proj_clear_realloc",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "src/mem.c",
-        "type": "void *proj_clear_realloc(void *addr, size_t old_len, size_t num, const char *file, int line)"
-      }
-    },
-    {
-      "_comment_example": "Macro form of the project-wrapper archetype - uppercase `PROJ_malloc(n)` expands to `proj_malloc(n, __FILE__, __LINE__)`. Standalone cluster - no `expands_to` linkback to the function-form cluster. `kind: null` because macro kind (constant/symbol/typegen/misc) is body-inspection territory; the agent classifies if downstream needs it. All `type` fields are null (macros carry no signature).",
-      "note": "Macro form of the project wrapper layer - appears in C source as `PROJ_malloc(n)`. Not callable from Rust FFI (Rust calls `proj_malloc` directly). Kept as its own cluster so port-scope grep over C source resolves it.",
-      "family": "proj",
-      "zeroing": false,
-      "clearing": false,
-      "sized": false,
-      "aligned": false,
-      "alloc": {
-        "name": "PROJ_malloc",
-        "kind": null,
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "include/proj/mem.h",
-        "type": null
-      },
-      "free": {
-        "name": "PROJ_free",
-        "kind": null,
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "include/proj/mem.h",
-        "type": null
-      },
-      "realloc": {
-        "name": "PROJ_realloc",
-        "kind": null,
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "include/proj/mem.h",
-        "type": null
-      }
-    },
-    {
-      "_comment_example": "Zeroing archetype - alloc zero-fills before returning. `zeroing: true`. Pairs with the same `proj_free`. No realloc on this cluster - a `proj_zalloc` typically has no companion `proj_zrealloc` (callers grow the buffer through `proj_realloc` and zero the new tail themselves).",
-      "note": "Zero-filled project allocator - malloc + memset(0). Standard for struct allocation where every field must start zeroed (the common case for `*_new` constructors).",
-      "family": "proj",
-      "zeroing": true,
-      "clearing": false,
-      "sized": false,
-      "aligned": false,
-      "alloc": {
-        "name": "proj_zalloc",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "src/mem.c",
-        "type": "void *proj_zalloc(size_t num, const char *file, int line)"
-      },
       "free": {
         "name": "proj_free",
         "kind": "function_exported",
         "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "src/mem.c",
-        "type": "void proj_free(void *ptr, const char *file, int line)"
-      }
-    },
-    {
-      "_comment_example": "Overflow-checked array archetype - alloc takes `(count, size)` and validates count*size doesn't overflow before allocating. `sized: true`. A **separate cluster** from `proj_malloc`, not folded into it - the buffer pass needs an unambiguous (alloc, free) pair per cluster, and `proj_malloc_array(n, sz)` is a distinct call-site shape from `proj_malloc(n)`. Pairs with the same `proj_free`.",
-      "note": "Overflow-checked array allocator - multiplies count by size with overflow detection. Used by code paths that allocate `n` elements of `sizeof(T)` where `n` is attacker-influenced.",
-      "family": "proj",
-      "zeroing": false,
-      "clearing": false,
-      "sized": true,
-      "aligned": false,
-      "alloc": {
-        "name": "proj_malloc_array",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "src/mem_array.c",
-        "type": "void *proj_malloc_array(size_t num, size_t size, const char *file, int line)"
-      },
-      "free": {
-        "name": "proj_free",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
+        "declared_in": [
+          "include/proj/mem.h"
+        ],
         "defined_in": "src/mem.c",
         "type": "void proj_free(void *ptr, const char *file, int line)"
       },
-      "realloc": {
-        "name": "proj_realloc_array",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "src/mem_array.c",
-        "type": "void *proj_realloc_array(void *addr, size_t num, size_t size, const char *file, int line)"
-      }
+      "allocators": [
+        {
+          "name": "proj_malloc",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "include/proj/mem.h"
+          ],
+          "defined_in": "src/mem.c",
+          "type": "void *proj_malloc(size_t num, const char *file, int line)",
+          "zeroing": false,
+          "sized": false,
+          "aligned": false,
+          "string": false,
+          "bounded": false
+        },
+        {
+          "name": "proj_zalloc",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "include/proj/mem.h"
+          ],
+          "defined_in": "src/mem.c",
+          "type": "void *proj_zalloc(size_t num, const char *file, int line)",
+          "zeroing": true,
+          "sized": false,
+          "aligned": false,
+          "string": false,
+          "bounded": false
+        },
+        {
+          "name": "proj_malloc_array",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "include/proj/mem.h"
+          ],
+          "defined_in": "src/mem_array.c",
+          "type": "void *proj_malloc_array(size_t num, size_t size, const char *file, int line)",
+          "zeroing": false,
+          "sized": true,
+          "aligned": false,
+          "string": false,
+          "bounded": false
+        },
+        {
+          "name": "proj_aligned_alloc",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "include/proj/mem.h"
+          ],
+          "defined_in": "src/mem.c",
+          "type": "void *proj_aligned_alloc(size_t num, size_t alignment, void **freeptr, const char *file, int line)",
+          "zeroing": false,
+          "sized": false,
+          "aligned": true,
+          "string": false,
+          "bounded": false
+        },
+        {
+          "name": "proj_realloc",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "include/proj/mem.h"
+          ],
+          "defined_in": "src/mem.c",
+          "type": "void *proj_realloc(void *addr, size_t num, const char *file, int line)",
+          "zeroing": false,
+          "sized": false,
+          "aligned": false,
+          "string": false,
+          "bounded": false
+        },
+        {
+          "name": "proj_realloc_array",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "include/proj/mem.h"
+          ],
+          "defined_in": "src/mem_array.c",
+          "type": "void *proj_realloc_array(void *addr, size_t num, size_t size, const char *file, int line)",
+          "zeroing": false,
+          "sized": true,
+          "aligned": false,
+          "string": false,
+          "bounded": false
+        },
+        {
+          "name": "proj_strdup",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "include/proj/string.h"
+          ],
+          "defined_in": "src/string.c",
+          "type": "char *proj_strdup(const char *str, const char *file, int line)",
+          "zeroing": false,
+          "sized": false,
+          "aligned": false,
+          "string": true,
+          "bounded": false
+        },
+        {
+          "name": "proj_strndup",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "include/proj/string.h"
+          ],
+          "defined_in": "src/string.c",
+          "type": "char *proj_strndup(const char *str, size_t s, const char *file, int line)",
+          "zeroing": false,
+          "sized": true,
+          "aligned": false,
+          "string": true,
+          "bounded": false
+        },
+        {
+          "name": "proj_memdup",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "include/proj/string.h"
+          ],
+          "defined_in": "src/string.c",
+          "type": "void *proj_memdup(const void *data, size_t siz, const char *file, int line)",
+          "zeroing": false,
+          "sized": true,
+          "aligned": false,
+          "string": false,
+          "bounded": false
+        }
+      ],
+      "copies": [
+        {
+          "_comment_example": [
+            "Non-allocating bounded copy used to fill this family's buffers - copies into a",
+            "`proj_*`-allocated, caller-owned dest; allocates nothing, frees nothing. A copy",
+            "primitive may be attached to MORE THAN ONE family (every family whose buffers it",
+            "writes into), exactly like a shared allocator."
+          ],
+          "name": "memcpy",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "/usr/include/string.h"
+          ],
+          "defined_in": null,
+          "type": "void *memcpy(void *dest, const void *src, size_t n)",
+          "string": false,
+          "sized": true,
+          "bounded": true
+        }
+      ]
     },
     {
-      "_comment_example": "Clearing-free archetype - `clearing: true`, free zeroes the buffer before releasing (for sensitive data: keys, secrets, tokens). A separate cluster from `(proj_zalloc, proj_free)` because the drop semantics differ; the buffer pass distinguishes zeroing-drop from plain-drop. Pairs with `proj_zalloc` (sensitive data is almost always zero-initialised first). `clear_realloc` is the resize companion that also cleanses.",
-      "note": "Zero-on-free pairing for sensitive buffers. The free cleanses the buffer before releasing. Use for key material, tokens, secrets - anything that must not linger in the heap after deallocation.",
-      "family": "proj",
-      "zeroing": true,
-      "clearing": true,
-      "sized": false,
-      "aligned": false,
-      "alloc": {
-        "name": "proj_zalloc",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "src/mem.c",
-        "type": "void *proj_zalloc(size_t num, const char *file, int line)"
-      },
+      "_comment_example": [
+        "Clearing family anchored on the cleansing deallocator `proj_clear_free` -",
+        "SEPARATE from `proj` (zero-on-free drop semantics for secrets). Releases",
+        "`proj_zalloc` (SHARED with `proj`) and the cleansing resize",
+        "`proj_clear_realloc`."
+      ],
+      "family": "proj_clear",
       "free": {
         "name": "proj_clear_free",
         "kind": "function_exported",
         "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
+        "declared_in": [
+          "include/proj/mem.h"
+        ],
         "defined_in": "src/mem.c",
         "type": "void proj_clear_free(void *ptr, size_t num, const char *file, int line)"
       },
-      "clear_realloc": {
-        "name": "proj_clear_realloc",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "src/mem.c",
-        "type": "void *proj_clear_realloc(void *addr, size_t old_len, size_t num, const char *file, int line)"
-      }
+      "allocators": [
+        {
+          "name": "proj_zalloc",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "include/proj/mem.h"
+          ],
+          "defined_in": "src/mem.c",
+          "type": "void *proj_zalloc(size_t num, const char *file, int line)",
+          "zeroing": true,
+          "sized": false,
+          "aligned": false,
+          "string": false,
+          "bounded": false
+        },
+        {
+          "name": "proj_clear_realloc",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "include/proj/mem.h"
+          ],
+          "defined_in": "src/mem.c",
+          "type": "void *proj_clear_realloc(void *addr, size_t old_len, size_t num, const char *file, int line)",
+          "zeroing": false,
+          "sized": false,
+          "aligned": false,
+          "string": false,
+          "bounded": false
+        }
+      ],
+      "copies": []
     },
     {
-      "_comment_example": "Secure-heap archetype - alloc comes from a separate locked-pages region (typically `mlock`'d to defeat swap-to-disk attacks against secret material). A distinct allocator family (`proj_secure`) with its own dtor pair, even when it falls back to `proj_malloc`/`proj_free` internally on uninitialised builds.",
-      "note": "Secure-heap allocator - allocates from a locked-pages region intended to defeat swap-to-disk attacks. Falls back to the primary allocator when the secure heap hasn't been initialised.",
+      "_comment_example": [
+        "Secure-heap family anchored on `proj_secure_free` - buffers from a locked-pages",
+        "region (mlock'd vs swap-to-disk). Distinct family even when it falls back to the",
+        "primary allocator internally."
+      ],
       "family": "proj_secure",
-      "zeroing": false,
-      "clearing": false,
-      "sized": false,
-      "aligned": false,
-      "alloc": {
-        "name": "proj_secure_malloc",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "src/mem_sec.c",
-        "type": "void *proj_secure_malloc(size_t num, const char *file, int line)"
-      },
       "free": {
         "name": "proj_secure_free",
         "kind": "function_exported",
         "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
+        "declared_in": [
+          "include/proj/mem.h"
+        ],
         "defined_in": "src/mem_sec.c",
         "type": "void proj_secure_free(void *ptr, const char *file, int line)"
-      }
-    },
-    {
-      "_comment_example": "Aligned-allocation archetype - alloc honours an alignment argument. `aligned: true`. The signature often carries a `void **freeptr` out-arg because aligned allocation may return a pointer offset from the actual heap allocation; `freeptr` receives the value to pass to `free`. Pairs with `proj_free` (callers must pass `*freeptr`, not the user pointer).",
-      "note": "Aligned allocation. Alignment is typically a power of 2 up to some implementation maximum. `*freeptr` receives the pointer to pass to the dtor.",
-      "family": "proj_aligned",
-      "zeroing": false,
-      "clearing": false,
-      "sized": false,
-      "aligned": true,
-      "alloc": {
-        "name": "proj_aligned_alloc",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "src/mem.c",
-        "type": "void *proj_aligned_alloc(size_t num, size_t alignment, void **freeptr, const char *file, int line)"
       },
-      "free": {
-        "name": "proj_free",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
-        "defined_in": "src/mem.c",
-        "type": "void proj_free(void *ptr, const char *file, int line)"
-      }
+      "allocators": [
+        {
+          "name": "proj_secure_malloc",
+          "kind": "function_exported",
+          "linked_in": null,
+          "declared_in": [
+            "include/proj/mem.h"
+          ],
+          "defined_in": "src/mem_sec.c",
+          "type": "void *proj_secure_malloc(size_t num, const char *file, int line)",
+          "zeroing": false,
+          "sized": false,
+          "aligned": false,
+          "string": false,
+          "bounded": false
+        }
+      ],
+      "copies": []
     }
   ],
-
-  "duplicators": [
-    {
-      "_comment_example": "String-dup archetype - `string: true, allocates: true`. `alloc` and `free` are name-references into the allocator cluster whose dtor pairs with this primitive's output (`proj_malloc` / `proj_free` here - the dup uses `proj_malloc` internally). The buffer agent reads these references to know which `string` cluster the dup belongs to.",
-      "note": "NUL-terminated string duplicator. Internally `proj_malloc` + `memcpy`. NULL-safe (returns NULL on NULL input). Output is owned by the caller and released via `proj_free`.",
-      "string": true,
-      "sized": false,
-      "bounded": false,
-      "allocates": true,
-      "copy": {
-        "name": "proj_strdup",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/string.h"],
-        "defined_in": "src/string.c",
-        "type": "char *proj_strdup(const char *str, const char *file, int line)"
-      },
-      "alloc": "proj_malloc",
-      "free": "proj_free"
-    },
-    {
-      "_comment_example": "Bounded string-dup - `string: true, sized: true`: copies at most `s` bytes and always NUL-terminates. Still `allocates: true`.",
-      "note": "Bounded string duplicator - like `strdup` but copies at most `s` bytes and always NUL-terminates the result.",
-      "string": true,
-      "sized": true,
-      "bounded": false,
-      "allocates": true,
-      "copy": {
-        "name": "proj_strndup",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/string.h"],
-        "defined_in": "src/string.c",
-        "type": "char *proj_strndup(const char *str, size_t s, const char *file, int line)"
-      },
-      "alloc": "proj_malloc",
-      "free": "proj_free"
-    },
-    {
-      "_comment_example": "Memory-dup archetype - `sized: true, allocates: true`, `string: false`. Caller passes an explicit length; output is a raw byte buffer.",
-      "note": "Sized memory duplicator. Internally `proj_malloc` + `memcpy`. Typically guards against integer overflow on the size argument.",
-      "string": false,
-      "sized": true,
-      "bounded": false,
-      "allocates": true,
-      "copy": {
-        "name": "proj_memdup",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["include/proj/string.h"],
-        "defined_in": "src/string.c",
-        "type": "void *proj_memdup(const void *data, size_t siz, const char *file, int line)"
-      },
-      "alloc": "proj_malloc",
-      "free": "proj_free"
-    },
-    {
-      "_comment_example": "Bounded copy archetype - `bounded: true, allocates: false`. memcpy is caller-owned in both directions - the dest must already exist. Both `alloc` and `free` are `null` because there's no implicit ownership transfer.",
-      "note": "Bounded memcpy. Dest is caller-owned; no allocation, no ownership transfer. Included so the buffer agent can recognise call-sites where data is copied INTO a pre-existing buffer (no new cluster needed).",
-      "string": false,
-      "sized": true,
-      "bounded": true,
-      "allocates": false,
-      "copy": {
-        "name": "memcpy",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": ["/usr/include/string.h"],
-        "defined_in": null,
-        "type": "void *memcpy(void *dest, const void *src, size_t n)"
-      },
-      "alloc": null,
-      "free": null
-    }
-  ],
-
   "refcounts": [
     {
-      "_comment_example": "Project refcount archetype - the typical hardware-atomic-with-lock-fallback wrapper struct most C codebases use. The wrapped int field is `val`. `atomic: true` is the COMMON-platform truth (C11 atomics, GCC builtins, MSVC intrinsics - whichever the build selects); `has_lock_fallback: true` records that a non-atomic fallback exists using a lock. `fallback_lock` is the name-reference into the `locks` list below. All primitives are typically `static inline` (kind: function_inline_header) - Rust must call them through C wrappers (`wrapper_inlines.c` or equivalent). `assert` carries the optional refcount-sanity macro used in every `*_free` (typically guards against the refcount going negative).",
+      "_comment_example": [
+        "Project refcount archetype - the typical hardware-atomic-with-lock-fallback",
+        "wrapper struct most C codebases use. The wrapped int field is `val`. `atomic:",
+        "true` is the COMMON-platform truth (C11 atomics, GCC builtins, MSVC intrinsics -",
+        "whichever the build selects); `has_lock_fallback: true` records that a",
+        "non-atomic fallback exists using a lock. `fallback_lock` is the name-reference",
+        "into the `locks` list below. All primitives are typically `static inline` (kind:",
+        "function_inline_header) - Rust must call them through C wrappers",
+        "(`wrapper_inlines.c` or equivalent). `assert` carries the optional",
+        "refcount-sanity macro used in every `*_free` (typically guards against the",
+        "refcount going negative)."
+      ],
       "note": "Project refcount. Wraps an int (atomic on common platforms, lock-protected on the fallback). The standard `*_free` pattern is: NULL check -> DOWN_REF -> assert non-negative -> early-return if i > 0 -> free children -> FREE_REF -> free the struct.",
       "atomic": true,
       "has_lock_fallback": true,
@@ -377,7 +466,9 @@
         "name": "PROJ_REF_COUNT",
         "kind": null,
         "linked_in": null,
-        "declared_in": ["include/proj/refcount.h"],
+        "declared_in": [
+          "include/proj/refcount.h"
+        ],
         "defined_in": "include/proj/refcount.h",
         "type": "struct { _Atomic int val; }"
       },
@@ -389,7 +480,9 @@
         "name": "PROJ_NEW_REF",
         "kind": "function_inline_header",
         "linked_in": null,
-        "declared_in": ["include/proj/refcount.h"],
+        "declared_in": [
+          "include/proj/refcount.h"
+        ],
         "defined_in": "include/proj/refcount.h",
         "type": "int PROJ_NEW_REF(PROJ_REF_COUNT *refcnt, int n)"
       },
@@ -397,7 +490,9 @@
         "name": "PROJ_UP_REF",
         "kind": "function_inline_header",
         "linked_in": null,
-        "declared_in": ["include/proj/refcount.h"],
+        "declared_in": [
+          "include/proj/refcount.h"
+        ],
         "defined_in": "include/proj/refcount.h",
         "type": "int PROJ_UP_REF(PROJ_REF_COUNT *refcnt, int *ret)"
       },
@@ -405,7 +500,9 @@
         "name": "PROJ_DOWN_REF",
         "kind": "function_inline_header",
         "linked_in": null,
-        "declared_in": ["include/proj/refcount.h"],
+        "declared_in": [
+          "include/proj/refcount.h"
+        ],
         "defined_in": "include/proj/refcount.h",
         "type": "int PROJ_DOWN_REF(PROJ_REF_COUNT *refcnt, int *ret)"
       },
@@ -413,7 +510,9 @@
         "name": "PROJ_GET_REF",
         "kind": "function_inline_header",
         "linked_in": null,
-        "declared_in": ["include/proj/refcount.h"],
+        "declared_in": [
+          "include/proj/refcount.h"
+        ],
         "defined_in": "include/proj/refcount.h",
         "type": "int PROJ_GET_REF(PROJ_REF_COUNT *refcnt, int *ret)"
       },
@@ -421,7 +520,9 @@
         "name": "PROJ_FREE_REF",
         "kind": "function_inline_header",
         "linked_in": null,
-        "declared_in": ["include/proj/refcount.h"],
+        "declared_in": [
+          "include/proj/refcount.h"
+        ],
         "defined_in": "include/proj/refcount.h",
         "type": "void PROJ_FREE_REF(PROJ_REF_COUNT *refcnt)"
       },
@@ -429,16 +530,24 @@
         "name": "PROJ_REF_ASSERT_ISNT",
         "kind": null,
         "linked_in": null,
-        "declared_in": ["include/proj/refcount.h"],
+        "declared_in": [
+          "include/proj/refcount.h"
+        ],
         "defined_in": "include/proj/refcount.h",
         "type": null
       }
     }
   ],
-
   "locks": [
     {
-      "_comment_example": "Project RWLOCK archetype. `kind: \"rwlock\"` - has separate `read_lock` and `write_lock`. `opaque: true` because the public type is typically a `typedef void` - callers never see the underlying `pthread_rwlock_t` / `SRWLOCK`. `reentrant: false` (POSIX rwlocks aren't reentrant by default). All primitives are real exported functions (defined per-platform in a `threads_pthread.c` / `threads_win.c` pair), reachable from Rust via bindgen.",
+      "_comment_example": [
+        "Project RWLOCK archetype. `kind: \"rwlock\"` - has separate `read_lock` and",
+        "`write_lock`. `opaque: true` because the public type is typically a `typedef",
+        "void` - callers never see the underlying `pthread_rwlock_t` / `SRWLOCK`.",
+        "`reentrant: false` (POSIX rwlocks aren't reentrant by default). All primitives",
+        "are real exported functions (defined per-platform in a `threads_pthread.c` /",
+        "`threads_win.c` pair), reachable from Rust via bindgen."
+      ],
       "note": "Project reader-writer lock. Opaque typedef; the underlying implementation is `pthread_rwlock_t` on POSIX, `SRWLOCK` on Windows. Used to protect refcount fallback paths and per-object internal state.",
       "kind": "rwlock",
       "reentrant": false,
@@ -447,7 +556,9 @@
         "name": "PROJ_RWLOCK",
         "kind": null,
         "linked_in": null,
-        "declared_in": ["include/proj/threads.h"],
+        "declared_in": [
+          "include/proj/threads.h"
+        ],
         "defined_in": "include/proj/threads.h",
         "type": "typedef void PROJ_RWLOCK"
       },
@@ -455,7 +566,9 @@
         "name": "proj_thread_lock_new",
         "kind": "function_exported",
         "linked_in": null,
-        "declared_in": ["include/proj/threads.h"],
+        "declared_in": [
+          "include/proj/threads.h"
+        ],
         "defined_in": "src/threads_pthread.c",
         "type": "PROJ_RWLOCK *proj_thread_lock_new(void)"
       },
@@ -463,7 +576,9 @@
         "name": "proj_thread_read_lock",
         "kind": "function_exported",
         "linked_in": null,
-        "declared_in": ["include/proj/threads.h"],
+        "declared_in": [
+          "include/proj/threads.h"
+        ],
         "defined_in": "src/threads_pthread.c",
         "type": "int proj_thread_read_lock(PROJ_RWLOCK *lock)"
       },
@@ -471,7 +586,9 @@
         "name": "proj_thread_write_lock",
         "kind": "function_exported",
         "linked_in": null,
-        "declared_in": ["include/proj/threads.h"],
+        "declared_in": [
+          "include/proj/threads.h"
+        ],
         "defined_in": "src/threads_pthread.c",
         "type": "int proj_thread_write_lock(PROJ_RWLOCK *lock)"
       },
@@ -479,7 +596,9 @@
         "name": "proj_thread_unlock",
         "kind": "function_exported",
         "linked_in": null,
-        "declared_in": ["include/proj/threads.h"],
+        "declared_in": [
+          "include/proj/threads.h"
+        ],
         "defined_in": "src/threads_pthread.c",
         "type": "int proj_thread_unlock(PROJ_RWLOCK *lock)"
       },
@@ -487,22 +606,30 @@
         "name": "proj_thread_lock_free",
         "kind": "function_exported",
         "linked_in": null,
-        "declared_in": ["include/proj/threads.h"],
+        "declared_in": [
+          "include/proj/threads.h"
+        ],
         "defined_in": "src/threads_pthread.c",
         "type": "void proj_thread_lock_free(PROJ_RWLOCK *lock)"
       }
     }
   ],
-
   "cleansers": [
     {
-      "_comment_example": "Standalone cleanse - zero a buffer without freeing it. Often implemented with a volatile function pointer to memset to defeat dead-store-elimination optimisations. Used internally by `*_clear_free` and called directly by code that wants length-aware sensitive-data wipe without giving up the allocation.",
+      "_comment_example": [
+        "Standalone cleanse - zero a buffer without freeing it. Often implemented with a",
+        "volatile function pointer to memset to defeat dead-store-elimination",
+        "optimisations. Used internally by `*_clear_free` and called directly by code",
+        "that wants length-aware sensitive-data wipe without giving up the allocation."
+      ],
       "note": "Length-aware sensitive-data wipe. Uses a volatile memset to defeat dead-store-elimination. Does NOT free.",
       "op": {
         "name": "proj_cleanse",
         "kind": "function_exported",
         "linked_in": null,
-        "declared_in": ["include/proj/mem.h"],
+        "declared_in": [
+          "include/proj/mem.h"
+        ],
         "defined_in": "src/mem_clr.c",
         "type": "void proj_cleanse(void *ptr, size_t len)"
       }
