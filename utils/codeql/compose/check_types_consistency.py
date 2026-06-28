@@ -95,15 +95,16 @@ def lifetime_set(by_type) -> set[str]:
     out: set[str] = set()
     for entries in by_type.values():
         for entry, _ in entries:
-            out |= set(entry.get("ctors") or [])
+            lc = scope.lifetime(entry)
+            out |= set(lc.get("ctors") or [])
             # `dtor` is `{shared, exclusive, fields}` (all lifecycle funcs);
             # `scope.dtor_op_names` tolerates the legacy `{storage, fields}`
             # and flat-string shapes during migration.
-            out |= set(scope.dtor_op_names(entry.get("dtor")))
-            if entry.get("up_ref"):
-                out.add(entry["up_ref"])
-            out |= set(entry.get("clones") or [])
-            lock = entry.get("locking") or {}
+            out |= set(scope.dtor_op_names(lc.get("dtor")))
+            if lc.get("up_ref"):
+                out.add(lc["up_ref"])
+            out |= set(lc.get("clones") or [])
+            lock = lc.get("locking") or {}
             for key in ("acquire", "release"):
                 v = lock.get(key)
                 if v:
@@ -202,6 +203,7 @@ def check_ptr_invariants(by_type) -> list[Finding]:
                 owned = ptr.get("owned")
                 borrowed = ptr.get("borrowed")
                 exclusive = ptr.get("exclusive")
+                shared = ptr.get("shared")
                 lifetime = ptr.get("lifetime")
                 string = ptr.get("string")
                 array = ptr.get("array")
@@ -220,6 +222,10 @@ def check_ptr_invariants(by_type) -> list[Finding]:
                     bad("owned and borrowed both true (must be XOR)")
                 if exclusive and not owned:
                     bad("exclusive true but owned not true")
+                if shared and not owned:
+                    bad("shared true but owned not true")
+                if exclusive and shared:
+                    bad("exclusive and shared both true (must be XOR when owned)")
                 if borrowed and not lifetime:
                     bad("borrowed true but lifetime unset")
                 if string and array:

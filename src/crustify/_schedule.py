@@ -268,18 +268,20 @@ def load_type_meta(analysis_root: Path) -> dict[str, tuple[list[str], set[str]]]
             if not tag or tag in meta:
                 continue
             fields = [x["name"] for x in (e.get("fields") or []) if x.get("name")]
-            lc = set(e.get("ctors") or [])
+            from compose.scope import lifetime as _lifetime
+            lt = _lifetime(e)
+            lc = set(lt.get("ctors") or [])
             # `dtor` is `{storage, fields}` (both names are lifecycle funcs);
             # tolerate the legacy flat string during migration.
-            d = e.get("dtor")
+            d = lt.get("dtor")
             if isinstance(d, dict):
                 lc |= {v for v in (d.get("storage"), d.get("fields")) if v}
             elif d:
                 lc.add(d)
-            if e.get("up_ref"):
-                lc.add(e["up_ref"])
-            lc |= set(e.get("clones") or [])
-            lock = e.get("locking") or {}
+            if lt.get("up_ref"):
+                lc.add(lt["up_ref"])
+            lc |= set(lt.get("clones") or [])
+            lock = lt.get("locking") or {}
             for k in ("acquire", "release"):
                 if lock.get(k):
                     lc.add(lock[k])

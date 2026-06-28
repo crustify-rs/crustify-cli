@@ -109,7 +109,6 @@ def _null_ptr_skeleton() -> dict[str, Any]:
     return {
         "array": None,
         "string": None,
-        "elems": None,
         "owned": None,
         "exclusive": None,
         "shared": None,
@@ -425,21 +424,24 @@ def _lifecycle_skeleton() -> dict[str, Any]:
     # No `ops` list: a concrete type's method surface is DERIVED (lifecycle
     # only) via scope.type_method_syms. Only the synthetic string/array clusters
     # (agent-created) carry an explicit `ops`.
+    # All lifecycle slots nest under `lifetime` (read via scope.lifetime).
+    # Split destructor:
+    #   `exclusive` = a plain `*_free` releasing a solely-owned heap header
+    #     + fields (-> CBox);
+    #   `shared`    = a refcount-decrementing free (the dual-ownership /
+    #     refcounted teardown, pairs with `up_ref`; -> CArc);
+    #   `fields`    = a `*_dispose`/`*_cleanup` releasing owned fields only,
+    #     by-value header, POD-style (-> CVal).
+    # See types.json `_comment_lifecycle`.
     return {
-        "ctors": [],
-        "up_ref": None,
-        # Split destructor:
-        #   `exclusive` = a plain `*_free` releasing a solely-owned heap header
-        #     + fields (-> CBox);
-        #   `shared`    = a refcount-decrementing free (the dual-ownership /
-        #     refcounted teardown, pairs with `up_ref`; -> CArc);
-        #   `fields`    = a `*_dispose`/`*_cleanup` releasing owned fields only,
-        #     by-value header, POD-style (-> CVal).
-        # See types.json `_comment_lifecycle`.
-        "dtor": {"shared": None, "exclusive": None, "fields": None},
-        "clones": [],
-        "locking": None,
-        "conditional_drop": None,
+        "lifetime": {
+            "ctors": [],
+            "up_ref": None,
+            "dtor": {"shared": None, "exclusive": None, "fields": None},
+            "clones": [],
+            "locking": None,
+            "conditional_drop": None,
+        }
     }
 
 
@@ -777,8 +779,8 @@ _COMMENT = (
     "(touchers that hold the type opaquely — forwarders, ctors, "
     "wrappers). Wrap types restrict both to the in-scope universe "
     "(port-defined ∪ port-reachable); port types keep the full "
-    "footprint. The agent populates `ops` from both, then fills "
-    "ctors/dtor/up_ref/clones/locking/conditional_drop/placement. "
+    "footprint. The agent populates `ops` from both, then fills the "
+    "`lifetime` block (ctors/dtor/up_ref/clones/locking/conditional_drop). "
     "`casted` {to,from} is the composer-filled raw struct<->struct cast graph "
     "(see _comment_casted) — instance<->engine erasure, base->derived "
     "downcasts and ASN1 punning all coexist there, unclassified. Synthetic "

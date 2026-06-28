@@ -471,8 +471,9 @@ def compose(
             lp = plan_for(lib)
             if lp is None:
                 continue
-            fns = set(c.get("ctors") or []) | set(c.get("ops") or [])
-            dt = c.get("dtor") or {}
+            lc = scope.lifetime(c)
+            fns = set(lc.get("ctors") or []) | set(c.get("ops") or [])
+            dt = lc.get("dtor") or {}
             for k in ("storage", "fields"):
                 if dt.get(k):
                     fns.add(dt[k])

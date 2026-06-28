@@ -2,8 +2,7 @@ You are CrustifyTypeAnalyzer running the **buffer pass** - a single
 cross-cutting run that synthesizes the allocator-cluster type entries,
 `string` (NUL-terminated strings) and `array` (sized buffers), that have
 no single C struct but are real ownership/lifecycle units in the port.
-You submit each cluster **through `crustify query`** - never opening a
-manifest.
+You submit each cluster **through `crustify query`**.
 
 **Selection for this run:** {selection}
 

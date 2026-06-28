@@ -234,6 +234,15 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
                             "ptr. syms: macro kind + per-arg/return "
                             "ownership (ptr_args/ptr_ret). The agent never edits the "
                             "manifest directly.")
+    facet.add_argument("--update-help", action="store_true", dest="update_help",
+                       help="Print the findings JSON schema that --update expects "
+                            "for this subject (types vs syms), then exit. No --name "
+                            "needed — schema discovery for the analyzer agent.")
+    facet.add_argument("--schema", action="store_true", dest="schema",
+                       help="Print the record's field/slot DEFINITIONS (the "
+                            "_comment_* blocks, the schema authority), then exit. "
+                            "No --name needed. types: struct-analyzer fields only "
+                            "(synthetic string/array-cluster fields excluded).")
     if facets:
         facet.add_argument("--fields", action="store_true",
                            help="Introspect a type: ALL declared field names "
@@ -1219,6 +1228,8 @@ def _handle_query(args: argparse.Namespace, target: Path) -> None:
         methods=bool(getattr(args, "methods", False)),
         accessors=bool(getattr(args, "accessors", False)),
         update=getattr(args, "update", None),
+        update_help=bool(getattr(args, "update_help", False)),
+        schema=bool(getattr(args, "schema", False)),
         create=getattr(args, "create", None),
         manifest=bool(getattr(args, "manifest", False)),
         rng=getattr(args, "rng", None),

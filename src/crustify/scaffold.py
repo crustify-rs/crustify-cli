@@ -69,6 +69,16 @@ def scaffold(
     elif name:
         misses = [n for n in name if crates.lookup(doc, n) is None]
         if misses:
+            # Validate unplaced seeds against the in-scope universe BEFORE spawning
+            # the LLM scaffolder — a typo'd / out-of-scope name is otherwise placed
+            # as a phantom seed (an agent run authoring crates.json for a symbol that
+            # does not exist), instead of failing fast like `query syms --name` does.
+            universe = _in_scope_names(layout, target)
+            unknown = [n for n in misses if n not in universe] if universe else []
+            if unknown:
+                raise SystemExit(
+                    "scaffold: not in scope (unknown symbol/type): "
+                    + ", ".join(repr(n) for n in unknown))
             _spawn(target, seeds=misses)
             doc = crates.load(layout)
         entries, missing = _entries_for_names(doc, name)
@@ -102,6 +112,26 @@ def scaffold(
 def _spawn(target: Path, seeds: list[str] | None = None) -> None:
     from crustify.agents.scaffolder import CrustifyScaffolder
     CrustifyScaffolder(target, seeds=seeds).run()
+
+
+def _in_scope_names(layout, target: Path) -> set[str]:
+    """Every in-scope symbol/type name the scaffolder is allowed to place —
+    the authoritative ``scope.json`` universe (port ∪ wrap). Functions, globals
+    and macros key on ``name``; types key on ``name`` (port) or ``type`` (wrap).
+    Empty set if ``scope.json`` is absent/unreadable (callers gate on emptiness)."""
+    scope_path = layout.scope(target)
+    try:
+        doc = json.loads(scope_path.read_text())
+    except (OSError, ValueError):
+        return set()
+    names: set[str] = set()
+    for section in (doc.get("port") or {}), (doc.get("wrap") or {}):
+        for group in ("functions", "globals", "macros", "types"):
+            for e in section.get(group) or []:
+                for key in ("name", "type"):
+                    if e.get(key):
+                        names.add(e[key])
+    return names
 
 
 def _validate(layout) -> None:

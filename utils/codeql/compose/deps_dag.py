@@ -263,7 +263,7 @@ def _collect(analysis_root: Path):
             # stored `ops`, no field accessors); synthetic clusters use their
             # explicit `ops`. type_method_syms() unifies both.
             n.ops |= set(_scope.type_method_syms(e))
-            for c in e.get("ctors") or []:
+            for c in _scope.lifetime(e).get("ctors") or []:
                 if c not in n.ctors:
                     n.ctors.append(c)
             # Dtor sym names, for the signature-fold only (NOT the owned method
@@ -271,7 +271,7 @@ def _collect(analysis_root: Path):
             # type_method_syms; a synthetic cluster's is NOT (its `ops` is the
             # explicit op list, sans ctor/dtor) — so its dtor's signature types
             # (e.g. `git_pool_clear(git_pool*)`) would otherwise never fold in.
-            n.dtor_syms |= set(_scope.dtor_op_names(e.get("dtor")))
+            n.dtor_syms |= set(_scope.dtor_op_names(_scope.lifetime(e).get("dtor")))
 
     for f in sorted(analysis_root.rglob("syms.json")):
         try:

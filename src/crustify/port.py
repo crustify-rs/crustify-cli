@@ -227,6 +227,21 @@ def port(
     # them as the port-scope predicate would.)
     named, _unknown = S.resolve_names(
         sel_names, by_key, by_name, lambda n: _file_match(n))
+
+    # A wrapped type's lifecycle ops (ctors/dtor/up_ref/clones/locking) are
+    # normally wrap's to emit. But wrap has no constructor mechanism and can't
+    # express ops whose C signature doesn't fit a `&self` method, so the
+    # **port-scope** ones sit as `// crustify:todo` stubs (the blind spot). When
+    # such an op is **explicitly named**, port it as a standalone free function —
+    # bypassing the wrap-method guard for that selected subset (the dag-layer/file
+    # sweeps still exclude them; see below). This is gated on `_is_port`: a
+    # WRAP-scope lifecycle op (e.g. the `git_vector_dup` clone) was classified to
+    # stay C and is still blocked by the wrap-scope gate below.
+    method_fns = _type_method_fns(layout.analysis)
+    port_lifecycle = {n.id for n in named
+                      if n.node_kind == "symbol" and n.id in method_fns
+                      and _is_port(n)}
+
     wrap_scoped = sorted(
         (n for n in named if _scope_of(n) == "wrap"), key=lambda x: x.id)
     if wrap_scoped:
@@ -269,35 +284,32 @@ def port(
               f"their ffi:: bindings / crustify_<NAME> shims; the C #define stays: "
               f"{', '.join(port_macros)}", file=sys.stderr)
 
-    # A wrapped type's lifecycle ops (ctors/dtor/up_ref/clones/locking) are
-    # emitted by the WRAP stage as that type's `&self` methods — porting them
-    # duplicates the wrapper. A named one is a hard error (like a named type);
-    # unnamed ones are filtered from `in_scope` below (so a `--file` sweep
-    # silently drops them). Field accessors are NOT filtered (they're no longer
-    # in the method surface) — they port like any free function.
-    method_fns = _type_method_fns(layout.analysis)
-    port_methods = sorted({n.id for n in named
-                           if n.node_kind == "symbol" and n.id in method_fns})
-    if port_methods:
-        listing = "\n".join(f"  - {n}" for n in port_methods)
-        raise SystemExit(
-            f"port: {len(port_methods)} selected "
-            f"{'entity is' if len(port_methods)==1 else 'entities are'} a wrapped "
-            f"type's lifecycle method — the WRAP stage emits these as "
-            f"the type's `&self` methods; port must not re-port them:\n{listing}\n"
-            f"  → these belong to `wrap`; pick a free behaviour function for port.")
+    # Explicitly-named lifecycle ops (computed above as `port_lifecycle`) are
+    # admitted as port material — a deliberate override of the wrap-method guard.
+    # Unnamed ones never reach here: the dag-layer auto-selection excludes
+    # `_folded` (line ~207) and `--file` requires a `--name`, so a sweep can't
+    # silently pull a lifecycle op in. Field accessors were never in this set —
+    # they port like any free function.
+    if port_lifecycle:
+        listing = ", ".join(sorted(port_lifecycle))
+        print(f"[crustify port] porting {len(port_lifecycle)} lifecycle op(s) as "
+              f"free function(s) (explicitly named, bypassing the wrap-method "
+              f"guard): {listing}", file=sys.stderr)
 
     # TODO(opacity): once non_opaque_in is wired, also refuse a port whose target
     # type still has C field-touchers (dual-ownership risk) unless --force.
 
-    # Selection is FUNCTIONS + GLOBALS: port-scope, file-matched, symbol-kind
-    # (excludes types — node_kind == "type"), non-macro, and NOT a wrapped type's
-    # accessor/lifecycle method (those are wrap's — see `method_fns`).
+    # Selection is FUNCTIONS + GLOBALS: file-matched, symbol-kind (excludes
+    # types — node_kind == "type"), non-macro, and EITHER an ordinary port-scope
+    # free function (not a wrapped type's lifecycle method — those are wrap's, see
+    # `method_fns`) OR an explicitly-named PORT-scope lifecycle op being ported on
+    # purpose (`port_lifecycle`, e.g. `git_mwindow_open`, `git_odb_new`).
     in_scope = lambda n: (
-        _is_port(n) and _file_match(n)
+        _file_match(n)
         and n.node_kind == "symbol"
         and not str(n.subkind).startswith("macro")
-        and n.id not in method_fns)
+        and ((_is_port(n) and n.id not in method_fns)   # ordinary port free fn
+             or n.id in port_lifecycle))                # explicitly-named lifecycle op
     sel_nodes, _ = S.resolve_names(sel_names, by_key, by_name, in_scope)
     files: set[str] = {n.defined_in for n in sel_nodes if n.defined_in}
 

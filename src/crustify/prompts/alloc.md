@@ -23,19 +23,22 @@ refcounting primitives, lock primitives. |
 2. **Walk the allocator surface.** Use `Bash` + `Read` (and CodeQL if
    the codebase has a database) to enumerate:
 
-     - **Byte-level allocator families** - One per deallocator/free,
-     paired with the allocators that return the objects freed by this
-     deallocator. Allocators may be shared by multiple families.
-     Resolve macro variants to the symbols they expand to.
-     We do not call macros via FFI. Allocator sets may
-     include `memdup`, `realloc`, `calloc`, `realloc` on single objects
-     as well as arrays of objects - they all belong to the same
-     family as long as they free via the same destructor. Families
-     operating on NIL-terminated strings (`strdup`, etc.) also get their
-     own families, discriminated by the multiple deallocators. Also
-     look for **byte-level duplicators** -- every copy/dup primitive (`*strdup`,
-     `*strndup`, `*memdup`, `memcpy`) -- and add them to the families above
-     thay may use them.
+     - **Byte-level allocator families** - Generally, these are untyped `void*`
+     that are used by the application to (de-)allocate raw bytes (e.g.  `malloc`
+     and `free`). Each deallocator/free is a discriminator for composing a
+     family, paired with the allocators that return the objects freed by this
+     deallocator. Allocators may be shared by multiple families.  Resolve macro
+     variants to the symbols they expand to.  We do not call macros via FFI.
+     Allocator sets may include `memdup`, `realloc`, `calloc`, `realloc` on
+     single objects as well as arrays of objects - they all belong to the same
+     family as long as they free via the same destructor. Also look for
+     **byte-level duplicators** -- every copy/dup primitive (`*memdup`,
+     `memcpy`) -- and add them to the families above thay may use them.
+     - **String allocator families** - Clusters operating on NIL-terminated
+     strings (`strdup`, `strndup`, etc.) also get their own families,
+     discriminated by the multiple deallocators. Generally, these operate on
+     `char*` pointers or similar single-byte scalar pointers, and not
+     aggregate types. 
      - **Refcounts** - every refcount type and its primitive family
        (`new` / `up` / `down` / `get` / `free`, optional `assert`).
        Record whether the backend is atomic, whether there's a lock

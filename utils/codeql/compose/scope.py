@@ -332,13 +332,26 @@ def dtor_op_names(d) -> list[str]:
     return [d] if d else []
 
 
+def lifetime(rec: dict) -> dict:
+    """The lifecycle sub-record — ``ctors``/``up_ref``/``dtor``/``clones``/
+    ``locking``/``conditional_drop``. The current schema nests these
+    under ``rec["lifetime"]``; this returns that **mutable** dict, falling back
+    to ``rec`` itself for un-migrated flat records — so both the reads here and
+    the partial-merge write target in ``query`` stay correct across migration.
+    `kind`, `ops`, `fields`, `casted` stay at the record top level."""
+    lc = rec.get("lifetime")
+    return lc if isinstance(lc, dict) else rec
+
+
 def type_method_syms(entry: dict) -> list[str]:
     """The C function names that are this type's methods — its method surface,
     deduped, lifecycle-first.
 
     For a concrete type (struct/union/enum) this is DERIVED, not stored: its
     **lifecycle** (ctors ∪ dtor.{shared,exclusive,fields} ∪ up_ref ∪ clones ∪
-    locking.{acquire,release}). Field accessors are NOT part of the surface —
+    locking.{acquire,release}). In-place initializers (`*_init`, stack/embedded
+    ctors that don't byte-allocate) live in `ctors`. Field accessors are NOT
+    part of the surface —
     the wrapper derives per-field accessors from the field layout directly, so a
     C field-accessor function is an ordinary free function here. There is no
     `ops` list on a concrete type — the deps DAG and the consistency gate call
@@ -350,12 +363,13 @@ def type_method_syms(entry: dict) -> list[str]:
     """
     if entry.get("kind") in SYNTHETIC_KINDS:
         return list(entry.get("ops") or [])
-    out: list[str] = list(entry.get("ctors") or [])
-    out += dtor_op_names(entry.get("dtor"))
-    if entry.get("up_ref"):
-        out.append(entry["up_ref"])
-    out += entry.get("clones") or []
-    lock = entry.get("locking") or {}
+    lc = lifetime(entry)
+    out: list[str] = list(lc.get("ctors") or [])
+    out += dtor_op_names(lc.get("dtor"))
+    if lc.get("up_ref"):
+        out.append(lc["up_ref"])
+    out += lc.get("clones") or []
+    lock = lc.get("locking") or {}
     out += [v for v in (lock.get("acquire"), lock.get("release")) if v]
     seen: set[str] = set()
     return [x for x in out if not (x in seen or seen.add(x))]

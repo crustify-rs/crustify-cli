@@ -51,6 +51,8 @@ def query(
     methods: bool = False,
     accessors: bool = False,
     update: str | None = None,
+    update_help: bool = False,
+    schema: bool = False,
     create: str | None = None,
     rs: bool = False,
     manifest: bool = False,
@@ -70,6 +72,17 @@ def query(
       * ``--name A B …`` → several records at once (no facet).
     """
     kind = "type" if subject == "types" else "symbol"
+    # --update-help: print the findings schema the agent submits via --update,
+    # then return. No --name (it describes the schema, not an entry) — sibling of
+    # --update for schema discovery at runtime.
+    if update_help:
+        print(json.dumps(_findings_schema(kind), indent=2))
+        return
+    # --schema: the record's field/slot DEFINITIONS (the _comment_* blocks);
+    # no --name. Distinct from --update-help, which gives the submission shape.
+    if schema:
+        print(json.dumps(_schema(kind), indent=2))
+        return
     name_list = list(names or [])
     # --create homes a WHOLE synthetic cluster (its name is IN the entry), so it
     # takes no --name and bypasses resolution.
@@ -110,10 +123,12 @@ def _summarize(entry: dict | None, kind: str) -> dict | None:
         return entry
     if kind == "type":
         from compose import scope
-        keep = ("type", "typedef", "kind", "declared_in", "defined_in",
-                "casted", "ctors", "dtor", "up_ref", "clones", "locking",
-                "conditional_drop")
+        keep = ("type", "typedef", "kind", "declared_in", "defined_in", "casted")
         s = {k: entry[k] for k in keep if k in entry}
+        lc = scope.lifetime(entry)
+        s["lifetime"] = {k: lc.get(k) for k in
+                         ("ctors", "up_ref", "dtor", "clones",
+                          "locking", "conditional_drop")}
         s["fields"] = [f.get("name") for f in entry.get("fields") or []]
         # Method surface: lifecycle ops for a concrete type; the explicit `ops`
         # list for a synthetic cluster. (Field accessors are not part of it —
@@ -460,6 +475,123 @@ _PTR_ARG_AGENT_KEYS = {"array", "string", "moved", "mutable", "note"}
 _PTR_RET_AGENT_KEYS = {"array", "string", "moved", "borrowed", "lifetime",
                        "mutable", "note"}
 _FORK_KEYS = {"ptr_args", "ptr_ret", "callsites"}
+
+
+# `types.json` is shared with the synthetic string/array-cluster analyzers; the
+# struct type-analyzer's `--schema` excludes their cluster-only fields.
+_SYNTHETIC_SCHEMA_FIELDS = {"ops", "array_fields"}
+
+
+def _schema(kind: str) -> dict:
+    """The record schema for ``--schema`` — every ``_comment_*`` definition
+    block, single-sourced from ``templates/<types|syms>.json`` (the schema
+    authority), so the agent reads the meaning of each field/slot/value at
+    runtime instead of opening the templates. For ``types`` the synthetic
+    string/array-cluster fields (``ops``, ``array_fields``) are dropped — they
+    belong to those analyzers, not the struct type-analyzer. Empty if the
+    template is unreadable."""
+    tmpl = "types.json" if kind == "type" else "syms.json"
+    path = Path(__file__).resolve().parents[2] / "templates" / tmpl
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    out: dict = {}
+    for k, v in doc.items():
+        if not k.startswith("_comment"):
+            continue
+        field = k[len("_comment_"):] or "overview"
+        if kind == "type" and field in _SYNTHETIC_SCHEMA_FIELDS:
+            continue
+        out[field] = " ".join(v) if isinstance(v, list) else v
+    return out
+
+
+def _findings_schema(kind: str) -> dict:
+    """The findings JSON an analyzer agent submits through ``--update`` — the
+    schema boundary, returned by ``--update-help`` so the agent discovers it at
+    runtime instead of hard-coding it. The top-level key sets are the validator's
+    own (``_FINDINGS_TOP`` / ``_SYM_FINDINGS_TOP``), so this never drifts from
+    what ``--update`` actually accepts."""
+    if kind == "type":
+        return {
+            "_subject": "type",
+            "_doc": ("Submit ONLY the lifecycle slots / fields you are filling. "
+                     "Merge is partial, idempotent, and lock-serialized; "
+                     "unmentioned slots/fields are left untouched. Unknown "
+                     "top-level keys are hard-rejected. (Lifecycle slots are "
+                     "stored under the entry's `lifetime` block, but you submit "
+                     "them FLAT, as shown.)"),
+            "ctors": ["<C constructor fn — heap: allocate+init+return/out a fresh "
+                      "T; stack/embedded: initialize in place (e.g. *_init)>"],
+            "up_ref": "<refcount-increment fn> | null",
+            "clones": ["<deep-copy fn>"],
+            "dtor": {
+                "exclusive": "<plain *_free: sole-owner heap header + fields -> CBox> | null",
+                "shared": "<refcount-DEC free, pairs with up_ref -> CArc> | null",
+                "fields": "<*_dispose / *_cleanup: owned fields only, by-value POD -> CVal> | null",
+            },
+            "locking": {"acquire": "<lock fn> | null", "release": "<unlock fn> | null"},
+            "conditional_drop": "<drop-condition descriptor> | null",
+            "fields": {
+                "<field_name>": {
+                    "ptr": {
+                        "array": "bool", "string": "bool", "owned": "bool",
+                        "exclusive": "bool", "shared": "bool", "borrowed": "bool",
+                        "nullable": "bool", "mutable": "bool", "container": "bool",
+                        "owned_elem": "bool", "lifetime": "<source> | null",
+                        "note": "<str>",
+                    }
+                }
+            },
+            "_comment_agent": "<your rationale (optional free text)>",
+            "_rules": [
+                "dtor: no single C function may fill two roles "
+                "(shared / exclusive / fields must differ).",
+                "every named op must be a real function, not a macro "
+                "(record the underlying function it expands to).",
+                "field.ptr: owned+borrowed (and exclusive+shared) MAY BOTH be "
+                "true — that encodes runtime-conditional ownership (owned on one "
+                "path, borrowed/refcounted on another); a both-exclusive+shared "
+                "field then expects both an exclusive and a shared dtor. "
+                "Still enforced: exclusive/shared imply owned; owned_elem implies "
+                "container; borrowed implies lifetime set; string XOR array "
+                "(structural); a const pointee implies mutable != true.",
+            ],
+            "_valid_top_keys": sorted(_FINDINGS_TOP),
+        }
+    return {
+        "_subject": "symbol",
+        "_doc": ("Submit ONLY the facets you are filling. Merge is partial and "
+                 "idempotent. Unknown top-level keys are hard-rejected. `kind` is "
+                 "for MACROS only — functions / globals / callbacks are "
+                 "composer-fixed and must omit it."),
+        "kind": "<macro subkind> (macros only)",
+        "ptr_args": {
+            "<position:int>": {
+                "array": "bool", "string": "bool", "moved": "bool",
+                "mutable": "bool", "note": "<str>",
+            }
+        },
+        "ptr_ret": {
+            "array": "bool", "string": "bool", "moved": "bool",
+            "borrowed": "bool", "lifetime": "<source> | null",
+            "mutable": "bool", "note": "<str>",
+        },
+        "forks": [{
+            "ptr_args": "<as ptr_args above>",
+            "ptr_ret": "<as ptr_ret above>",
+            "callsites": ["<callsite id>"],
+        }],
+        "_rules": [
+            "ptr_ret only on a pointer-returning symbol.",
+            "string XOR array (structural); a const pointee implies mutable != "
+            "true; on a return moved+borrowed MAY BOTH be true "
+            "(runtime-conditional ownership), and borrowed implies lifetime set.",
+            "forks: callbacks only; each callsite claimed by exactly one entry.",
+        ],
+        "_valid_top_keys": sorted(_SYM_FINDINGS_TOP),
+    }
 _MACRO_KINDS = {"macro_constant", "macro_symbol", "macro_typegen", "macro_misc"}
 
 
@@ -482,16 +614,24 @@ def _apply_ptr_agent(entry: dict, ptr_args_f: dict | None,
 
 
 def _ptr_invariant_errors(field: str, ptr: dict, field_type: str) -> list[str]:
-    """Hard-reject structural contradictions in one field's `ptr` block."""
+    """Hard-reject the IMPOSSIBLE / inconsistent shapes in one field's `ptr`
+    block — NOT the ownership-mutex cases.
+
+    `owned`+`borrowed` (and `exclusive`+`shared`) may BOTH be true: that is the
+    encoding of **runtime-conditional ownership** — owned on one path, borrowed
+    or refcounted on another (a get-or-create, a static-or-fresh return). Such a
+    field then expects the type to register the matching dtors (a both
+    `exclusive`+`shared` field implies both an `exclusive` and a `shared`
+    `dtor`). Only structural impossibilities and the ownership *dependencies*
+    (`exclusive`/`shared` ⇒ owned; `borrowed` ⇒ lifetime) are rejected."""
     e: list[str] = []
-    owned, borrowed = ptr.get("owned"), ptr.get("borrowed")
-    if owned and borrowed:
-        e.append(f"field {field!r}: owned and borrowed both true (must be XOR)")
-    if ptr.get("exclusive") and not owned:
+    if ptr.get("exclusive") and not ptr.get("owned"):
         e.append(f"field {field!r}: exclusive true but owned not true")
+    if ptr.get("shared") and not ptr.get("owned"):
+        e.append(f"field {field!r}: shared true but owned not true")
     if ptr.get("owned_elem") is not None and not ptr.get("container"):
         e.append(f"field {field!r}: owned_elem set but container not true")
-    if borrowed and not ptr.get("lifetime"):
+    if ptr.get("borrowed") and not ptr.get("lifetime"):
         e.append(f"field {field!r}: borrowed true but lifetime unset")
     if ptr.get("string") and ptr.get("array"):
         e.append(f"field {field!r}: string and array both true (must be XOR)")
@@ -654,10 +794,14 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
                 "--update REJECTED — fix and re-run:\n  - "
                 + "\n  - ".join(errors))
 
-        # Merge (partial, idempotent): only the slots/fields mentioned.
+        # Merge (partial, idempotent): only the slots/fields mentioned. Lifecycle
+        # slots land under `lifetime` (scope.lifetime returns the mutable dict —
+        # the nested block for migrated records, the flat record otherwise).
+        from compose.scope import lifetime as _lifetime
+        lc = _lifetime(entry)
         for k in _LIFECYCLE_KEYS:
             if k in f:
-                entry[k] = f[k]
+                lc[k] = f[k]
         if "_comment_agent" in f:
             entry["_comment_agent"] = f["_comment_agent"]
         for fname, fa in (f.get("fields") or {}).items():
@@ -672,19 +816,20 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
 
 def _sym_ptr_invariant_errors(label: str, blk: dict, const: bool,
                               is_ret: bool) -> list[str]:
-    """Hard-reject contradictions in one symbol `ptr_args[*]` / `ptr_ret` block.
-    Mirrors the symbol_analyzer ptr invariants (string⊕array; const⟹mutable≠
-    true; on a return, moved⊕borrowed and borrowed⟹lifetime)."""
+    """Hard-reject the IMPOSSIBLE shapes in one symbol `ptr_args[*]` / `ptr_ret`
+    block (string⊕array; const⟹mutable≠true; on a return, borrowed⟹lifetime).
+
+    `moved`+`borrowed` is NOT rejected: a return may be BOTH to mean
+    runtime-conditional ownership (moved on one path, borrowed on another).
+    The `borrowed`⟹lifetime dependency still holds — the borrow branch has a
+    source."""
     e: list[str] = []
     if blk.get("string") and blk.get("array"):
         e.append(f"{label}: string and array both true (must be XOR)")
     if const and blk.get("mutable") is True:
         e.append(f"{label}: const pointee but mutable == true")
-    if is_ret:
-        if blk.get("moved") and blk.get("borrowed"):
-            e.append(f"{label}: moved and borrowed both true (must be XOR)")
-        if blk.get("borrowed") and not blk.get("lifetime"):
-            e.append(f"{label}: borrowed true but lifetime unset")
+    if is_ret and blk.get("borrowed") and not blk.get("lifetime"):
+        e.append(f"{label}: borrowed true but lifetime unset")
     return e
 
 
@@ -1018,11 +1163,13 @@ def _create_type(layout, target, src: str) -> None:
     entry = {
         "type": tag, "typedef": [], "kind": kind,
         "declared_in": f["declared_in"], "defined_in": defined_in,
-        "ctors": f.get("ctors") or [], "up_ref": f.get("up_ref"),
-        "clones": f.get("clones") or [],
-        "dtor": f.get("dtor") or {"shared": None, "exclusive": None, "fields": None},
-        "locking": f.get("locking"),
-        "conditional_drop": f.get("conditional_drop"),
+        "lifetime": {
+            "ctors": f.get("ctors") or [],
+            "up_ref": f.get("up_ref"), "clones": f.get("clones") or [],
+            "dtor": f.get("dtor") or {"shared": None, "exclusive": None, "fields": None},
+            "locking": f.get("locking"),
+            "conditional_drop": f.get("conditional_drop"),
+        },
         "casted": {"to": [], "from": []}, "fields": [],
         "ops": f.get("ops") or [],
     }
