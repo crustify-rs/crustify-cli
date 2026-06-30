@@ -48,6 +48,10 @@ class CrustifyPort(CrustifyAgent):
 
     def _arguments(self) -> dict:
         crustify_root = _PKG_ROOT.parent.parent
+        # Resolve crustify-crate from the repo-wide dep config when present,
+        # falling back to the in-tree sibling layout for un-configured repos.
+        crate_root = self._dep(
+            "crustify-crate", crustify_root / ".." / "crustify-crate")
         return {
             "target":         self.target_rel,
             "repo_root":      str(self.repo_root),
@@ -59,6 +63,9 @@ class CrustifyPort(CrustifyAgent):
             "feature_file":   self._feature_file,
             "build_json":     str(self.layout.build_json),
             "discipline":     str(crustify_root / "docs" / "DISCIPLINE.md"),
-            "crustify_crate": str(
-                crustify_root / ".." / "crustify-crate" / "src" / "lib.rs"),
+            "crustify_crate": str(crate_root / "src" / "lib.rs"),
+            # Always-on principles preamble (AGENTS.md), with the role-scoped
+            # skill index (name + description + path) spliced into its
+            # `<!-- SKILLS_INDEX -->` sentinel. Inlined as `{principles}`.
+            "principles":     self._render_principles(),
         }

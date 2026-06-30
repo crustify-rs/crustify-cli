@@ -56,3 +56,36 @@ composed `depends_on.syms` — the latter is empty by design for wrap-scope bodi
 (`_wrap_additions_function` emits `syms: []`), so wrap-scope ctors like
 `git_object__from_raw`, `git_vector_dup`, and the `git__strdup` family would
 otherwise be missed.
+
+## Wrap callback gate misses call-site-reached callbacks (raw `ffi::` escapes)
+
+Callback typedefs the port reaches show up as naked `ffi::<cb>` with "no wrapper
+yet" doc-flags — `git_treewalk_cb` (passed to `git_tree_walk` in
+`pack_objects.rs:2468`), likely `git__tsort_cmp` (`git__tsort`). They are in
+`syms.json` + the dag but **absent from `scope.json`** (neither `port.functions`
+nor `wrap.functions`), so the wrap scheduler never sees them and no safe callback
+wrapper is emitted — violating the "avoid `ffi::`, use safe wrappers" discipline.
+
+The machinery is NOT the gap: callbacks are `subkind=="callback"` sym-units
+(`_schedule.py:199`), routed to `symbol_wrapper.md`'s callback section
+(`wrap.py:38`), and `wrap_closure.py:431-449` has a dedicated callback path. The
+gap is the **reachability gate**: it admits a callback only when an in-scope
+function's **signature** mentions it. These callbacks are reached through a port
+**call site** — the fn-pointer argument actually passed to `git_tree_walk` /
+`git__tsort` — not an in-scope signature, so the gate misses them. Exactly the
+type-gate's old body-usage blind spot (`git_config_entry` / `git_error`), already
+fixed for types but not for callbacks.
+
+**Fix:** extend the callback reachability gate to admit callbacks passed at port
+**call sites** (the fn-ptr argument), not just in-scope signature mentions, so
+they land in `scope.json` → get scheduled → wrapped. The fix is in the gate
+(`wrap_closure.py` callback walk / `scope_manifest` callback collection), **not**
+the wrap scheduler (which already handles callbacks correctly).
+
+**Adjacent (distinct, don't conflate):** the same per-type-gate-vs-wrap-surface
+divergence also yields dead raw `ffi::` via **over-emission** — `git_signature`
+(`GitTag::tagger()`, `GitCommit::author()`/`committer()`) and similar field
+accessors expose un-admitted field-types but have **zero callers**. Those are
+dead over-emission (delete the accessors), the opposite of the callback gap
+(wrap them). Discriminator: **does the emitting accessor/wrapper have a live
+caller?** No → over-emission, remove; yes → gate gap, wrap.

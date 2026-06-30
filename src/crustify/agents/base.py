@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 from typing import IO
@@ -14,6 +15,43 @@ from crustify.layout import Layout
 
 # Package root — used to locate prompts/ and templates/.
 _PKG_ROOT = Path(__file__).parent.parent
+
+
+def _skill_meta(path: Path) -> tuple[str, str, set[str] | None]:
+    """Parse ``name`` + ``description`` + ``roles`` from a SKILL.md YAML
+    frontmatter block.
+
+    Deliberately minimal — handles the fields crustify's SKILL.md format uses
+    (scalar ``name:``, inline-list ``roles: [a, b]``, and a folded/indented
+    ``description:``, block scalar ``>-``/``>`` or inline) without taking a
+    YAML dependency. The description's wrapped/indented continuation lines are
+    collapsed to one line. ``roles`` is ``None`` when the field is absent
+    (treated as universal by the caller). Falls back to the file stem / empty
+    description / no roles if there is no frontmatter."""
+    text = path.read_text()
+    if not text.startswith("---"):
+        return path.stem, "", None
+    fm = text.split("---", 2)[1]
+    name, desc, in_desc, roles = path.stem, [], False, None
+    for line in fm.splitlines():
+        if in_desc:
+            # A new top-level key (non-indented, contains ':') ends the block.
+            if line[:1] not in (" ", "\t", "") and ":" in line:
+                in_desc = False
+            else:
+                desc.append(line.strip())
+                continue
+        if line.startswith("name:"):
+            name = line.split(":", 1)[1].strip()
+        elif line.startswith("roles:"):
+            raw = line.split(":", 1)[1].strip().strip("[]")
+            roles = {r.strip().strip("'\"") for r in raw.split(",") if r.strip()}
+        elif line.startswith("description:"):
+            rest = line.split(":", 1)[1].strip().lstrip(">|").lstrip("-").strip()
+            if rest:
+                desc.append(rest)
+            in_desc = True
+    return name, " ".join(" ".join(desc).split()), roles
 
 # Appended to a wrap/port agent's prompt during a worktree-isolated parallel
 # wave: the agent owns committing its own work in its private worktree (the
@@ -79,6 +117,12 @@ class CrustifyAgent:
                                # is responsible for gating invocation.
     tier: str = "target"       # "target" | "repo_root"; selects which tier owns
                                # this agent's output artifact.
+    # Skill audience for the `{skills}` slot: only registered SKILL.md whose
+    # frontmatter `roles` intersect this tuple are rendered into the prompt.
+    # Translators (port / wrap / scaffold / …) default to the discovery +
+    # primitive skills; orchestration skills (roles: [orchestrator]) are filtered
+    # out. An orchestrator-role agent would override this.
+    skill_roles: tuple[str, ...] = ("translator",)
     # Set per-instance (not class) when an agent is one of many running
     # in parallel — disambiguates log filenames so concurrent agents
     # don't clobber each other's logs. None on instances that don't
@@ -214,3 +258,59 @@ class CrustifyAgent:
 
     def _template(self, name: str) -> str:
         return (_PKG_ROOT.parent / "templates" / name).read_text()
+
+    def _repo_config(self) -> dict:
+        """Repo-wide crustify config (``crustify/config.json``): dep paths and
+        the SKILL.md set. Memoised; empty dict if the file is absent."""
+        cfg = getattr(self, "_repo_cfg_cache", None)
+        if cfg is None:
+            p = self.layout.repo_config
+            cfg = json.loads(p.read_text()) if p.exists() else {}
+            self._repo_cfg_cache = cfg
+        return cfg
+
+    def _dep(self, name: str, fallback: Path | None = None) -> Path | None:
+        """Resolve an absolute dependency path declared under ``deps`` in the
+        repo config (e.g. ``crustify-crate``), else ``fallback``."""
+        raw = self._repo_config().get("deps", {}).get(name)
+        return Path(raw) if raw else fallback
+
+    def _render_skills(self) -> str:
+        """Render the configured ``skills`` SKILL.md set as a metadata index
+        (name — description + on-disk path) for a ``{skills}`` prompt slot,
+        scoped to this agent's :attr:`skill_roles`.
+
+        Mirrors a skill-aware harness's tier-1 load: the metadata is injected
+        into the prompt unconditionally (the routing signal), while the body is
+        read on demand from the path. Single-sourced from each SKILL.md's
+        frontmatter, so descriptions never drift from the skill itself. A skill
+        whose frontmatter ``roles`` do not intersect this agent's roles is
+        skipped (an untagged skill is universal)."""
+        mine = set(self.skill_roles)
+        blocks = []
+        for raw in self._repo_config().get("skills", []):
+            p = Path(raw)
+            if not p.exists():
+                continue
+            name, desc, roles = _skill_meta(p)
+            if roles is not None and not (roles & mine):
+                continue  # scoped to roles this agent does not have
+            blocks.append(f"- {name} — {desc}\n  read in full: {p}")
+        return "\n".join(blocks) if blocks else "(no skills configured)"
+
+    def _agents_md(self) -> Path:
+        """The always-on principles doc (`AGENTS.md`), resolved from the
+        `crustify` dep root (`docs/AGENTS.md`) with the in-tree layout as
+        fallback."""
+        return self._dep("crustify", _PKG_ROOT.parent.parent) / "docs" / "AGENTS.md"
+
+    def _render_principles(self) -> str:
+        """The always-on principles preamble for the `{principles}` prompt slot:
+        AGENTS.md verbatim, with its ``<!-- SKILLS_INDEX -->`` sentinel replaced
+        by this agent's role-scoped skill index. Substituted as a `.format`
+        *value*, so its (single) braces are inserted literally, never re-parsed.
+        Empty string if AGENTS.md is absent."""
+        p = self._agents_md()
+        if not p.exists():
+            return ""
+        return p.read_text().replace("<!-- SKILLS_INDEX -->", self._render_skills())

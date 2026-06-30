@@ -115,6 +115,14 @@ class Layout:
         return self.root / "rust"
 
     @property
+    def repo_config(self) -> Path:
+        """Repo-wide crustify config — absolute dep paths (crustify-crate,
+        kiss_ai, crustify itself) and the SKILL.md set indexed into prompts.
+        Distinct from the per-target :meth:`config`; lives at the
+        ``crustify/`` root so it is shared across targets."""
+        return self.root / "config.json"
+
+    @property
     def port_features(self) -> Path:
         """The CUMULATIVE `CRUSTIFY_<FILE>` flag manifest, in the **git-tracked**
         `rust/` tree (NOT under the symlinked `targets/`), so each isolated
