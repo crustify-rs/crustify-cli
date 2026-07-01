@@ -96,7 +96,7 @@ def lifetime_set(by_type) -> set[str]:
     for entries in by_type.values():
         for entry, _ in entries:
             lc = scope.lifetime(entry)
-            out |= set(lc.get("ctors") or [])
+            out |= set(scope.alloc_fns(lc))
             # `dtor` is `{shared, exclusive, fields}` (all lifecycle funcs);
             # `scope.dtor_op_names` tolerates the legacy `{storage, fields}`
             # and flat-string shapes during migration.

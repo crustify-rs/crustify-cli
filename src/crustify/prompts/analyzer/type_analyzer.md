@@ -98,41 +98,32 @@ Deciding which type a lifecycle op belongs to:
 ## Lifecycle classification
 
 Find `T`'s lifecycle routines among the functions in its `--methods` footprints,
-and classify each into one or more of `ctor` / `dtor` / `up_ref` / `clone`. A
+and classify each into one or more of `allocs` / `dtor` / `up_ref` / `clones`. A
 function that is none of these is not a lifecycle routine - it is either a field
 accessor (Sec 5.1) or a plain free function. Don't classify by name alone.
 Signature types dominate though.
 
 Typical shapes:
 
-  - **`ctors`** - a list of routines that produce a fully-formed, fresh `T` from
-    raw inputs and transfer its ownership either through an out arg or via pointer
-    return.  For heap objects, a ctor typically allocates the object via one of
-    the byte-level allocators from the alloc manifest above. For stack / embedded
-    objects, ctors do not allocate them via the heap allocator, but rather receive
-    a reference to the object and initialise it in place, or delegate to an init
-    helper. A heap ctor may also initialize the type within the same
-    routine, which is perfectly valid. This type's ctor(s) may call other ctor(s)
-    on their fields; they go for in the field's type and not here.
+  - **`allocs`** - a list of routines that produce a raw `T` and transfer its
+    ownership either through an out arg or via pointer return.  For heap-allocated
+    types, these are one or more of the byte-level heap allocators from the alloc
+    manifest above. Stack / embedded types that are never allocated on the heap
+    have this list empty.
   
   - **`dtor`** - the `shared`/`exclusive`/`fields` split: classify each releaser
     - a plain `*_free` -> `exclusive`, a refcount-decrementing free -> `shared`
     (with `up_ref` set), a by-value `*_dispose`/`*_cleanup` -> `fields`. At most
     one function per role; a type may set several, or none (POD). A `dtor` taking
     the base's pointer is the base's, even though it may free fields/header of the
-    derived - `dtor` signature wins.
+    derived - `dtor` signature wins. For heap-allocated types, the `dtor` is more
+    than just the byte level de-allocator as it is responsible for freeing both the
+    storage and the fields. 
   
-  - **`up_ref`** - announces a new owner of an existing `T`; refcount bump. 
+  - **`up_ref`** - the routine that bumps `T`'s refcount.
   
   - **`clones`** - a list of deep-copy ops, each producing an
-    independent `T *` from a source `T *`. May coexist with
-    `up_ref` on the same type.
-
-**Classification is non-exclusive** for `ctor` and `up_ref`. A single
-function that, on some control path, allocates a fresh `T` and on
-another path returns an existing `T` with its refcount bumped, is
-both a `ctor` AND an `up_ref`. `dtor` roles stay single-function per role;
-`clones` is a list.
+    independent `T *` from a source `T *`.
 
 ## Locking and conditional drop
 

@@ -126,9 +126,10 @@ def _summarize(entry: dict | None, kind: str) -> dict | None:
         keep = ("type", "typedef", "kind", "declared_in", "defined_in", "casted")
         s = {k: entry[k] for k in keep if k in entry}
         lc = scope.lifetime(entry)
-        s["lifetime"] = {k: lc.get(k) for k in
-                         ("ctors", "up_ref", "dtor", "clones",
-                          "locking", "conditional_drop")}
+        s["lifetime"] = {"allocs": scope.alloc_fns(lc),
+                         **{k: lc.get(k) for k in
+                            ("up_ref", "dtor", "clones",
+                             "locking", "conditional_drop")}}
         s["fields"] = [f.get("name") for f in entry.get("fields") or []]
         # Method surface: lifecycle ops for a concrete type; the explicit `ops`
         # list for a synthetic cluster. (Field accessors are not part of it —
@@ -453,7 +454,7 @@ def _accessors(layout, target, tag: str, defined_in: str | None, *,
 
 # ----------------------------------------------------------- --update ingest
 
-_LIFECYCLE_KEYS = ("ctors", "up_ref", "clones", "dtor", "locking",
+_LIFECYCLE_KEYS = ("allocs", "up_ref", "clones", "dtor", "locking",
                    "conditional_drop")
 _FINDINGS_TOP = set(_LIFECYCLE_KEYS) | {"fields", "_comment_agent"}
 _FIELD_AGENT_KEYS = {"ptr"}
@@ -522,8 +523,11 @@ def _findings_schema(kind: str) -> dict:
                      "top-level keys are hard-rejected. (Lifecycle slots are "
                      "stored under the entry's `lifetime` block, but you submit "
                      "them FLAT, as shown.)"),
-            "ctors": ["<C constructor fn — heap: allocate+init+return/out a fresh "
-                      "T; stack/embedded: initialize in place (e.g. *_init)>"],
+            "allocs": ["<byte-level allocator fn that produces a raw T (heap types: "
+                       "malloc/calloc-family from alloc.json; may be several for "
+                       "polymorphic backends or a heap/mmap split). Empty for "
+                       "stack/embedded types. Higher-level open/lookup/init logic "
+                       "stays a free function, NOT here.>"],
             "up_ref": "<refcount-increment fn> | null",
             "clones": ["<deep-copy fn>"],
             "dtor": {
@@ -755,8 +759,8 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
                               f"or omit it (§2.3)")
 
         # Lifecycle function-name checks.
-        for fn in f.get("ctors") or []:
-            check_fn(fn, "ctor")
+        for fn in f.get("allocs") or []:
+            check_fn(fn, "alloc")
         if f.get("up_ref"):
             check_fn(f["up_ref"], "up_ref")
         for fn in f.get("clones") or []:
@@ -1111,7 +1115,7 @@ def _create_type(layout, target, src: str) -> None:
                 for r in _csv.DictReader(fh):
                     if r.get("name"):
                         universe.add(r["name"])
-    named = list(f.get("ops") or []) + list(f.get("ctors") or []) \
+    named = list(f.get("ops") or []) + list(f.get("allocs") or []) \
         + list(f.get("clones") or [])
     if f.get("up_ref"):
         named.append(f["up_ref"])
@@ -1164,7 +1168,7 @@ def _create_type(layout, target, src: str) -> None:
         "type": tag, "typedef": [], "kind": kind,
         "declared_in": f["declared_in"], "defined_in": defined_in,
         "lifetime": {
-            "ctors": f.get("ctors") or [],
+            "allocs": f.get("allocs") or [],
             "up_ref": f.get("up_ref"), "clones": f.get("clones") or [],
             "dtor": f.get("dtor") or {"shared": None, "exclusive": None, "fields": None},
             "locking": f.get("locking"),

@@ -263,7 +263,7 @@ def _collect(analysis_root: Path):
             # stored `ops`, no field accessors); synthetic clusters use their
             # explicit `ops`. type_method_syms() unifies both.
             n.ops |= set(_scope.type_method_syms(e))
-            for c in _scope.lifetime(e).get("ctors") or []:
+            for c in _scope.alloc_fns(_scope.lifetime(e)):
                 if c not in n.ctors:
                     n.ctors.append(c)
             # Dtor sym names, for the signature-fold only (NOT the owned method

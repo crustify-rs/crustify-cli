@@ -343,6 +343,15 @@ def lifetime(rec: dict) -> dict:
     return lc if isinstance(lc, dict) else rec
 
 
+def alloc_fns(lc: dict) -> list[str]:
+    """The byte-level allocator routines (`allocs`) — the raw-T-producing
+    primitives bound to the type. Back-compat: falls back to the pre-refactor
+    `ctors` key for un-migrated records (higher-level construction logic is now
+    a free function; only the allocation primitive is bound)."""
+    v = lc.get("allocs")
+    return list(v if v is not None else (lc.get("ctors") or []))
+
+
 def type_method_syms(entry: dict) -> list[str]:
     """The C function names that are this type's methods — its method surface,
     deduped, lifecycle-first.
@@ -364,7 +373,7 @@ def type_method_syms(entry: dict) -> list[str]:
     if entry.get("kind") in SYNTHETIC_KINDS:
         return list(entry.get("ops") or [])
     lc = lifetime(entry)
-    out: list[str] = list(lc.get("ctors") or [])
+    out: list[str] = alloc_fns(lc)
     out += dtor_op_names(lc.get("dtor"))
     if lc.get("up_ref"):
         out.append(lc["up_ref"])

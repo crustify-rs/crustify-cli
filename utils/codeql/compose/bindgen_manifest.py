@@ -472,7 +472,7 @@ def compose(
             if lp is None:
                 continue
             lc = scope.lifetime(c)
-            fns = set(lc.get("ctors") or []) | set(c.get("ops") or [])
+            fns = set(scope.alloc_fns(lc)) | set(c.get("ops") or [])
             dt = lc.get("dtor") or {}
             for k in ("storage", "fields"):
                 if dt.get(k):

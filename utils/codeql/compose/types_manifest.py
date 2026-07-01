@@ -435,7 +435,7 @@ def _lifecycle_skeleton() -> dict[str, Any]:
     # See types.json `_comment_lifecycle`.
     return {
         "lifetime": {
-            "ctors": [],
+            "allocs": [],
             "up_ref": None,
             "dtor": {"shared": None, "exclusive": None, "fields": None},
             "clones": [],
@@ -780,7 +780,7 @@ _COMMENT = (
     "wrappers). Wrap types restrict both to the in-scope universe "
     "(port-defined ∪ port-reachable); port types keep the full "
     "footprint. The agent populates `ops` from both, then fills the "
-    "`lifetime` block (ctors/dtor/up_ref/clones/locking/conditional_drop). "
+    "`lifetime` block (allocs/dtor/up_ref/clones/locking/conditional_drop). "
     "`casted` {to,from} is the composer-filled raw struct<->struct cast graph "
     "(see _comment_casted) — instance<->engine erasure, base->derived "
     "downcasts and ASN1 punning all coexist there, unclassified. Synthetic "

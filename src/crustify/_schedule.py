@@ -269,8 +269,9 @@ def load_type_meta(analysis_root: Path) -> dict[str, tuple[list[str], set[str]]]
                 continue
             fields = [x["name"] for x in (e.get("fields") or []) if x.get("name")]
             from compose.scope import lifetime as _lifetime
+            from compose.scope import alloc_fns as _alloc_fns
             lt = _lifetime(e)
-            lc = set(lt.get("ctors") or [])
+            lc = set(_alloc_fns(lt))
             # `dtor` is `{storage, fields}` (both names are lifecycle funcs);
             # tolerate the legacy flat string during migration.
             d = lt.get("dtor")

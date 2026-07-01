@@ -83,9 +83,9 @@ file, holding `// Replaces:` / `// Field:` item anchors for
   crustify:todo`**. A surviving `// crustify:todo` means "still pending" - that is
   how partial work resumes across runs.
 
-## Classify your types from its their casted graph
+## Classify your types from their casted graph
 
-Using the crustify command above, find the set of struct tags that this type is
+Using the crustify commands above, find the set of struct tags that this type is
 cast **to** and that others cast **into** this type. Read its topology to decide
 whether it can be represented by a parametric generator:
 
@@ -153,8 +153,7 @@ uniform becomes the generic. Choose the element API (document it):
 **Ownership / lifecycle.** The base `define_type!` is **storage-agnostic and has
 no `Drop`**. How the value is *stored* and *torn down* is decided by the trait
 you register + the **wrapper type** at the call site - never a hand-written
-`impl Drop` (that is forbidden; it is the lifecycle footgun the macros exist to
-prevent). Pick from the record:
+`impl Drop`. Pick from the record:
 
 | Record signature | Register / use |
 |---|---|

@@ -48,7 +48,7 @@
     "ops - ONLY on the synthetic string/array clusters (kind string/array), which",
     "are fieldless: their explicit method list (alloc/realloc/free/cleanse). A",
     "CONCRETE type (struct/union/enum) has NO `ops` field - its method surface is",
-    "DERIVED and is its lifecycle ONLY (ctors/dtor/up_ref/clones/locking). Field",
+    "DERIVED and is its lifecycle ONLY (allocs/dtor/up_ref/clones/locking). Field",
     "accessors are NOT part of it: the wrapper derives per-field accessors from the",
     "field layout directly, so a C field-accessor function is an ordinary free",
     "function. A function that is not a lifecycle routine belongs to no type - it",
@@ -64,15 +64,19 @@
     "with the right signature. Whether a ported array DROPS its elements (ownership)",
     "is NOT here - it is a PORT concern, captured per-field as ptr.owned_elem."
   ],
-  "_comment_ctors": [
-    "ctors - agent-filled: the function(s) that produce a fresh T from raw inputs. A",
-    "function MAY appear in BOTH ctors[] and up_ref when it allocates a fresh T on one",
-    "control path and increments an existing T's refcount on another (cache-aware",
-    "open: e.g. git_mwindow_get_pack allocates on cache miss, atomic-incs on hit)."
+  "_comment_allocs": [
+    "allocs - agent-filled: the byte-level allocator routine(s) that produce a raw T",
+    "and transfer its ownership (out-arg or pointer return). For heap types these are",
+    "the malloc/calloc-family allocators from the alloc manifest; a type MAY have",
+    "several - polymorphic backends each allocating a concrete instance returned as the",
+    "base, or a heap-vs-mmap split (singleton -> CBox/CArc, buffer -> CVec). Empty for",
+    "stack/embedded types never heap-allocated. Higher-level construction logic",
+    "(open/lookup/*_init) is NOT here: it stays a plain free function over the safe",
+    "wrapper - only the raw-allocation primitive is bound to the type."
   ],
   "_comment_up_ref": [
-    "up_ref - agent-filled refcount-increment op, or null. May coexist with ctors",
-    "(see _comment_ctors) and with clones."
+    "up_ref - agent-filled refcount-increment op, or null. Coexists with allocs",
+    "(a refcounted type both allocates and up_refs) and with clones."
   ],
   "_comment_dtor": [
     "dtor - agent-filled {shared, exclusive, fields}: the destructor roles",
@@ -200,7 +204,7 @@
       ],
       "defined_in": "ssl/statem/statem_lib.c",
       "lifetime": {
-        "ctors": [
+        "allocs": [
           "statem_secret_new"
         ],
         "up_ref": null,
@@ -285,7 +289,7 @@
       ],
       "defined_in": "ssl/ssl_sess.c",
       "lifetime": {
-        "ctors": [
+        "allocs": [
           "SSL_SESSION_new"
         ],
         "up_ref": "SSL_SESSION_up_ref",
@@ -358,7 +362,7 @@
       ],
       "defined_in": "include/openssl/ssl.h",
       "lifetime": {
-        "ctors": [],
+        "allocs": [],
         "up_ref": null,
         "dtor": {
           "shared": null,
