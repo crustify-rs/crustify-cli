@@ -35,6 +35,72 @@ nothing to enumerate them in either stage.
 dependency front (31 first-layer wrap-type deps, nearly all already realized).
 Not a sprawling closure; the only hard part is the missing constructor pathway.
 
+### Progress + the remaining ~35 (2026-07-01)
+
+Path **(b)** was executed for a **15-op subset** across 9 layer-ordered `port
+--name` waves (L1..L22), each green on cargo check/clippy/test + both C-matrix
+ctest variants: `git_indexer_options_init`, `git_commit_graph_{entry_parent,
+file_open,new,entry_find,open,writer_new}`, `git_midx_{open,writer_new}`,
+`git_packbuilder_new`, `pack_entry_find(_prefix)`, `pack_backend__{writepack_free,
+writepack,alloc}`. (9 candidates were correctly rejected wrap-scope by the port
+gate — `git_str_init`, `git_pool_init`, `p_mmap`, `git_futils_mmap_ro(_file)`,
+`git_zstream_init`, `git_vector_dup`, `git_filebuf_open`, `git_commit_lookup` —
+they legitimately stay `ffi::`-forwarding.)
+
+**That subset was NOT the whole port-scope class.** The candidate set was derived
+ad hoc (the prior session's demoted forwarders + a hand-picked stub list), so it
+missed every pending op that was a *pure stub* (no forwarding `fn` to grep) and
+not hand-listed — e.g. `packed_commit_new`. The **authoritative** pending set is:
+
+```
+scope.json port.functions
+  ∩ { SYM : `// Replaces: SYM` + `// crustify:todo`, and no realized `fn SYM(` in the tree }
+  − { SYM bound as a dtor/clone hook inside impl_freed!/impl_cvalued!/impl_ref_counted!/impl_cloned! }
+```
+
+As of 2026-07-01 that yields **35 genuinely-pending port-scope ops** (51 pending
+fn-stubs − 16 macro-realized dtors whose `todo` anchors are merely stale):
+
+- **git_odb core:** `git_odb_new`, `git_odb_new_ext`, `git_odb_open`,
+  `git_odb_open_ext`, `git_odb_open_rstream`, `git_odb_open_wstream`,
+  `git_odb_write_pack`, `git_odb_object_dup`, `git_odb_object_free`,
+  `git_odb_object__free`
+- **odb cache (khash):** `git_cache_init`, `git_cache_dispose`,
+  `git_cache_oidmap_dispose`, `free_cache_object`, `retrieve_object`,
+  `lookup_walk_object`
+- **loose backend streams:** `loose_backend__readstream`,
+  `loose_backend__writestream`, `init_fake_wstream`
+- **packfile / packbuilder:** `git_packfile_alloc`, `git_packfile_stream_open`,
+  `git_pack_entry_find`, `git_packbuilder_pobjectmap_dispose`,
+  `git_packbuilder_walk_objectmap_dispose`
+- **midx / commit_graph:** `git_midx_close`, `git_commit_graph_file_close`,
+  `git_commit_graph_entry_get_byindex`, `packed_commit_new`, `packed_commit_free`
+- **mwindow:** `git_mwindow_get_pack`, `git_mwindow_free_all`,
+  `new_window_locked` ⚠️
+- **indexer / oidarray:** `git_indexer_oidmap_dispose`,
+  `git_oidarray__from_array`, `git_oidarray_dispose`
+
+**Caveats before porting:**
+- ⚠️ `new_window_locked` is **intentionally kept in C** (the `git_mwindow`
+  owner-mediated teardown is incompatible with the crate's dtor primitives —
+  it has the unconditional `..._new_window_locked_shim`). **Exclude it.**
+- `packed_commit_free` — verify it is not already `Drop`-covered by the one-arg
+  `impl_freed!(PackedCommit)` before porting (the macro-scan above only catches
+  symbols named inside the macro args, not the one-arg inherent-`free` form).
+- `git_commit_graph_entry_get_byindex`, `git_pack_entry_find`,
+  `git_mwindow_get_pack` are non-ctor `function_static` helpers reached via the
+  `crustify_<file>__<name>` shim — proof that "the regular free fns are already
+  ported" had holes; the khash `*_oidmap_dispose` / `*pobjectmap_dispose` ops are
+  the "un-macro'd map dtors" this section already predicted.
+
+**To finish:** run the enumeration above, scope-recheck each (drop wrap-scope +
+`new_window_locked`), then layer-ordered `port --name` waves — same recipe as the
+15-op run. Every wave then also needs the two janitorial fixes below (they recur):
+the scaffold re-adds stale `// Replaces:`+`todo` anchors for already-native syms
+(agents don't promote `// Replaces:` → `/// Replaces:`, so the scaffold thinks the
+anchor is missing), and call-site migration off the `crustify_*` shims is gated on
+porting the C consumers (see the callback-gate note below).
+
 ## Treat mmap-like resource acquirers as byte-level allocators (alloc stage)
 
 The alloc stage (`alloc.md` analyzer → `alloc.json`) currently catalogues only
