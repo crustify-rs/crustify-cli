@@ -102,11 +102,16 @@
     "primitive like char/void, or the synthetic markers (routine)/(array)); const",
     "(is the innermost pointee const-qualified?); depth (1 for T*, 2 for T**, ...).",
     "AGENT fields: array (buffer-style pointer?), string (NUL-terminated string?),",
-    "moved (does ownership transfer to the callee?), mutable (null/true/false),",
-    "note (free-form). Mutability rules: (i) const=true forces mutable=false; (ii)",
-    "port-scope entries -> mutable=null (the Rust author decides); (iii) wrap-scope",
-    "pointers to user-defined types -> mutable=null (opaque-handle wrappers); (iv)",
-    "wrap-scope buffers / out-scalars / void* -> agent decides true or false."
+    "moved (does ownership transfer to the callee?), borrowed (does the callee",
+    "retain a borrow bound to another entity's lifetime?), lifetime (when",
+    "borrowed=true: arg:<name>, arg:<name>->path, static, or other), mutable",
+    "(null/true/false), note (free-form). Ownership: moved and borrowed MAY BOTH be",
+    "true - that encodes runtime-conditional ownership (owned on one path, borrowed",
+    "on another); borrowed=true requires lifetime set. Mutability rules: (i)",
+    "const=true forces mutable=false; (ii) port-scope entries -> mutable=null (the",
+    "Rust author decides); (iii) wrap-scope pointers to user-defined types ->",
+    "mutable=null (opaque-handle wrappers); (iv) wrap-scope buffers / out-scalars /",
+    "void* -> agent decides true or false."
   ],
 
   "_comment_ptr_ret": [
@@ -115,9 +120,9 @@
     "ptr_args). AGENT fields: array, string, moved (does the caller own the",
     "returned pointer?), borrowed (is the return bound to another entity's",
     "lifetime?), mutable, lifetime (when borrowed=true: arg:<name>,",
-    "arg:<name>->path, static, or other), note. Invariants: moved and borrowed are",
-    "mutually exclusive; the valid (moved, borrowed) pairs are (true,false),",
-    "(false,true), and (false,false)."
+    "arg:<name>->path, static, or other), note. Ownership: moved and borrowed MAY",
+    "BOTH be true - that encodes runtime-conditional ownership (owned on one path,",
+    "borrowed on another); borrowed=true requires lifetime set."
   ],
 
   "_comment_used_by": [
@@ -170,7 +175,9 @@
           "array": false,
           "string": false,
           "moved": false,
+          "borrowed": false,
           "mutable": null,
+          "lifetime": null,
           "note": null
         }
       ],
@@ -210,7 +217,9 @@
           "array": false,
           "string": false,
           "moved": false,
+          "borrowed": false,
           "mutable": null,
+          "lifetime": null,
           "note": null
         }
       ],
@@ -247,7 +256,9 @@
           "array": false,
           "string": false,
           "moved": false,
+          "borrowed": false,
           "mutable": false,
+          "lifetime": null,
           "note": null
         }
       ],
@@ -319,7 +330,9 @@
           "array": false,
           "string": false,
           "moved": null,
+          "borrowed": null,
           "mutable": null,
+          "lifetime": null,
           "note": null
         }
       ],

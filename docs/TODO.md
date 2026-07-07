@@ -155,3 +155,122 @@ accessors expose un-admitted field-types but have **zero callers**. Those are
 dead over-emission (delete the accessors), the opposite of the callback gap
 (wrap them). Discriminator: **does the emitting accessor/wrapper have a live
 caller?** No → over-emission, remove; yes → gate gap, wrap.
+
+## Retire `config.json` (fold into `scope.json` + `build.json`)
+
+`config.json` is *not* redundant, but two of its fields duplicate the CLI args
+and the rest could live closer to where it's consumed:
+
+- `repo_root` -- DEAD. Never read; `repo_root` is the CLI's first positional
+  (pinned via `set_repo_root`, `layout.py`). Drop it (the on-disk value already
+  drifted stale -- some targets point at a `/root/git/openssl` that no longer
+  exists).
+- `target` -- CLI-duplicate, but currently *read* at `scope_manifest.py:96`
+  (`config["target"]` -> `target_dir`). Rewire that to take the target from the
+  pinned layout / the `targets/<target>/` dir path, then drop it.
+- `port_files` + `out_of_scope.paths` -- authored *scope* inputs. Could move into
+  an authored section of `scope.json` -- but `scope.json` is a computed output
+  (`analyze scope` regenerates it), so the composer must **merge-preserve** the
+  authored section on every regen (input + output share one file: a regen bug
+  can clobber the authored scope). Weigh against keeping a tiny scope-def file.
+- `out_of_scope.features` (OPENSSL_NO_* preproc defines) + `version_anchor` --
+  build/preprocessor inputs, not scope. Move to `build.json`.
+
+Low-risk first step: delete the dead `repo_root` field + rewire `target` off the
+CLI. The scope.json/build.json fold is the larger, riskier change.
+
+## Global-variable wrapping strategy (const alias + guarded-handle for mutable)
+
+Today wrap-scope globals get a getter accessor (`pub fn <name>()` over
+`ffi::crustify_get_<NAME>()`, symbol_wrapper.md). Formalize two paths and (likely)
+back them with a crate primitive:
+
+- **Const / immutable-after-init global** -> a thin **safe read alias/accessor**
+  over the `ffi::` binding: `pub fn <name>() -> &'static T` (or a value copy).
+  The one `unsafe` read (an `extern static` read is unsafe even when non-`mut`)
+  is sound *because* the global is const + never mutated. This is the common
+  case -- e.g. all 9 statem in-scope globals are const (`tls11downgrade`,
+  version tables, ASN.1 templates), 0 `pub static mut` in any bindings.rs.
+
+- **Mutable exported global** -> an **RAII guarded-handle** accessor: take a lock
+  on access, return an owned handle that `Deref`/`DerefMut`s to the value and
+  releases the lock on `Drop`.
+
+  **CAVEAT (load-bearing):** a Rust-side `std::sync::Mutex` only serializes
+  *Rust* callers. If C code or other FFI consumers touch the same global without
+  taking that lock, the guard is a **false sense of safety** -- no real mutual
+  exclusion. In OpenSSL these globals are already guarded by `CRYPTO_THREAD_*`
+  locks, so the wrapper must **bridge to the existing C lock** (acquire it across
+  FFI), not invent a fresh Rust mutex -- unless we can guarantee *all* access
+  goes through Rust.
+
+Forward-looking: no mutable exported global exists in the current statem scope,
+so this is a primitive to have ready, not a live blocker. Cross-ref the
+mutable-global gap noted for `DRIFTS.md`.
+
+## `CVec` / `CrustifyStr` `Clone` -- primitives done; wrapper opt-in + deep clone pending
+
+DONE (crate, `crustify-crate/src/smart_pointers.rs`): both now have a
+**conditional** `Clone` gated on the strategy registering a copy -- a free-only
+strategy is deliberately not `Clone` (a `.clone()` is a compile error, never a
+silent shallow double-freeing copy; the types are never `#[derive(Clone)]`).
+
+- **`CrustifyStr<D>`** reuses **`CCloned`** directly: a NUL string's copy is
+  `strdup`-shaped (`c_clone(ptr) -> ptr`, length recovered by `strlen`), so
+  `impl<D: CCloned> Clone`.
+- **`CVec<T, S>`** needed a new length-aware **`CLenCloned`**
+  (`clone_len(ptr, byte_len) -> ptr`) -- the analogue of `CLenFreed` vs `CFreed`,
+  because a `memdup` needs the byte length that `CCloned::c_clone` cannot carry.
+  `impl<T, S: CLenCloned> Clone`.
+
+Both derive a fallible `try_clone` (mirrors `CBox::try_clone`) and an infallible
+`Clone` that `abort()`s on the C-copy-failed (`None`) case.
+
+REMAINING:
+- **Analyzer classification (`buffer_analyzer.md`).** A `*_memdup` / `*_strdup` /
+  `*_strndup` allocates AND copies a source -- it is a **clone**, not a plain
+  alloc, so it belongs in a cluster's `clones`, not `allocs`. The analyzer files
+  them under `allocs`, leaving every cluster's `clones` empty, so the wrapper has
+  no clone to register. Fold the rule into `buffer_analyzer.md`. (Reclassified
+  manually on-disk 2026-07-03 for the 6 openssl clusters -- `memdup` -> clones on
+  the two `*_free`/`*_clear_free` byte families, `strdup`/`strndup` -> clones on
+  the two string families; `secure_*` have no dup, so no clone.)
+- **Wrapper opt-in.** A cluster wrapper still registers the copy on its strategy
+  ZST: `impl_cloned!` on the string strategy; a `CLenCloned` impl naming the
+  family `*_memdup` on the buffer strategy. strings_wrapper.md / arrays_wrapper.md
+  should emit it when the port clones that family.
+- **Deep (per-element) clone.** `CLenCloned` is a **byte** copy -- POD elements
+  only. An `owned_elem` buffer (elements own pointers) needs a per-element
+  `T: CCloned` deep clone, not yet modeled.
+
+## Migrate libgit2 consumer to the `*mut T::C` pointer seam (2026-07-06)
+
+The crate's owning pointer seam now speaks the **raw ffi type** instead of the
+wrapper type: `CBox` / `CArc` / `CUniqueArc` `as_ptr` / `from_raw` / `into_raw`
+changed from `*mut T` to `*mut T::C` (via the enriched `CCell: type C`). This
+makes C interop cast-free (`CBox::from_raw(ffi::X_new())`, `ffi::X_free(b.into_raw())`).
+
+DONE: crate (builds + all tests) and **openssl-crustify** (clean, zero fixes --
+its `from_raw` calls all have typed context so `T` infers).
+
+REMAINING -- **libgit2** (`crustify/rust/`) has ~86 sites to migrate. `from_raw`
+now takes `*mut T::C`; `T::C` is a non-injective projection so `T` must come from
+context (return type / binding) or a turbofish. Two mechanical shapes:
+
+- **`X::from_raw(p.cast::<W>())` -> `X::<W>::from_raw(p.cast())`** (uniform: keeps
+  the wrapper as the `from_raw` turbofish, retargets the arg cast to `W::C`). Where
+  `p` is *already* `*mut ffi::c_type` (the common case -- from a C alloc/fn) the
+  cast **deletes** entirely: `from_raw(p.cast::<W>()) -> from_raw(p)`. So the
+  change is mostly a net *cleanup* (strips wrapper-cast boilerplate).
+- **Context-free `from_raw`** (`let _ = ...`, `drop(...)`) additionally needs the
+  turbofish supplied (~14 sites): `CArc::from_raw(x.cast::<W>()) ->
+  CArc::<W>::from_raw(x.cast())`.
+
+Files: `odb/{odb_pack,odb,cache,oid,odb_backend_api}.rs`, `util/alloc.rs`,
+`pack/{indexer,midx_h,commit_graph_h}.rs`, `object/object_h.rs`. Run the regex,
+compile-verify stragglers (a few `as *mut W` variants), then optionally strip the
+now-identity `.cast()`s where the source is already `ffi::`.
+
+Alternative if the churn isn't wanted: keep `from_raw: *mut T` (only
+`as_ptr`/`into_raw` -> `*mut T::C`) -- no inference cost, libgit2 breakage ~0, but
+loses cast-free *adopt-from-C* (keeps cast-free *hand-to-C*).

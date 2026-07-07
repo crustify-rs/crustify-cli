@@ -460,19 +460,29 @@ _FINDINGS_TOP = set(_LIFECYCLE_KEYS) | {"fields", "_comment_agent"}
 _FIELD_AGENT_KEYS = {"ptr"}
 
 # --create ingest (buffer pass): a whole synthetic string/array cluster entry.
+# A cluster records the CVec strategy family: its identity, the byte-level
+# `allocs` that produce the raw sized buffer, the `dtor` that drives the
+# CLenFreed release ZST, and (array-only) `elems` for the typed CVec<T> aliases.
+# It carries NO `ops` list: realloc/memdup/cleanse and the higher-level
+# duplicating constructors are ordinary FREE FUNCTIONS wrapped by the symbol
+# wrapper, never claimed by the cluster (the recorded `allocs` are metadata for
+# the strategy/aliases -- the allocator functions are still wrapped as free
+# syms). Length-aware teardown is read off the dtor's signature by the wrapper,
+# so there is no stored `len_aware_drop`.
 _SYNTH_CREATE_KINDS = {"string", "array"}
-_CREATE_TOP = set(_LIFECYCLE_KEYS) | {
-    "type", "kind", "declared_in", "defined_in", "ops", "_comment_agent",
+_CREATE_TOP = {
+    "type", "kind", "declared_in", "defined_in", "_comment_agent",
+    "allocs", "up_ref", "clones", "dtor", "locking", "conditional_drop",
     # ARRAY-only element surface: `elems` lists the concrete element types the
     # buffer holds at call sites (rows {type, note}) for the wrapper's typed
-    # CVec<T> aliases; `len_aware_drop` marks a (ptr, len) zeroing free. Element
-    # OWNERSHIP (drop-each-element) is a PORT concern (ptr.owned_elem), never here.
-    # A string carries neither (single buffer; its clearing release is dtor.storage).
-    "elems", "len_aware_drop"}
+    # CVec<T> aliases. Element OWNERSHIP (drop-each-element) is a PORT concern
+    # (ptr.owned_elem), never here. A string carries no `elems` (single buffer).
+    "elems"}
 
 # Symbol findings (functions / callbacks / macros) — the agent-fillable surface.
 _SYM_FINDINGS_TOP = {"kind", "ptr_args", "ptr_ret", "forks"}
-_PTR_ARG_AGENT_KEYS = {"array", "string", "moved", "mutable", "note"}
+_PTR_ARG_AGENT_KEYS = {"array", "string", "moved", "borrowed", "lifetime",
+                       "mutable", "note"}
 _PTR_RET_AGENT_KEYS = {"array", "string", "moved", "borrowed", "lifetime",
                        "mutable", "note"}
 _FORK_KEYS = {"ptr_args", "ptr_ret", "callsites"}
@@ -480,7 +490,7 @@ _FORK_KEYS = {"ptr_args", "ptr_ret", "callsites"}
 
 # `types.json` is shared with the synthetic string/array-cluster analyzers; the
 # struct type-analyzer's `--schema` excludes their cluster-only fields.
-_SYNTHETIC_SCHEMA_FIELDS = {"ops", "array_fields"}
+_SYNTHETIC_SCHEMA_FIELDS = {"array_fields"}
 
 
 def _schema(kind: str) -> dict:
@@ -488,9 +498,9 @@ def _schema(kind: str) -> dict:
     block, single-sourced from ``templates/<types|syms>.json`` (the schema
     authority), so the agent reads the meaning of each field/slot/value at
     runtime instead of opening the templates. For ``types`` the synthetic
-    string/array-cluster fields (``ops``, ``array_fields``) are dropped — they
-    belong to those analyzers, not the struct type-analyzer. Empty if the
-    template is unreadable."""
+    string/array-cluster field (``array_fields``) is dropped — it belongs to
+    those analyzers, not the struct type-analyzer. Empty if the template is
+    unreadable."""
     tmpl = "types.json" if kind == "type" else "syms.json"
     path = Path(__file__).resolve().parents[2] / "templates" / tmpl
     try:
@@ -574,6 +584,7 @@ def _findings_schema(kind: str) -> dict:
         "ptr_args": {
             "<position:int>": {
                 "array": "bool", "string": "bool", "moved": "bool",
+                "borrowed": "bool", "lifetime": "<source> | null",
                 "mutable": "bool", "note": "<str>",
             }
         },
@@ -590,7 +601,7 @@ def _findings_schema(kind: str) -> dict:
         "_rules": [
             "ptr_ret only on a pointer-returning symbol.",
             "string XOR array (structural); a const pointee implies mutable != "
-            "true; on a return moved+borrowed MAY BOTH be true "
+            "true; on an arg OR return moved+borrowed MAY BOTH be true "
             "(runtime-conditional ownership), and borrowed implies lifetime set.",
             "forks: callbacks only; each callsite claimed by exactly one entry.",
         ],
@@ -767,10 +778,16 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
             check_fn(fn, "clone")
         d = f.get("dtor") or {}
         if isinstance(d, dict):
-            # New schema {shared, exclusive, fields}; `storage` tolerated until
-            # on-disk migration. No single C function may fill two dtor roles.
+            # Current schema is {shared, exclusive, fields}. Old keys (e.g. the
+            # pre-split `storage`) are HARD-REJECTED — findings must be current
+            # schema, no legacy fields.
+            bad_dtor = set(d) - {"shared", "exclusive", "fields"}
+            if bad_dtor:
+                errors.append(f"dtor has old/unknown key(s) {sorted(bad_dtor)} "
+                              "(use shared / exclusive / fields)")
+            # No single C function may fill two dtor roles.
             seen_dtor: dict[str, str] = {}
-            for role in ("shared", "exclusive", "fields", "storage"):
+            for role in ("shared", "exclusive", "fields"):
                 v = d.get(role)
                 if not v:
                     continue
@@ -821,18 +838,19 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
 def _sym_ptr_invariant_errors(label: str, blk: dict, const: bool,
                               is_ret: bool) -> list[str]:
     """Hard-reject the IMPOSSIBLE shapes in one symbol `ptr_args[*]` / `ptr_ret`
-    block (string⊕array; const⟹mutable≠true; on a return, borrowed⟹lifetime).
+    block (string⊕array; const⟹mutable≠true; borrowed⟹lifetime).
 
-    `moved`+`borrowed` is NOT rejected: a return may be BOTH to mean
+    `moved`+`borrowed` is NOT rejected: an arg or return may be BOTH to mean
     runtime-conditional ownership (moved on one path, borrowed on another).
     The `borrowed`⟹lifetime dependency still holds — the borrow branch has a
-    source."""
+    source. (`is_ret` is retained for call-site symmetry; the invariants are
+    now uniform across args and returns.)"""
     e: list[str] = []
     if blk.get("string") and blk.get("array"):
         e.append(f"{label}: string and array both true (must be XOR)")
     if const and blk.get("mutable") is True:
         e.append(f"{label}: const pointee but mutable == true")
-    if is_ret and blk.get("borrowed") and not blk.get("lifetime"):
+    if blk.get("borrowed") and not blk.get("lifetime"):
         e.append(f"{label}: borrowed true but lifetime unset")
     return e
 
@@ -1115,15 +1133,18 @@ def _create_type(layout, target, src: str) -> None:
                 for r in _csv.DictReader(fh):
                     if r.get("name"):
                         universe.add(r["name"])
-    named = list(f.get("ops") or []) + list(f.get("allocs") or []) \
-        + list(f.get("clones") or [])
+    named = list(f.get("allocs") or []) + list(f.get("clones") or [])
     if f.get("up_ref"):
         named.append(f["up_ref"])
     d = f.get("dtor") or {}
     if isinstance(d, dict):
-        # New schema {shared, exclusive, fields}; `storage` tolerated. Collect
-        # role names; no function may fill two roles.
-        present = [v for r in ("shared", "exclusive", "fields", "storage")
+        # Current schema {shared, exclusive, fields}; old keys (e.g. the
+        # pre-split `storage`) are rejected. No function may fill two roles.
+        bad_dtor = set(d) - {"shared", "exclusive", "fields"}
+        if bad_dtor:
+            errors.append(f"dtor has old/unknown key(s) {sorted(bad_dtor)} "
+                          "(use shared / exclusive / fields)")
+        present = [v for r in ("shared", "exclusive", "fields")
                    if (v := d.get(r))]
         if len(present) != len(set(present)):
             errors.append("dtor roles name the same function (must differ)")
@@ -1132,8 +1153,8 @@ def _create_type(layout, target, src: str) -> None:
     # ARRAY-only element surface. `elems` rows are {type, note} — the concrete
     # element types the buffer holds at call sites, for the wrapper's typed
     # CVec<T> aliases (element OWNERSHIP/drop is a PORT concern: ptr.owned_elem).
-    # `len_aware_drop` marks a (ptr, len) zeroing free. A string is a single
-    # buffer (its clearing release is just dtor.storage), so it carries neither.
+    # A string is a single buffer, so it carries no `elems`. Length-aware
+    # teardown is NOT stored: the wrapper reads it off the dtor's signature.
     elems = f.get("elems")
     if elems is not None:
         if kind != "array":
@@ -1148,13 +1169,6 @@ def _create_type(layout, target, src: str) -> None:
                     errors.append(
                         f"elems[{i}]: unknown key(s) "
                         f"{sorted(set(row) - {'type', 'note'})} (rows are {{type, note}})")
-    law = f.get("len_aware_drop")
-    if law is not None:
-        if kind != "array":
-            errors.append("`len_aware_drop` is array-only "
-                          "(a string's clearing release is its dtor.storage)")
-        elif not isinstance(law, bool):
-            errors.append("`len_aware_drop` must be a bool")
 
     for fn in named:
         if universe and fn not in universe:
@@ -1168,6 +1182,9 @@ def _create_type(layout, target, src: str) -> None:
         "type": tag, "typedef": [], "kind": kind,
         "declared_in": f["declared_in"], "defined_in": defined_in,
         "lifetime": {
+            # `allocs` = the byte-level allocators of this buffer family (metadata
+            # pairing with `dtor` for the CVec strategy); the allocator functions
+            # are still wrapped as free syms by the symbol wrapper.
             "allocs": f.get("allocs") or [],
             "up_ref": f.get("up_ref"), "clones": f.get("clones") or [],
             "dtor": f.get("dtor") or {"shared": None, "exclusive": None, "fields": None},
@@ -1175,10 +1192,8 @@ def _create_type(layout, target, src: str) -> None:
             "conditional_drop": f.get("conditional_drop"),
         },
         "casted": {"to": [], "from": []}, "fields": [],
-        "ops": f.get("ops") or [],
     }
     if kind == "array":   # element surface is array-only
-        entry["len_aware_drop"] = bool(f.get("len_aware_drop") or False)
         entry["elems"] = f.get("elems") or []
     if "_comment_agent" in f:
         entry["_comment_agent"] = f["_comment_agent"]
@@ -1676,3 +1691,46 @@ def query_files(
         print(f"\n# wrap ({len(wrap_files)})")
         for f in wrap_files:
             print(f)
+
+
+def query_mem(
+    target: Path,
+    *,
+    names: list[str] | None = None,
+) -> None:
+    """Read-only oracle over the allocator clusters in ``alloc.json`` — every
+    allocator family returned **verbatim**: the family name, its ``free``, and
+    the full record of each allocator (``name`` + the ``zeroing`` / ``sized`` /
+    ``aligned`` / ``string`` / ``bounded`` flags + ``defined_in`` /
+    ``declared_in`` / ``type``). The wrap agent uses this to emit the ``CBox``
+    exclusive-freed strategy ZST (one per cluster, keyed on the free) plus the
+    per-allocator constructor wrappers.
+
+      - no filter — every family.
+      - ``--name S …`` — only families whose ``free`` or one of its allocators is
+        one of ``S`` (the wrapper's common path: "hand me my target symbol's
+        cluster").
+
+    No string/byte gate — the per-allocator ``string`` flag rides along so the
+    consumer decides what is a nul-terminated string vs a raw byte buffer. Prints
+    the JSON array of families to stdout.
+    """
+    from crustify.layout import Layout
+
+    layout = Layout.discover(target)
+    alloc_path = layout.alloc_json
+    if not alloc_path.exists():
+        raise SystemExit(
+            f"error: alloc.json not found at {alloc_path}. Run "
+            f"`crustify {target} alloc` first.")
+    families = json.loads(alloc_path.read_text()).get("families", [])
+
+    want = set(names or [])
+    if want:
+        def _members(fam: dict) -> set:
+            free = fam.get("free")
+            base = {free["name"]} if free else set()
+            return base | {a["name"] for a in fam.get("allocators", [])}
+        families = [f for f in families if _members(f) & want]
+
+    print(json.dumps(families, indent=2))

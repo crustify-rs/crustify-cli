@@ -9,26 +9,28 @@ Across-target evolution is handled by **field-level merge** rather
 than the older "existing entry wins, ignore new" semantic:
 
   - **New keys** (entries not in the existing manifest) are appended.
-  - **Existing keys with new fields** (e.g. an entry first seen as
-    wrap-scope, base fields only, that a new target invocation now
-    re-emits as port-scope with `used_by` + `depends_on`): the new
-    fields are added to the existing entry without overwriting any
-    field already present. Agent annotations stay verbatim because
-    the composer never re-emits the agent's own fields.
-  - **Existing keys with no new fields** (idempotent re-run): the
-    entry stays as-is.
+  - **Composer-owned values are refreshed** (a cheap `--compose-only` is a
+    deterministic structural refresh): a type entry's composer-owned top-level
+    keys (`_TYPE_COMPOSER_KEYS` — ``kind`` / ``declared_in`` / ``defined_in`` /
+    ``casted`` / footprints) are overwritten from the new run, and each field's
+    composer-owned structure (``name`` / ``type`` / ``ref`` / ``array`` + the
+    *presence* of ``ptr``) is overlaid by `_merge_fields` → `_overlay_field`.
+    This is what lets a composer fix land without a full `--redo` (e.g. a
+    typedef'd function pointer that used to collapse to a bare scalar now
+    surfaces as a proper pointer field).
+  - **Agent-owned values are preserved**: the ``ptr`` ownership *block*
+    contents on each field, and the entry-level ``lifetime`` / ``ops`` —
+    `_overlay_field` keeps the existing ``ptr`` when the field is still a
+    pointer, and the composer never emits ``lifetime`` / ``ops`` values, so the
+    add-missing rule leaves them untouched.
   - **Grow-only composer sets** are set-UNIONED rather than frozen, so a
-    record accumulates across runs (and across a wrap→port promotion,
-    whose port re-emit is strictly richer): ``fields[]`` on type entries
-    (by field name) and ``used_by`` / ``depends_on`` on symbol entries
-    (`_merge_used_by` / `_merge_depends_on`). These hold no agent
-    annotations — the agent's per-field ownership lives in the ``fields[]``
-    ``ptr`` blocks (preserved by `_merge_fields`) and in ``ptr_args`` /
-    ``ptr_ret`` (left untouched), never in the edge sets.
-  - **Other composer-emitted field values that differ** between runs: the
-    existing value wins. Agent annotations are protected by the same
-    rule. Refreshing such a stale scalar is a manual operation (delete the
-    entry, re-run).
+    record accumulates across runs (and across a wrap→port promotion, whose
+    port re-emit is strictly richer): ``fields[]`` on type entries (by field
+    name) and ``used_by`` / ``depends_on`` on symbol entries
+    (`_merge_used_by` / `_merge_depends_on`). Symbol composer keys
+    (``ptr_args`` / ``ptr_ret``) stay under the add-missing rule as before.
+  - **A full reset** (drop agent annotations too) remains the explicit
+    `--redo`, which deletes matching entries before the compose.
 
 This module is intentionally narrow — no hashing, no staleness
 detection beyond the field-level merge above.
@@ -62,21 +64,38 @@ def type_key(entry: Entry) -> Key:
     return (entry["type"], entry.get("defined_in") or "")
 
 
+def _overlay_field(existing: dict, incoming: dict) -> dict:
+    """Overlay a field's **composer-owned structure** from `incoming` while
+    preserving the **agent-owned** ``ptr`` ownership block from `existing`.
+
+    Composer owns the structural shape — ``name`` / ``type`` / ``ref`` /
+    (top-level) ``array`` and the *presence* of the ``ptr`` skeleton; the agent
+    owns the ``ptr`` block *contents* (``owned`` / ``borrowed`` / ``string`` /
+    ``mutable`` / ``container`` / ``owned_elem`` / ``note`` / …). So a
+    ``--compose-only`` refresh re-derives structure — picking up composer fixes
+    (e.g. a typedef'd function pointer that used to collapse to a bare scalar
+    now surfaces as a pointer) — without discarding ownership analysis:
+
+      - take composer structure verbatim from ``incoming``;
+      - ``ptr``: keep the agent-filled block from ``existing`` when the field is
+        *still* a pointer; seed ``incoming``'s null skeleton when it *became*
+        one (agent fills later); drop it when it *stopped* being a pointer.
+    """
+    out = dict(incoming)                       # composer structure authoritative
+    if "ptr" in incoming and "ptr" in existing:
+        out["ptr"] = existing["ptr"]           # preserve agent-filled ownership
+    return out
+
+
 def _merge_fields(existing_fields: list, incoming_fields: list) -> list:
-    """Deep-merge a type entry's ``fields[]`` array **by field name**.
+    """Merge a type entry's ``fields[]`` array **by field name**, refreshing
+    composer-owned structure while preserving each field's agent ``ptr`` block.
 
-    The composer re-emits the full declared layout on every run, which
-    grows over time (a type first seen with a partial layout, later seen
-    in full). We must add newly-declared fields **without disturbing the
-    agent's per-field annotations** (the ``ptr`` ownership block) on
-    fields already present. So:
-
-      - field present in both → keep the **existing** record verbatim
-        (agent annotations win; composer structural fields never
-        overwrite);
-      - field only in incoming → append it (composer skeleton, null
-        ``ptr``);
-      - field only in existing → keep it.
+      - field present in both → ``_overlay_field`` (composer structure from
+        incoming, agent ``ptr`` from existing);
+      - field only in incoming → append it (composer skeleton, null ``ptr``);
+      - field only in existing → keep it (composer didn't re-emit — e.g. a
+        wrap-scope narrowing after a fuller port-scope run; grow-only).
 
     Order follows the incoming (composer) declaration order, with any
     existing-only fields appended after — deterministic and stable.
@@ -94,7 +113,8 @@ def _merge_fields(existing_fields: list, incoming_fields: list) -> list:
             merged.append(inc)
             continue
         name = inc["name"]
-        merged.append(by_name.get(name, inc))  # existing record wins
+        ex = by_name.get(name)
+        merged.append(_overlay_field(ex, inc) if isinstance(ex, dict) else inc)
         seen.add(name)
     # Preserve any existing fields the composer didn't re-emit this run.
     for ex in existing_fields:
@@ -221,17 +241,31 @@ def _merge_depends_on(existing: dict, incoming: dict) -> dict:
     return out
 
 
-def _merge_entry(existing: Entry, incoming: Entry) -> Entry:
-    """Add any field in `incoming` that's missing from `existing` to
-    `existing`. Never overwrite an existing field's value — **except** the
-    grow-only composer-authored sets, deep-merged so they accumulate across
-    runs without discarding the agent's per-field annotations:
+# Composer-owned top-level keys on a **type** entry: deterministic, re-derived
+# from CodeQL every run, so a re-compose overlays them (picking up composer
+# fixes / cast-graph or footprint updates). The agent-owned keys — ``lifetime``
+# and ``ops`` — are absent here and thus preserved. Symbol entries lack these
+# keys, so the overlay is a no-op for syms (their composer-owned ``ptr_args`` /
+# ``ptr_ret`` stay under the add-missing rule as before).
+_TYPE_COMPOSER_KEYS = (
+    "typedef", "kind", "declared_in", "defined_in",
+    "casted", "opaque_in", "non_opaque_in",
+)
 
-      - ``fields[]`` (type entries) — by field name (`_merge_fields`);
+
+def _merge_entry(existing: Entry, incoming: Entry) -> Entry:
+    """Merge `incoming` into `existing`, refreshing composer-owned values while
+    preserving agent-owned ones. Concretely:
+
+      - ``fields[]`` (type entries) — ``_merge_fields``: composer structure
+        overlaid per field, agent ``ptr`` blocks preserved;
       - ``used_by`` / ``depends_on`` (symbol entries) — set-unioned
         (`_merge_used_by` / `_merge_depends_on`), so a wrap→port promotion
-        upgrades signature-only deps to signature+body deps in place instead
-        of keeping the stale wrap value.
+        upgrades signature-only deps to signature+body deps in place;
+      - composer-owned type-entry keys (`_TYPE_COMPOSER_KEYS`) — overwritten
+        from ``incoming`` (deterministic re-derivation);
+      - every other existing key (agent-owned ``lifetime`` / ``ops``, and any
+        symbol composer key) — kept; incoming-only keys are added.
 
     Returns the updated `existing` dict (mutated in-place for clarity).
     """
@@ -241,6 +275,10 @@ def _merge_entry(existing: Entry, incoming: Entry) -> Entry:
         existing["used_by"] = _merge_used_by(existing["used_by"], incoming["used_by"])
     if isinstance(existing.get("depends_on"), dict) and isinstance(incoming.get("depends_on"), dict):
         existing["depends_on"] = _merge_depends_on(existing["depends_on"], incoming["depends_on"])
+    # Refresh composer-owned type-entry structure (no-op for symbol entries).
+    for k in _TYPE_COMPOSER_KEYS:
+        if k in incoming:
+            existing[k] = incoming[k]
     for k, v in incoming.items():
         if k not in existing:
             existing[k] = v

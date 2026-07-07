@@ -595,7 +595,7 @@ def main() -> None:
         "--name", nargs="+", action="extend", default=None, metavar="NAME",
         help="Resolve the named entit(ies) — type tags and/or symbol names "
              "(e.g. `--name git_odb git_odb_read`) — to the .rs module(s) "
-             "homing their `// Replaces:`/`// Mirrors:` anchor. Query mode "
+             "homing their `// Replaces:` (port) / `// Wraps:` (wrap) anchor. Query mode "
              "prints each homed path (or `not created`); add --create to write "
              "the stub(s). The authoritative way an agent locates a wrapper "
              "module or where a dep lives.",
@@ -642,7 +642,8 @@ def main() -> None:
             "Read-only oracle. `types`/`syms` enumerate (filtered) or introspect "
             "one (--name); summary by default, --with-details for whole records. "
             "`files` lists the port / wrap scope file sets. "
-            "`dag` does the graph walks (closure / layer / scc)."
+            "`dag` does the graph walks (closure / layer / scc). "
+            "`mem` lists the allocator clusters from alloc.json (verbatim)."
         ),
     )
     query_sub = query_p.add_subparsers(dest="subject", required=True)
@@ -722,6 +723,19 @@ def main() -> None:
         "--port-only", action="store_true", dest="port_only",
         help="Restrict the node set (slice / --loc) to port-scope entities "
              "(scope.json port closure; synthetics are never port).",
+    )
+
+    mem_q = query_sub.add_parser(
+        "mem",
+        help="Allocator clusters from alloc.json: every family returned "
+             "verbatim (family + free + each allocator's full record, incl. "
+             "the zeroing / sized / aligned / string / bounded flags). Filter "
+             "with --name; no string/byte gate. Prints JSON.",
+    )
+    mem_q.add_argument(
+        "--name", nargs="+", action="extend", default=None, metavar="NAME",
+        help="Only families whose free or an allocator is one of these "
+             "(e.g. `--name CRYPTO_zalloc` → its cluster).",
     )
 
     # -- wrap ------------------------------------------------------------
@@ -954,6 +968,7 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
         if getattr(args, "redo", False):
             analyze_mod.redo_syms(
                 target,
+                all_entries=getattr(args, "all", False),
                 dirs=getattr(args, "dir", None),
                 files=resolved_files,
                 names=getattr(args, "name", None),
@@ -973,6 +988,7 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
         if getattr(args, "redo", False):
             analyze_mod.redo_types(
                 target,
+                all_entries=getattr(args, "all", False),
                 dirs=getattr(args, "dir", None),
                 files=resolved_files,
                 names=getattr(args, "name", None),
@@ -1209,6 +1225,13 @@ def _handle_query(args: argparse.Namespace, target: Path) -> None:
             loc=bool(getattr(args, "loc", False)),
             wrap_only=bool(getattr(args, "wrap_only", False)),
             port_only=bool(getattr(args, "port_only", False)),
+        )
+        return
+    if args.subject == "mem":
+        from crustify.query import query_mem
+        query_mem(
+            target,
+            names=getattr(args, "name", None),
         )
         return
     from crustify.query import query

@@ -727,11 +727,13 @@ def redo_dag(target: Path) -> None:
 
 def redo_syms(
     target: Path, *,
+    all_entries: bool = False,
     dirs: Iterable[str] | None = None,
     files: Iterable[str] | None = None,
     names: Iterable[str] | None = None,
 ) -> None:
-    """Delete syms.json entries matching the narrowing flags.
+    """Delete syms.json entries matching the narrowing flags (or all of them
+    when `all_entries` — the `--all --redo` reset).
 
     - `dirs`: repo-rel source-tree dirs; deletes every entry whose
       `defined_in` (or, when null, `declared_in[0]`) is under one of
@@ -749,21 +751,25 @@ def redo_syms(
         target, manifest_name("symbols"),
         entries_key="symbols",
         name_key="name",
+        all_entries=all_entries,
         dirs=dirs, files=files, names=names,
     )
 
 
 def redo_types(
     target: Path, *,
+    all_entries: bool = False,
     dirs: Iterable[str] | None = None,
     files: Iterable[str] | None = None,
     names: Iterable[str] | None = None,
 ) -> None:
-    """Delete types.json entries matching the narrowing flags."""
+    """Delete types.json entries matching the narrowing flags (or all of them
+    when `all_entries` — the `--all --redo` reset)."""
     _delete_entries(
         target, manifest_name("types"),
         entries_key="types",
         name_key="type",
+        all_entries=all_entries,
         dirs=dirs, files=files, names=names,
     )
 
@@ -820,13 +826,17 @@ def _delete_entries(
     *,
     entries_key: str,
     name_key: str,
+    all_entries: bool = False,
     dirs: Iterable[str] | None = None,
     files: Iterable[str] | None = None,
     names: Iterable[str] | None = None,
     kinds: Iterable[str] | None = None,
 ) -> None:
     """Walk the analysis tree; for each `<filename>`, delete entries
-    matching any of the narrowing predicates (dirs, files, names, kinds).
+    matching any of the narrowing predicates (dirs, files, names, kinds),
+    or EVERY entry when `all_entries` is set (the `--all --redo` reset — so a
+    full re-analysis recomposes fresh, current-schema skeletons rather than
+    merging onto stale ones).
 
     With no predicates set (all None), deletes nothing.
     """
@@ -835,7 +845,8 @@ def _delete_entries(
     files_set = set(files or [])
     names_set = set(names or [])
     kinds_set = set(kinds or [])
-    if not dirs_norm and not files_set and not names_set and not kinds_set:
+    if not all_entries and not dirs_norm and not files_set and not names_set \
+            and not kinds_set:
         return
 
     repo_root = _repo_root_for(target)
@@ -849,7 +860,7 @@ def _delete_entries(
         kept: list[dict] = []
         removed = 0
         for e in entries:
-            match = (
+            match = all_entries or (
                 (names_set and e.get(name_key) in names_set)
                 or (kinds_set and e.get("kind") in kinds_set)
                 or (files_set and _entry_in_files(e, files_set))

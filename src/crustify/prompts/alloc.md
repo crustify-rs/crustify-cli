@@ -34,17 +34,23 @@ refcounting primitives, lock primitives. |
      family as long as they free via the same destructor. Also look for
      **byte-level duplicators** -- every copy/dup primitive (`*memdup`,
      `memcpy`) -- and add them to the families above thay may use them.
+     
      - **String allocator families** - Clusters operating on NIL-terminated
      strings (`strdup`, `strndup`, etc.) also get their own families,
      discriminated by the multiple deallocators. Generally, these operate on
      `char*` pointers or similar single-byte scalar pointers, and not
-     aggregate types. 
+     aggregate types. These will be typed routines under our translations,
+     so they get a different family than the un-typed ones, and are not part
+     of those. 
+     
      - **Refcounts** - every refcount type and its primitive family
        (`new` / `up` / `down` / `get` / `free`, optional `assert`).
        Record whether the backend is atomic, whether there's a lock
        fallback, and the name of the fallback lock type.
+     
      - **Locks** - every lock type (rwlock, mutex, spinlock) and its
        primitive family. Record `read_lock: null` when `kind != "rwlock"`.
+     
      - **Cleansers** - standalone zero-without-free primitives.
 
 3. **Fill out the fields of each entry.** 

@@ -289,9 +289,9 @@ def _compose_ptr_args(reach: Reach, fn_name: str, fn_def_file: str) -> list[dict
             "array": None,
             "string": None,
             "moved": None,
-            "exclusive": None,
-            "shared": None,
+            "borrowed": None,
             "mutable": None,
+            "lifetime": None,
             "note": None,
         })
     return out
@@ -306,8 +306,6 @@ def _compose_ptr_ret(reach: Reach, fn_name: str, fn_def_file: str) -> dict | Non
         "array": None,
         "string": None,
         "moved": None,
-        "exclusive": None,
-        "shared": None,
         "borrowed": None,
         "mutable": None,
         "lifetime": None,

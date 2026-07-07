@@ -20,48 +20,14 @@ ownership**, then submit your findings through `crustify query`.
   in this codebase; ctors/dtors of heap objects typically call a pair of allocator
   / deallocator to manage heap objects.
 
-## Discover (execute these)
+## Skills
 
-`crustify query` is the read/write oracle - it owns the `types.json` schema and
-the file layout, so you read your worklist and submit findings *through it*, not
-by directly writing it.
+Reusable how-to guides for recurring decisions, loaded alongside these
+principles. If a skill's `description` below matches what you're doing, **read
+that skill's file in full** before proceeding - the description is the routing
+signal; the body is the procedure.
 
-- `crustify {repo_root} {target} query`: everything about a type comes through
-    this helper command (the manifest data, already scope-filtered) and the C source
-    under `{repo_root}` (function bodies). 
-
-- `crustify {repo_root} {target} query types --schema`:  The manifest's field
-    definitions live in the schema, not here.  Every lifecycle primitive's role and
-    every `ptr` field is *defined* in the `_comment*` blocks (the schema authority
-    `query` reads and enforces) - read them carefully for the meaning of each
-    field/value. The sections below are the *methodology* for deciding them (how to
-    read bodies, which signal dominates), not the field definitions.
-
-- `crustify {repo_root} {target} query types --name <tag> --file <file> --fields --with-details`:
-   **the fields to analyze**: all declared fields of the type, each with its
-   *structural shape + pointer analysis for those that are pointers.
-   
-- `crustify {repo_root} {target} query types --name <tag> --file <file> --methods`:
-    **lifecycle candidate pool** -> the **complete** footprint functions - the
-    *candidates for Sec 2/Sec 3. 
-
-- `crustify {repo_root} {target} query syms --name <fn> --with-details`: **a
-    candidate's signature / body location**; (A function defined outside the target
-    scope may not resolve here - fall back to reading its C source via the CodeQL DB
-    / repo when you need the body.)
-
-- `crustify {repo_root} {target} query types --name <tag> --file <file> --update <findings.json>`:
-  the helper you use to submit your findings; it validates them (rejecting
-  malformed ones - Sec 6), maps them onto the schema, and merges them into the
-  entry **under a lock**, leaving every other entry and every slot/field you
-  didn't mention untouched. Re-submitting is idempotent. Run `--update-help` to get the shape
-  of the findings schema you need to submit.
-
-- `query types --name <tag> --file <file> --accessors --scope-only`:
-  returns `{{field: [touchers]}}` for each in-scope field, the functions tree-wide that access it (the accessor functions themselves are not scope-narrowed). 
-
-Use `--scope-only` narrow to scope when you analyze fields (`--fields`,
-`--accessors`), do not analyze the fields that are not in scope.
+<!-- SKILLS_INDEX -->
 
 ## Process the job records
 
@@ -80,11 +46,8 @@ Include only what you analyzed; omit a slot or field and it is left as-is.
 Deciding which type a lifecycle op belongs to:
 
 1. **Signature-dominated.** Attribute an op to its signature subject - the
-   pointer type it constructs / destroys / refcounts (the operated argument, or
-   the return). The signature outweighs the name or the body. If a lifecycle
-   op allocates the derived but returns its base, the signature subject wins.
-   Confirm polymorphic relationships via `casted.to/from` in their
-   query records. 
+   pointer type it destroys / refcounts / clones (the operated argument, or
+   the return). The signature outweighs the name or the body. 
 
 2. **An untyped subject may own multiple types.** A generic `void *` (or
     otherwise untyped) subject is the signal that a lifecycle op  may be
@@ -93,38 +56,45 @@ Deciding which type a lifecycle op belongs to:
 3. **Symbols only, no macros.** If a lifecycle op is a macro that expands
    to a function then record the function. If you encounter lifecycle ops that
    are macros that does not expand into a function, do not add it, note it in
-   `_comment_agent`.  
+   `_comment_agent`.
+
+4. **Inspect the body semantically**, do not assume the lifetime role of a function
+    based on signature alone. Type attribution however is signature dominated.
 
 ## Lifecycle classification
 
 Find `T`'s lifecycle routines among the functions in its `--methods` footprints,
-and classify each into one or more of `allocs` / `dtor` / `up_ref` / `clones`. A
-function that is none of these is not a lifecycle routine - it is either a field
-accessor (Sec 5.1) or a plain free function. Don't classify by name alone.
-Signature types dominate though.
+and classify each into one or more of `allocs` / `dtor` / `up_ref` / `clones`. 
 
 Typical shapes:
 
-  - **`allocs`** - a list of routines that produce a raw `T` and transfer its
-    ownership either through an out arg or via pointer return.  For heap-allocated
-    types, these are one or more of the byte-level heap allocators from the alloc
-    manifest above. Stack / embedded types that are never allocated on the heap
-    have this list empty.
+  - **`allocs`** - a list of routines from the byte-level allocator families in
+      the manifest above that produce a raw uninitialized `T`. Stack / embedded
+      types that are never allocated on the heap have this list empty. Check the
+      bodies of the routines touching this type to find its allocation sites. 
   
-  - **`dtor`** - the `shared`/`exclusive`/`fields` split: classify each releaser
-    - a plain `*_free` -> `exclusive`, a refcount-decrementing free -> `shared`
-    (with `up_ref` set), a by-value `*_dispose`/`*_cleanup` -> `fields`. At most
-    one function per role; a type may set several, or none (POD). A `dtor` taking
-    the base's pointer is the base's, even though it may free fields/header of the
-    derived - `dtor` signature wins. For heap-allocated types, the `dtor` is more
-    than just the byte level de-allocator as it is responsible for freeing both the
-    storage and the fields. 
+  - **`dtor`** - the `shared`/`exclusive`/`fields` split. 
+    
+    These should be the releasers that would map to `impl Drop for T` contracts in
+    Rust and would be invoked when `T` is fully formed and initialized, not
+    just storage-allocated:
+    - called when `T` is owned exclusively --> `exclusive`
+    - called when `T` is owned shared/refcounted (refcount decrement then free) --> `shared`
+    - called to dispose the owned fields of `T`, separately from the storage free --> `fields`.
+    
+    A type may set several, or none (POD). 
+    
+    A `dtor` taking the base's pointer is the base's, even though it may free
+    the fields/storage of the derived - `dtor` signature wins. 
+    
+  - **`up_ref`** - the routine that bumps a source `T`'s refcount and returns
+    a shared reference of it. This routine is meant to be called on `impl Clone`
+    on the refouncted type in Rust.
   
-  - **`up_ref`** - the routine that bumps `T`'s refcount.
+  - **`clones`** - a list of deep-copy ops, each producing an independent `T *`
+    from a source `T *`. These routines are meant to be called on `impl Clone` on
+    the exclusive type in Rust.
   
-  - **`clones`** - a list of deep-copy ops, each producing an
-    independent `T *` from a source `T *`.
-
 ## Locking and conditional drop
 
   - **`locking`** - when the lifecycle/accessor bodies show a lock/unlock pair

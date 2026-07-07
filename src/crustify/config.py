@@ -19,7 +19,7 @@ and KISS trajectory artifacts under ``.crustify/kiss/<SESSION_ID>/``.
 # Wrap stage — per-type-wrapper effort budget
 # ---------------------------------------------------------------------------
 # Used by the wrap orchestrator (``crustify.wrap``) to cap the workload handed
-# to a single ``CrustifyTypeWrapper`` agent. The orchestrator slices each
+# to a single ``CrustifyWrap`` type-wrapper agent. The orchestrator slices each
 # selected type's surface deterministically and passes the agent a *fixed*
 # worklist; surface beyond the budget is recorded in the wrapper's roadmap
 # comment and left for a follow-up pass. This guards against "god objects"

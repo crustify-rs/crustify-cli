@@ -6,13 +6,13 @@ description: >-
   (build → alloc → analyze → scaffold → bindgen → wrap → port), what each stage
   consumes/produces, how to select work, and the invocation gotchas. Use when
   orchestrating crustify across stages (not when translating a single symbol —
-  that's crustify-inspect + the crate primitive skill).
+  that's crustify-oracle + the crate primitive skill).
 ---
 
 # Orchestrating the crustify pipeline
 
-For a single symbol's discovery use **crustify-inspect**; for choosing Rust
-ownership wrappers use **crustify-c-pointer-primitives**. This skill is the
+For a single symbol's discovery use **crustify-oracle**; for choosing Rust
+ownership wrappers use **crustify-wrap-crate**. This skill is the
 *orchestration* layer: the stage graph and how to run it. **Exact flags live in
 each command's `--help`** — run it; this is the router.
 
@@ -40,7 +40,7 @@ each command's `--help`** — run it; this is the router.
   exist before the next. `build` is split `propose`/`execute` precisely so the
   gating is deliberate.
 - **Select work via the oracle**: `query … types --wrap-only | xargs … wrap
-  --name` (see crustify-inspect). `port --name A B …` takes the dep order *you*
+  --name` (see crustify-oracle). `port --name A B …` takes the dep order *you*
   supply; `--dag-layer N` is the e2e driver mode.
 - **Parallelism**: `--parallel` (global) + `--parallel-max N` (on the stage),
   for agents across disjoint files. Isolated waves run in git worktrees.
@@ -49,7 +49,7 @@ each command's `--help`** — run it; this is the router.
 
 ## Read-only vs mutating
 
-`query`/`scaffold`(locate)/`audit` are safe to run anytime (→ crustify-inspect).
+`query`/`scaffold`(locate)/`audit` are safe to run anytime (→ crustify-oracle).
 `build execute`/`scaffold --all`/`wrap`/`port` mutate the tree and/or spawn
 agents — run them deliberately, and prefer `--dry-run` to scope them first.
 

@@ -97,7 +97,8 @@ def scaffold(
 
     # --- act
     if create:
-        stats = _materialize(layout, entries, _elem_aliases(layout))
+        stats = _materialize(layout, entries, _elem_aliases(layout),
+                             _scope_map(layout, target), _field_map(layout))
         mstats = _materialize_manifests(layout, doc)
         print(f"[crustify scaffold --create] {stats}{mstats} → {layout.rust}")
     else:
@@ -132,6 +133,50 @@ def _in_scope_names(layout, target: Path) -> set[str]:
                     if e.get(key):
                         names.add(e[key])
     return names
+
+
+def _scope_map(layout, target: Path) -> dict[str, str]:
+    """``name -> "port" | "wrap"`` from scope.json — the anchor-verb selector: a
+    wrap-scope item anchors as ``// Wraps:``, a port-scope one as ``// Replaces:``.
+    Types key on ``name`` (port) / ``type`` (wrap); functions/globals on ``name``.
+    Port is applied second so it wins on the (rare) overlap. Empty when scope.json
+    is absent -> everything falls back to ``Replaces``."""
+    try:
+        doc = json.loads(layout.scope(target).read_text())
+    except (OSError, ValueError):
+        return {}
+    out: dict[str, str] = {}
+    for sec in ("wrap", "port"):   # port second -> overrides on overlap
+        section = doc.get(sec) or {}
+        for group in ("functions", "globals", "types"):
+            for e in section.get(group) or []:
+                for key in ("name", "type"):
+                    if e.get(key):
+                        out[e[key]] = sec
+    return out
+
+
+def _field_map(layout) -> dict[str, list[str]]:
+    """``type tag -> [field names]`` from the analysis tree's ``types.json`` — the
+    source for a type's ``// Field:`` accessor anchors (crates.json / scope.json
+    carry no field lists). The field set is already scope-shaped by the type
+    composer (wrap = port-touched subset, port = full layout). Empty when the
+    analysis tree is absent."""
+    out: dict[str, list[str]] = {}
+    tree = layout.analysis
+    if not tree.exists():
+        return out
+    for p in tree.rglob("types.json"):
+        try:
+            doc = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        for e in doc.get("types", []):
+            tag = e.get("type")
+            if tag:
+                out[tag] = [f["name"] for f in (e.get("fields") or [])
+                            if isinstance(f, dict) and f.get("name")]
+    return out
 
 
 def _validate(layout) -> None:
@@ -235,8 +280,12 @@ def _elem_aliases(layout) -> dict[str, list[str]]:
 
 
 def _materialize(layout, entries: list[dict],
-                 alias_map: dict[str, list[str]] | None = None) -> str:
+                 alias_map: dict[str, list[str]] | None = None,
+                 scope_map: dict[str, str] | None = None,
+                 field_map: dict[str, list[str]] | None = None) -> str:
     alias_map = alias_map or {}
+    scope_map = scope_map or {}
+    field_map = field_map or {}
     created = updated = preserved = links = 0
     for e in entries:
         crate_dir = layout.repo_root / e["crate_path"]
@@ -244,9 +293,9 @@ def _materialize(layout, entries: list[dict],
         rs_path = crate_dir / rs
         if not rs_path.exists():
             rs_path.parent.mkdir(parents=True, exist_ok=True)
-            rs_path.write_text(_stub(e, alias_map))
+            rs_path.write_text(_stub(e, alias_map, scope_map, field_map))
             created += 1
-        elif _merge_anchors(rs_path, e, alias_map):
+        elif _merge_anchors(rs_path, e, alias_map, scope_map, field_map):
             # File already there but newly-homed members (or a cluster's element
             # aliases) lack an anchor — `--create` is additive/idempotent (the
             # docstring contract), so add the missing ones rather than leaving
@@ -360,22 +409,34 @@ def _ensure_workspace_lints(ws_toml: Path) -> None:
 
 
 def _merge_anchors(rs_path: Path, e: dict,
-                   alias_map: dict[str, list[str]] | None = None) -> int:
-    """Add anchors missing from the existing managed `.rs`: a
-    `// Replaces: <name>` + todo for each member (macros are never anchored), and — for a type
+                   alias_map: dict[str, list[str]] | None = None,
+                   scope_map: dict[str, str] | None = None,
+                   field_map: dict[str, list[str]] | None = None) -> int:
+    """Add anchors missing from the existing managed `.rs`: for each member, its
+    item anchor by scope (`// Wraps:` wrap / `// Replaces:` port) + todo (macros
+    are never anchored), a type's `// Field:` accessor anchors, and — for a type
     that is an array cluster's element — a `// Alias: <cluster>` + todo per
-    arraying cluster, inserted right after that ELEMENT's `// Replaces:` line so
-    it lands in the element's region (its owner; the back-fill site for the
-    cluster's raw alias). Idempotent (skips anchors already present, filled `///`
-    or not). Returns the number of anchors added."""
+    arraying cluster, inserted right after that ELEMENT's item-anchor line so it
+    lands in the element's region (its owner; the back-fill site for the cluster's
+    raw alias). Idempotent (skips anchors already present, filled `///` or not).
+    Returns the number of anchors added."""
     alias_map = alias_map or {}
+    scope_map = scope_map or {}
+    field_map = field_map or {}
     text = rs_path.read_text()
     added = 0
     new: list[str] = []
     for kind in ("types", "functions", "globals"):
         for nm in e["members"].get(kind) or []:
-            if not re.search(rf"(?m)^\s*//+\s*Replaces:\s*{re.escape(nm)}\b", text):
-                new += [f"// Replaces: {nm}", _TODO, ""]
+            # Verb-agnostic match (won't duplicate a fresh-composed anchor of
+            # either verb).
+            if not re.search(
+                    rf"(?m)^\s*//+\s*(?:Replaces|Wraps):\s*{re.escape(nm)}\b", text):
+                verb = "Wraps" if scope_map.get(nm) == "wrap" else "Replaces"
+                new += [f"// {verb}: {nm}", _TODO, ""]
+                if kind == "types":
+                    for fld in field_map.get(nm, ()):
+                        new += [f"// Field: {fld}", _TODO, ""]
                 added += 1
     if new:
         if not text.endswith("\n"):
@@ -389,11 +450,11 @@ def _merge_anchors(rs_path: Path, e: dict,
         clusters = alias_map.get(nm)
         if not clusters:
             continue
-        mrep = re.search(rf"(?m)^[ \t]*//+\s*Replaces:\s*{re.escape(nm)}\b.*\n", text)
+        mrep = re.search(rf"(?m)^[ \t]*//+\s*(?:Replaces|Wraps):\s*{re.escape(nm)}\b.*\n", text)
         if not mrep:
             continue
         region_start = mrep.end()
-        nxt = re.search(r"(?m)^[ \t]*//+\s*(Replaces|Mirrors):", text[region_start:])
+        nxt = re.search(r"(?m)^[ \t]*//+\s*(?:Replaces|Wraps):", text[region_start:])
         region = text[region_start:region_start + (nxt.start() if nxt else len(text))]
         ins: list[str] = []
         for ct in clusters:
@@ -411,21 +472,26 @@ def _merge_anchors(rs_path: Path, e: dict,
 _TODO = "// crustify:todo"  # matches _schedule._TODO; a surviving one = pending
 
 
-def _stub(e: dict, alias_map: dict[str, list[str]] | None = None) -> str:
-    # Each member is laid as an item anchor — `// Replaces:`
-    # (a native Rust item: type / function / global) — followed by a
-    # `crustify:todo` placeholder. Macros are NOT anchored: bindgen owns their
-    # `ffi::` bindings / `crustify_<NAME>` shims and the C `#define` stays, so the
-    # port/wrap stages never fill a macro. A type that is an array cluster's element additionally gets
-    # one `// Alias: <cluster>` sub-anchor per arraying cluster (its typed
-    # `CVec<Self, ClusterStrategy>` alias), laid right after the ELEMENT's
-    # `// Replaces:` so it binds to it as the owner (the back-fill site for the
-    # cluster's raw alias). The wrap/port AGENT locates each by its anchor,
+def _stub(e: dict, alias_map: dict[str, list[str]] | None = None,
+          scope_map: dict[str, str] | None = None,
+          field_map: dict[str, list[str]] | None = None) -> str:
+    # Each member is laid as an item anchor whose verb is its scope — `// Wraps:`
+    # for a wrap-scope item, `// Replaces:` for a port-scope one (a native Rust
+    # item: type / function / global) — followed by a `crustify:todo` placeholder.
+    # Macros are NOT anchored: bindgen owns their `ffi::` bindings /
+    # `crustify_<NAME>` shims and the C `#define` stays, so the port/wrap stages
+    # never fill a macro. A type additionally gets one `// Field: <name>` accessor
+    # anchor per field, and — if it is an array cluster's element — one
+    # `// Alias: <cluster>` sub-anchor per arraying cluster (its typed
+    # `CVec<Self, ClusterStrategy>` alias), all laid right after the item anchor so
+    # they bind to it as the owner. The wrap/port AGENT locates each by its anchor,
     # fills it, and promotes `//` -> `///` while dropping the todo. This is the
     # agent's fill contract — the scheduler schedules blindly and no longer reads
     # these markers, so the verb + todo are load-bearing for the agent, not the
     # scheduler.
     alias_map = alias_map or {}
+    scope_map = scope_map or {}
+    field_map = field_map or {}
     src = e.get("def_file") or "(external — no in-tree source)"
     lines = ["//! crustify:managed — generated module skeleton.",
              "//!",
@@ -436,7 +502,11 @@ def _stub(e: dict, alias_map: dict[str, list[str]] | None = None) -> str:
     any_member = False
     for kind in ("types", "functions", "globals"):
         for nm in m.get(kind) or []:
-            lines += [f"// Replaces: {nm}", _TODO, ""]
+            verb = "Wraps" if scope_map.get(nm) == "wrap" else "Replaces"
+            lines += [f"// {verb}: {nm}", _TODO, ""]
+            if kind == "types":
+                for fld in field_map.get(nm, ()):
+                    lines += [f"// Field: {fld}", _TODO, ""]
             for ct in alias_map.get(nm, ()):
                 lines += [f"// Alias: {ct}", _TODO, ""]
             any_member = True

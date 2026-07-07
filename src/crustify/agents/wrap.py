@@ -130,11 +130,16 @@ class CrustifyWrap(CrustifyAgent):
             "repo_root":      str(self.repo_root),
             "workspace_root": str(self.layout.rust),
             "analysis_root":  str(self.layout.analysis),
+            "build_json":     str(self.layout.build_json),
             "rs_out":         self._rs_out,
             "deps":           json.dumps(self._deps),
             "discipline":     str(crustify_root / "docs" / "DISCIPLINE.md"),
             "crustify_crate": str(
                 crustify_root / ".." / "crustify-crate" / "src" / "lib.rs"),
+            # Always-on principles preamble (AGENTS.md), with the role-scoped
+            # skill index spliced into its `<!-- SKILLS_INDEX -->` sentinel.
+            # Inlined as `{principles}` (type_wrapper.md; harmless if unused).
+            "principles":     self._render_principles(),
         }
         # All wrap paths are now PULL: the agent discovers its job via `crustify
         # query`/`query dag`/`query sym`. The scheduler hands only identity.

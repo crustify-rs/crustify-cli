@@ -30,7 +30,7 @@ findings *through it*, never opening a file. What you produce, by kind:
 | You produce (findings) | Applies to | Step |
 |---|---|---|
 | `kind` - the macro subkind | macros only | Sec 3 |
-| `ptr_args[<pos>].{{array, string, moved, mutable, note}}` | functions, callbacks | Sec 4 |
+| `ptr_args[<pos>].{{array, string, moved, borrowed, lifetime, mutable, note}}` | functions, callbacks | Sec 4 |
 | `ptr_ret.{{array, string, moved, borrowed, lifetime, mutable, note}}` | functions, callbacks | Sec 4 |
 | `forks` - split a callback whose invokers disagree into per-wrapper variants | callbacks only | Sec 4 |
 
@@ -82,7 +82,8 @@ Re-submitting is idempotent.
 {{
   "kind": "macro_constant",
   "ptr_args": {{
-    "1": {{"array": true, "string": false, "moved": false, "mutable": null, "note": "out buffer"}}
+    "1": {{"array": true, "string": false, "moved": false, "borrowed": false,
+           "lifetime": null, "mutable": null, "note": "out buffer"}}
   }},
   "ptr_ret": {{"array": false, "string": false, "moved": false, "borrowed": true,
               "lifetime": "self", "mutable": null, "note": "..."}}
@@ -115,8 +116,8 @@ The macro body is NOT in the manifest - read the source file at
 For every `function_*` **and** `callback` entry, fill the agent fields on
 each `ptr_args[*]` and on `ptr_ret`:
 
-  - `array`, `string`, `moved` on each `ptr_args[*]`
-  - `array`, `string`, `moved`, `borrowed`, `lifetime` on `ptr_ret`
+  - `array`, `string`, `moved`, `borrowed`, `lifetime` on each `ptr_args[*]`
+    **and** on `ptr_ret` (same ownership fields on both sides)
   - `mutable` - three-state (`null` / `true` / `false`)
   - `note` - free-form context
 
@@ -174,8 +175,11 @@ must be a subset of `used_by.call` and may not be claimed by two forks.
 
 **Invariants** (`--update` enforces them):
 
-  - `moved` and `borrowed` (on `ptr_ret`) are mutually exclusive.
-  - `borrowed=true` requires `lifetime` to be set.
+  - `moved` and `borrowed` (on `ptr_args[*]` and `ptr_ret`) MAY both be
+    `true` - that encodes **runtime-conditional ownership** (owned on one
+    path, borrowed on another). Set both only for that case; otherwise pick
+    one.
+  - `borrowed=true` requires `lifetime` to be set (on args and returns).
   - `string` and `array` are not both `true`; prefer `array=true` on
     ambiguous `char *` / `unsigned char *` (treat as byte buffer).
   - Defensive default for undecidable cases: `moved=false`,
@@ -208,7 +212,8 @@ failure - fix the reported issue and re-submit. It HARD-REJECTS:
   - `forks` on a non-callback, an empty `callsites`, a callsite not in the
     callback's `used_by.call`, or a callsite claimed by two forks;
   - the per-pointer invariants - `string XOR array`; `const => mutable !=
-    true`; on a return, `moved XOR borrowed` and `borrowed => lifetime`.
+    true`; `borrowed => lifetime` (on args and returns). `moved` and
+    `borrowed` MAY both be `true` (runtime-conditional ownership).
 
 ## Tools
 

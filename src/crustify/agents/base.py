@@ -244,7 +244,16 @@ class CrustifyAgent:
             base / self.prompt_dir / f"{self.stage}.md"
             if self.prompt_dir else base / f"{self.stage}.md"
         )
-        return prompt_file.read_text()
+        text = prompt_file.read_text()
+        # A prompt may carry the role-scoped skill index inline via the shared
+        # `<!-- SKILLS_INDEX -->` sentinel (the same convention AGENTS.md uses
+        # through _render_principles) instead of the `{principles}` slot. Braces
+        # in the rendered index are escaped so it survives the downstream
+        # RelentlessAgent `prompt_template.format(**arguments)`.
+        if "<!-- SKILLS_INDEX -->" in text:
+            idx = self._render_skills().replace("{", "{{").replace("}", "}}")
+            text = text.replace("<!-- SKILLS_INDEX -->", idx)
+        return text
 
     def _arguments(self) -> dict:
         # `target` is the repo-RELATIVE id and `repo_root` the full path —

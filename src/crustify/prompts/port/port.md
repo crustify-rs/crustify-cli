@@ -34,14 +34,14 @@ between coliding local names.
 
 ### 1. Query analysis oracle 
 
-From the `crustify-inspect` skill, query the analysis oracle to understand the
+From the `crustify-oracle` skill, query the analysis oracle to understand the
 pointer ownership semantics of the symbols in your target set.
 
 Query the DAG to find out who your dependencies are. 
 
 ### 2. Locate modules of symbols/types
 
-From the `crustify-inspect` skill, use scaffold to find the location of your
+From the `crustify-oracle` skill, use scaffold to find the location of your
 symbols' module and locate their anchors inside their `.rs` files.
 
 Use scaffold to find the modules and `.rs` files where your dependencies are located.
@@ -114,9 +114,10 @@ Two-variant matrix (do not finish until all pass)
   undefined - the C-only build must stay green (catches guard mistakes).
 - **C flag ON:** `build.json` build + test with the feature defined - the Rust
   variant links and the suite passes.
-- Run `crustify audit --name <symbol>` to get potential sites that are still
-  using your symbol workset as naked `ffi::` calls, whether your own ports still use
-  raw pointer args, return, or in-body statements, which may be signals that they
-  need to use the ported function you wrote, and your port should use the
-  `define_type!` wrapped types and the crustify-crate smart pointers / traits. Fix
-  them, unless justified.
+
+Run the audit command from the `crustify-oracle` skill to get potential sites
+that are still using your symbol workset as naked `ffi::` calls, whether your
+own ports still use raw pointer args, return, or in-body statements, which may
+be signals that they need to use the ported function you wrote, and your port
+should use the `define_type!` wrapped types and the crustify-crate smart
+pointers / traits. Fix them, unless justified.

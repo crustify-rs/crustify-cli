@@ -66,7 +66,9 @@ _ARRAY_DIM_RE = re.compile(r"\[(\d*)\]")
 _ARRAY_SUFFIX_RE = re.compile(r"(\[\d*\])+\s*$")
 
 
-def _parse_field_type(field_type: str, is_scalar: bool) -> dict[str, Any]:
+def _parse_field_type(
+    field_type: str, is_scalar: bool, by_name: dict[str, dict] | None = None,
+) -> dict[str, Any]:
     """Decompose a CodeQL `Type.toString()` field type into structural
     parts.
 
@@ -76,6 +78,16 @@ def _parse_field_type(field_type: str, is_scalar: bool) -> dict[str, Any]:
       - `array` — `{"size": N|None}` or `None`
       - `const` — bool (const-qualified somewhere in the type)
       - `anon`  — bool (element is an anonymous aggregate)
+
+    Pointer detection is by literal `*`, plus (when `by_name` is given) a
+    typedef lookup: a **function-pointer typedef** (`unaliased_kind ==
+    "callback"`, e.g. `OPENSSL_sk_freefunc_thunk`) hides its star behind the
+    typedef name and C reports it scalar, so without this it would collapse to
+    a bare `{name}` — dropping the type — instead of surfacing as a pointer
+    field like an inline `int (*)(...)`. Object-pointer typedefs are NOT
+    detectable here (CodeQL's `aliasOf` unwraps the star, so `typedef T *P`
+    is indistinguishable from `typedef T P`); recovering those needs a
+    `types.ql` change.
     """
     ft = (field_type or "").strip()
     const = ft.startswith("const ") or " const" in ft
@@ -90,6 +102,13 @@ def _parse_field_type(field_type: str, is_scalar: bool) -> dict[str, Any]:
 
     anon = ft.startswith("(") or "(unnamed" in ft or "(anonymous" in ft
     is_pointer = "*" in ft
+
+    # Typedef'd function pointer: star hidden behind the typedef name.
+    if not is_pointer and array is None and by_name is not None:
+        row = by_name.get(re.sub(r"\bconst\b", "", ft).strip())
+        if (row is not None and row.get("kind") == "typedef"
+                and row.get("unaliased_kind") == "callback"):
+            is_pointer = True
 
     if is_pointer:
         ref: str | None = "pointer"
@@ -127,13 +146,14 @@ def _null_ptr_skeleton() -> dict[str, Any]:
 
 def _compose_field(
     field_name: str, field_type: str, is_scalar: bool,
+    by_name: dict[str, dict] | None = None,
 ) -> dict[str, Any]:
     """Build one `fields[]` entry from raw `(name, type, is_scalar)`.
 
     Fields carry their structural shape (`type` / `ref` / `array` / `ptr`) only;
     the wrapper derives accessors from the field layout directly — there are no
     per-field C getter/setter lists."""
-    parsed = _parse_field_type(field_type, is_scalar)
+    parsed = _parse_field_type(field_type, is_scalar, by_name)
     ref = parsed["ref"]
     if ref is None:
         return {"name": field_name}  # scalar single
@@ -198,6 +218,7 @@ def _forward_type_tags(
 
 def _compose_fields_full(
     reach: Reach, struct_name: str, struct_def_file: str,
+    by_name: dict[str, dict] | None = None,
 ) -> list[dict[str, Any]]:
     """Full declared-field layout for a type, **scope-agnostic**.
 
@@ -213,9 +234,11 @@ def _compose_fields_full(
     """
     declared = reach.struct_fields(struct_name, struct_def_file)
     if declared:
-        return [_compose_field(name, ftype, scalar) for name, ftype, scalar in declared]
+        return [_compose_field(name, ftype, scalar, by_name) for name, ftype, scalar in declared]
     # No full-body definition in the DB — fall back to accessed fields.
-    return _compose_fields_wrap(reach, struct_name, struct_def_file, port_only=False)
+    return _compose_fields_wrap(
+        reach, struct_name, struct_def_file, port_only=False, by_name=by_name,
+    )
 
 
 def _port_touched_field_names(
@@ -237,7 +260,7 @@ def _port_touched_field_names(
 
 def _compose_fields_wrap(
     reach: Reach, struct_name: str, struct_def_file: str,
-    *, port_only: bool = True,
+    *, port_only: bool = True, by_name: dict[str, dict] | None = None,
 ) -> list[dict[str, Any]]:
     """Access-narrowed field set for a wrap-scope type — only the
     fields some (port, when `port_only`) symbol actually reaches into.
@@ -260,7 +283,7 @@ def _compose_fields_wrap(
             out.append({"name": name})
             continue
         ftype, scalar = meta
-        out.append(_compose_field(name, ftype, scalar))
+        out.append(_compose_field(name, ftype, scalar, by_name))
     return out
 
 
@@ -498,7 +521,7 @@ def _build_struct_entry(
     (the wrap-only port-touched field subset, returned out-of-band via
     focus_by_key) is None for port-scope types.
     """
-    fields = _compose_fields_full(reach, name, def_file)
+    fields = _compose_fields_full(reach, name, def_file, by_name)
     entry = _struct_skeleton(name, typedefs, declared_in, defined_in, fields, kind)
     # Consumer footprints, partitioned opaque vs non-opaque — the COMPLETE
     # cross-codebase footprint for both port and wrap types (scope-agnostic,

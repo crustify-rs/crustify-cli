@@ -25,13 +25,26 @@ and safe FFI function wrappers for making FFI calls.
 ## Types
 
  Both **port- and wrap-scope** types stay layout-compatible with C, having their
- definition and field accessors placed in `impl` blocks on the type.
+ definition wrapped in newtypes and field accessors placed in `impl` blocks on the type.
  
  Lifecycle primitives of **port-scope** types are translated as free functions
- to native Rust. Field accessors and the type's definition stay wrapped. 
+ to native Rust. Field accessors and the type's definition stay behind wrappers
+ and accessors. 
  
  Rust consumers of types use the safe type's API instead of raw pointers or
  `unsafe` blocks.
+
+**Pointer fields.** Every field that is an owned reference, gets:
+ 
+ - a setter that moves ownership into `self`, drops the old reference
+   and sets the new one using `addr_of_mut!(...)`
+ 
+ - two getters: one which transfers ownership out from `self`, leaving the field valid,
+   and one which borrows the field's shared reference `&T`.
+ 
+ - fields that are embedded by value get a borrow projecting
+   getter `&T` over `addr_of(...)`; the caller reads through
+   `T`'s own `self` accessors. 
 
 ## Functions and callbacks
 
@@ -44,14 +57,13 @@ and safe FFI function wrappers for making FFI calls.
 
 ## Macros
 
-We never port/wrap C macros in native Rust. When a body you port/wrap uses one,
+We DO NOT port/wrap C macros in native Rust. When a body you port/wrap uses one,
 resolve it **at the call site**:
 
 - **Macro that aliases a symbol**: check the macro's definition in the codebase
 and extract the underlying symbol(s) it expands to; bindgen already created a
-binding for the underlying symbol(s), so it shows up as an ordinary dep - `query
-syms --name <sym>` and call its **safe wrapper** (it is very likely already a
-dep of what you're porting).
+binding for the underlying symbol(s), so it shows up as an ordinary dep - call
+its **safe wrapper** (it is very likely already a dep of what you're porting).
 
 - **Function-like macro with no wrapper**: look for a
 `crustify_<NAME>(<ARG_DECLS>)` shim in `ffi::` - bindgen may have emitted one.
@@ -61,32 +73,19 @@ Call it across the FFI seam like any other not-yet-ported C primitive.
 
 ## Pointers
 
-Read **every** pointer argument, return, and field from the ownership facets in
-its symbol/type record, then pick the safe form below. Authoritative facet
-*definitions* live in the schema (`query types --schema`); *which* owning wrapper
-to use is the **crustify-c-pointer-primitives** skill's call (see Skills). This
-table is the facet→form quick-reference.
-
-| Facet | Rust form | Primitive |
-|---|---|---|
-| **owned + exclusive** (sole owner; plain `*_free`) | owning wrapper **by value** | `CBox` |
-| **owned + shared** (refcounted; pointee has `up_ref`) | owning wrapper **by value** | `CArc` |
-| **storage but not fully formed** (porting a ctor: allocate, then init in place) | uninit ladder; graduate once formed (`CFreedUninit` frees storage on failure) | `CBoxUninit`→`CBox` / `CUniqueArcUninit`→`CArc` |
-| **embedded by-value** (no separate storage; `*_dispose`/`*_cleanup` frees fields) | by value; borrowed view → guard | `CVal` / `CValGuard` |
-| **type-erased owned storage** (opaque `void*` you own) | owning wrapper **by value** | `COwn` |
-| **borrowed** (non-owning) | `&Wrapper`, by `lifetime`: `self`→enclosing struct, `field:<n>`→sibling, `static`→global, `other`→ladder | `&Wrapper` / `SelfPtr` |
-| **mutable / const** | always `&Wrapper`, **never `&mut`** (interior mutability; `const` ⇒ read-only) | `&Wrapper` |
-| **array** (buffer + length) | `&[T]` if not moved; by value if moved | `&[T]` / `CVec` |
-| **container** (collection of element pointers) | collection; `owned_elem` ⇒ owns & frees elements, else borrows | `CVec` |
-| **string** (NUL-terminated) | `&CStr` if not moved; owned family if moved | `&CStr` / NUL-string family |
-| **out-parameter** (callee writes `T**`) | the write-slot | `COut<form>` |
-| **nullable** | wrap the chosen form | `Option<…>` |
-| **scalar** | by value | — |
+To leverage idiomatic Rust features, we express each pointer argument,
+return, field, and variable based on the ownership facets provided by the
+`crustify-oracle` skill via the smart pointers and traits from the `crustify-wrap-crate`
+skill. Use `crustify-oracle` to determine the various properties of a C pointer (ownership,
+singleton vs. array, typed vs. type-erased, nullable, mutable, etc.) and associate it with
+the appropriate smart pointer from `crustify-wrap-crate`.  
 
 ## Safety discipline
 
-`unsafe` and raw pointers are confined to the few roles below; **everywhere else
-is idiomatic, fully-checked Rust**. This is load-bearing - the steps assume it.
+### `unsafe` blocks and raw pointers
+
+They are confined to the few roles below; **everywhere else is idiomatic,
+fully-checked Rust**. This is load-bearing - the steps assume it.
 
 - **The per-file `mod ffi_export` is the *only* raw C-ABI gateway.**
     Each ported file's re-exports live in a `mod ffi_export { use super::*; ...
@@ -122,35 +121,53 @@ is idiomatic, fully-checked Rust**. This is load-bearing - the steps assume it.
 - **Inner-module `raw pointers` are ONLY allowed in the following cases:**
     (1) the above scenarios where `unsafe` blocks are allowed.
     
-    (2) a pointer that is both owned and borrowed depending on runtime state (no
-    single wrapper expresses both).
-    
-    (3) an out-param address helper (taking the address of a field to pass as an
+    (2) an out-param address helper (taking the address of a field to pass as an
     out-pointer).
     
-    (4) an intrusive-list sibling link the smart pointers cannot yet model.
-
-- **Never** instantiate a `&mut` to a wrapped type (in a function's signature or body).
-    **Always** write through `&self` setters - the principle of interior mutability.
+    (3) an intrusive-list sibling link the smart pointers cannot yet model.
 
 - **Every `unsafe` block** carries a specific, falsifiable `// SAFETY:` stating the
     safety contract and discipline.
 
+### Reference borrows
+
+- **Never** instantiate a `&mut` to a wrapped type (in a function's signature or body).
+    **Always** write through `&self` setters - the principle of interior mutability.
+
+### Field accesses
+
+Always read and write through `addr_of!` / `addr_of_mut!`, never through a bare
+`(*ptr).field` place expression. These are the *only* forms permitted for field access through a raw
+pointer. The constructs that synthesise a borrow are forbidden.
+
+| Construct | Synthesises a borrow? | Use? |
+|---|---|---|
+| `addr_of!((*ptr).field).read()` | **No** — pointer to place + byte-copy load | ✅ **mandatory read form** |
+| `addr_of_mut!((*ptr).field).write(v)` | **No** — pointer to place + byte-copy store | ✅ **mandatory write form** |
+| `addr_of!((*ptr).field)` / `addr_of_mut!((*ptr).field)` | **No** | ✅ for taking inner references |
+
 ## File contract (file-grained - load-bearing)
 
-**Locate your files, then fill.** Find each target's `.rs` module via the
-`crustify scaffold` command, homing its anchor - each symbol you wrap/port (each
-in the file it lived in), a dep's module, a type's already-wrapped module.
+The `.rs` module for each target and dependency (types/symbols) is found via the
+`crustify scaffold` command, which reflects the pre-established item placement policy.
 
 Each module is a **shared, file-grained module** - one Rust module per C source
-file, holding `// Replaces:` item anchors (yours: functions / globals) alongside
-wrap's `// Field:` / `// Alias:` anchors, for **many** elements (yours *and* other
-batches', wrap *and* port). Focus on those assigned to your workset.
+file, holding the following anchor kinds:
+- `// Replaces:` for port-scope items (functions / globals / types)
+- `// Wraps:` for wrap-scope items
+- `// Field:` for a type's field accessors
+- `// Alias:` for typed-array aliases
 
-- **Locate** each target by its `// Replaces:` **item** anchor.
+Each module includes anchors for **many** elements at once (across batches,
+wrap *and* port). Any one agent owns only the anchors in its workset; the rest
+belong to other batches and the other stage. Each anchor may be followed by
+a `// crustify:todo` placeholder marking remaining work, which gets deleted
+once the target is processed.
 
-- **Fill** your assigned anchors and leave every other exactly as-is.
+The per-anchor fill contract:
 
-- **Promote** its `// Replaces:` line to a `/// Replaces: <C_FN> (<file>.c)`  doc comment on the
-  item you emit and **delete that anchor's `// crustify:todo`** (a surviving todo
-  = still pending).
+- a target is **located** by its `// <Anchor>:` **item** anchor;
+- an assigned anchor is **filled** in place, every other left exactly as-is;
+- a filled anchor's `// <Anchor>:` line is **promoted** to a
+  `/// <Anchor>: <C_ITEM> (<file>.c/.h)` doc comment on the emitted item, and its
+  `// crustify:todo` is **deleted** (a surviving todo marks still-pending work).

@@ -149,7 +149,7 @@ _RE_BIND_MACRO = re.compile(
     r"\b(?:define_type|impl_[a-z_]+)!\s*[({](.*?)[)}]", re.DOTALL)
 _RE_DT_NAMES = re.compile(r"(\w+)\s*,\s*ffi::(\w+)")
 _RE_CTYPE = re.compile(r"\bCType\s*<\s*ffi::(\w+)")
-_RE_REPLACES = re.compile(r"//+\s*Replaces:\s*(\w+)")
+_RE_REPLACES = re.compile(r"//+\s*(?:Replaces|Wraps):\s*(\w+)")
 _RE_MOD_FFI_EXPORT = re.compile(r"\bmod\s+ffi_export\b")
 
 _SKIP_CRATE_SUFFIX = "-sys"
@@ -480,7 +480,7 @@ def _sym_impl_region(raw: str, clean: str, c_fn: str) -> list[tuple[int, int]]:
     idiomatic fn + its ``mod ffi_export`` re-export ``extern "C" fn c_fn``."""
     spans: list[tuple[int, int]] = []
     F = re.escape(c_fn)
-    for m in re.finditer(rf"//+\s*Replaces:\s*{F}\b", raw):
+    for m in re.finditer(rf"//+\s*(?:Replaces|Wraps):\s*{F}\b", raw):
         nf = re.search(r"\bfn\s+\w+\s*(?:<[^>]*>)?\s*\([^;{]*\{", clean[m.end():])
         if nf:
             s = m.end() + nf.start()
