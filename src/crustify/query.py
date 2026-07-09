@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -78,10 +79,10 @@ def query(
     if update_help:
         print(json.dumps(_findings_schema(kind), indent=2))
         return
-    # --schema: the record's field/slot DEFINITIONS (the _comment_* blocks);
+    # --schema: the record's field/slot MEANING (docs/schemas/<types|syms>.md);
     # no --name. Distinct from --update-help, which gives the submission shape.
     if schema:
-        print(json.dumps(_schema(kind), indent=2))
+        print(_schema(kind))
         return
     name_list = list(names or [])
     # --create homes a WHOLE synthetic cluster (its name is IN the entry), so it
@@ -128,7 +129,7 @@ def _summarize(entry: dict | None, kind: str) -> dict | None:
         lc = scope.lifetime(entry)
         s["lifetime"] = {"allocs": scope.alloc_fns(lc),
                          **{k: lc.get(k) for k in
-                            ("up_ref", "dtor", "clones",
+                            ("clone", "drop",
                              "locking", "conditional_drop")}}
         s["fields"] = [f.get("name") for f in entry.get("fields") or []]
         # Method surface: lifecycle ops for a concrete type; the explicit `ops`
@@ -156,7 +157,7 @@ def _enumerate(
     sj = layout.scope(target)
     synth_sel = {k for k, on in zip(_SYNTH, (strings, arrays)) if on}
     file_set = set(files or [])
-    arr, tagkey = (("types", "type") if kind == "type"
+    arr, tagkey = (("types", "name") if kind == "type"
                    else ("symbols", "name"))
     manifest = manifest_name(kind)
 
@@ -449,12 +450,12 @@ def _accessors(layout, target, tag: str, defined_in: str | None, *,
     scoped = set(declared) if keep is None else {f for f in declared if f in keep}
 
     out = {f: sorted(complete.get(f, set())) for f in sorted(scoped)}
-    print(json.dumps({"type": tag, "fields": out}, indent=2))
+    print(json.dumps({"name": tag, "fields": out}, indent=2))
 
 
 # ----------------------------------------------------------- --update ingest
 
-_LIFECYCLE_KEYS = ("allocs", "up_ref", "clones", "dtor", "locking",
+_LIFECYCLE_KEYS = ("allocs", "clone", "drop", "locking",
                    "conditional_drop")
 _FINDINGS_TOP = set(_LIFECYCLE_KEYS) | {"fields", "_comment_agent"}
 _FIELD_AGENT_KEYS = {"ptr"}
@@ -462,7 +463,7 @@ _FIELD_AGENT_KEYS = {"ptr"}
 # --create ingest (buffer pass): a whole synthetic string/array cluster entry.
 # A cluster records the CVec strategy family: its identity, the byte-level
 # `allocs` that produce the raw sized buffer, the `dtor` that drives the
-# CLenFreed release ZST, and (array-only) `elems` for the typed CVec<T> aliases.
+# CLenDropped release ZST, and (array-only) `elems` for the typed CVec<T> aliases.
 # It carries NO `ops` list: realloc/memdup/cleanse and the higher-level
 # duplicating constructors are ordinary FREE FUNCTIONS wrapped by the symbol
 # wrapper, never claimed by the cluster (the recorded `allocs` are metadata for
@@ -471,8 +472,8 @@ _FIELD_AGENT_KEYS = {"ptr"}
 # so there is no stored `len_aware_drop`.
 _SYNTH_CREATE_KINDS = {"string", "array"}
 _CREATE_TOP = {
-    "type", "kind", "declared_in", "defined_in", "_comment_agent",
-    "allocs", "up_ref", "clones", "dtor", "locking", "conditional_drop",
+    "name", "type", "kind", "declared_in", "defined_in", "_comment_agent",
+    "allocs", "clone", "drop", "locking", "conditional_drop",
     # ARRAY-only element surface: `elems` lists the concrete element types the
     # buffer holds at call sites (rows {type, note}) for the wrapper's typed
     # CVec<T> aliases. Element OWNERSHIP (drop-each-element) is a PORT concern
@@ -493,29 +494,52 @@ _FORK_KEYS = {"ptr_args", "ptr_ret", "callsites"}
 _SYNTHETIC_SCHEMA_FIELDS = {"array_fields"}
 
 
-def _schema(kind: str) -> dict:
-    """The record schema for ``--schema`` — every ``_comment_*`` definition
-    block, single-sourced from ``templates/<types|syms>.json`` (the schema
-    authority), so the agent reads the meaning of each field/slot/value at
-    runtime instead of opening the templates. For ``types`` the synthetic
-    string/array-cluster field (``array_fields``) is dropped — it belongs to
-    those analyzers, not the struct type-analyzer. Empty if the template is
-    unreadable."""
-    tmpl = "types.json" if kind == "type" else "syms.json"
-    path = Path(__file__).resolve().parents[2] / "templates" / tmpl
+def _schema(kind: str) -> str:
+    """Field/slot MEANING for ``--schema`` — display-only markdown the analyzer
+    reads at runtime instead of opening the templates. Distinct from
+    ``--update-help`` (:func:`_findings_schema`), which gives the submission
+    *shape* + rules; meaning and shape are never duplicated.
+
+    Primary source: ``docs/schemas/<types|syms>.md``, split on ``## <field>``
+    headings. The struct type-analyzer drops cluster-only sections (the
+    synthetic string/array ``array_fields``), self-identified by an in-body
+    ``*(cluster-only`` tag (with :data:`_SYNTHETIC_SCHEMA_FIELDS` as an explicit
+    backstop). Falls back to the template's legacy ``_comment_*`` blocks
+    (rendered as markdown) until a given kind's ``.md`` exists, so the migration
+    off the templates is phased. Empty string if neither source is readable."""
+    root = Path(__file__).resolve().parents[2]
+    doc = root / "docs" / "schemas" / ("types.md" if kind == "type" else "syms.md")
+    if doc.exists():
+        try:
+            text = doc.read_text()
+        except OSError:
+            return ""
+        parts = re.split(r"(?m)^## (\S+)\s*$", text)
+        preamble, sections = parts[0], list(zip(parts[1::2], parts[2::2]))
+        keep = [preamble.rstrip()]
+        for field, body in sections:
+            cluster_only = (kind == "type" and (field in _SYNTHETIC_SCHEMA_FIELDS
+                            or body.lstrip().startswith("*(cluster-only")))
+            if cluster_only:
+                continue
+            keep.append(f"## {field}\n{body.rstrip()}")
+        return "\n\n".join(s for s in keep if s).rstrip() + "\n"
+    # Fallback: legacy template `_comment_*` blocks -> markdown, until <kind>.md.
+    tmpl = root / "templates" / ("types.json" if kind == "type" else "syms.json")
     try:
-        doc = json.loads(path.read_text())
+        rec = json.loads(tmpl.read_text())
     except (OSError, ValueError):
-        return {}
-    out: dict = {}
-    for k, v in doc.items():
+        return ""
+    out: list[str] = []
+    for k, v in rec.items():
         if not k.startswith("_comment"):
             continue
         field = k[len("_comment_"):] or "overview"
         if kind == "type" and field in _SYNTHETIC_SCHEMA_FIELDS:
             continue
-        out[field] = " ".join(v) if isinstance(v, list) else v
-    return out
+        body = " ".join(v) if isinstance(v, list) else v
+        out.append(f"## {field}\n{body}")
+    return "\n\n".join(out).rstrip() + "\n"
 
 
 def _findings_schema(kind: str) -> dict:
@@ -538,39 +562,51 @@ def _findings_schema(kind: str) -> dict:
                        "polymorphic backends or a heap/mmap split). Empty for "
                        "stack/embedded types. Higher-level open/lookup/init logic "
                        "stays a free function, NOT here.>"],
-            "up_ref": "<refcount-increment fn> | null",
-            "clones": ["<deep-copy fn>"],
-            "dtor": {
-                "exclusive": "<plain *_free: sole-owner heap header + fields -> CBox> | null",
-                "shared": "<refcount-DEC free, pairs with up_ref -> CArc> | null",
-                "fields": "<*_dispose / *_cleanup: owned fields only, by-value POD -> CVal> | null",
+            "clone": {
+                "shared": "<refcount-bump fn (the up_ref) -> CRefCloned / CArc Clone> | null",
+                "exclusive": ["<deep-copy / dup fn -> CCloned / CBox Clone>"],
             },
-            "locking": {"acquire": "<lock fn> | null", "release": "<unlock fn> | null"},
+            "drop": {
+                "exclusive": ["<exclusive destructor fn>"],
+                "shared": ["<shared/refcounted destructor fn>"],
+                "fields": ["<fields-only disposer fn>"],
+            },
+            "locking": [{
+                "acquire": "<lock fn>", "release": "<unlock fn>",
+                "locks": ["<field storing the lock object>"],
+                "locked_fields": ["<field the lock guards>"],
+            }],  # or null; a LIST -- one entry per distinct lock/field discipline
             "conditional_drop": "<drop-condition descriptor> | null",
             "fields": {
                 "<field_name>": {
                     "ptr": {
-                        "array": "bool", "string": "bool", "owned": "bool",
-                        "exclusive": "bool", "shared": "bool", "borrowed": "bool",
-                        "nullable": "bool", "mutable": "bool", "container": "bool",
-                        "owned_elem": "bool", "lifetime": "<source> | null",
-                        "note": "<str>",
+                        "array": "null | {by_val: true} | {by_ref: {owned: bool, borrowed: bool}}",
+                        "string": "bool",
+                        "owned": "null | {exclusive: bool, shared: bool}",
+                        "borrowed": "null | {lifetime: <source>}",
+                        "nullable": "bool", "mutable": "bool", "note": "<str>",
                     }
                 }
             },
             "_comment_agent": "<your rationale (optional free text)>",
             "_rules": [
-                "dtor: no single C function may fill two roles "
-                "(shared / exclusive / fields must differ).",
+                "drop: each role (shared / exclusive / fields) is a LIST and may "
+                "name several destructors of that kind; a single C function must "
+                "not appear in two different roles (roles stay disjoint). A "
+                "parameterized free (one taking an element-free callback, e.g. "
+                "OPENSSL_sk_pop_free) is STILL a destructor - the owned-element "
+                "variant - not disqualified.",
                 "every named op must be a real function, not a macro "
                 "(record the underlying function it expands to).",
-                "field.ptr: owned+borrowed (and exclusive+shared) MAY BOTH be "
-                "true — that encodes runtime-conditional ownership (owned on one "
-                "path, borrowed/refcounted on another); a both-exclusive+shared "
-                "field then expects both an exclusive and a shared dtor. "
-                "Still enforced: exclusive/shared imply owned; owned_elem implies "
-                "container; borrowed implies lifetime set; string XOR array "
-                "(structural); a const pointee implies mutable != true.",
+                "field.ptr: `array` = null | {by_val:true} | {by_ref:{owned,"
+                "borrowed}}, where by_ref is a pointer array (container) and its "
+                "owned/borrowed is ELEMENT ownership. `owned` = null | {exclusive,"
+                "shared} (the pointer/buffer ownership); `borrowed` = null | "
+                "{lifetime}. `owned` and `borrowed` MAY both be non-null "
+                "(runtime-conditional dual ownership); likewise owned.exclusive + "
+                "owned.shared, and by_ref.owned + by_ref.borrowed. Still enforced: "
+                "string XOR array; a borrowed pointer requires a lifetime; a const "
+                "pointee implies mutable != true.",
             ],
             "_valid_top_keys": sorted(_FINDINGS_TOP),
         }
@@ -630,26 +666,33 @@ def _apply_ptr_agent(entry: dict, ptr_args_f: dict | None,
 
 def _ptr_invariant_errors(field: str, ptr: dict, field_type: str) -> list[str]:
     """Hard-reject the IMPOSSIBLE / inconsistent shapes in one field's `ptr`
-    block — NOT the ownership-mutex cases.
+    block. Most old ownership *dependencies* are now STRUCTURAL (unrepresentable
+    otherwise): `exclusive`/`shared` nest under `owned`, `lifetime` under
+    `borrowed`, element-ownership under `array.by_ref` — so only shape validity,
+    the string/array mutex, borrowed-requires-lifetime, and const/mutable remain.
 
-    `owned`+`borrowed` (and `exclusive`+`shared`) may BOTH be true: that is the
-    encoding of **runtime-conditional ownership** — owned on one path, borrowed
-    or refcounted on another (a get-or-create, a static-or-fresh return). Such a
-    field then expects the type to register the matching dtors (a both
-    `exclusive`+`shared` field implies both an `exclusive` and a `shared`
-    `dtor`). Only structural impossibilities and the ownership *dependencies*
-    (`exclusive`/`shared` ⇒ owned; `borrowed` ⇒ lifetime) are rejected."""
+    Dual ownership is allowed: `owned` and `borrowed` may BOTH be non-null
+    (runtime-conditional), likewise `owned.exclusive`+`owned.shared` and
+    `array.by_ref.owned`+`.borrowed`."""
     e: list[str] = []
-    if ptr.get("exclusive") and not ptr.get("owned"):
-        e.append(f"field {field!r}: exclusive true but owned not true")
-    if ptr.get("shared") and not ptr.get("owned"):
-        e.append(f"field {field!r}: shared true but owned not true")
-    if ptr.get("owned_elem") is not None and not ptr.get("container"):
-        e.append(f"field {field!r}: owned_elem set but container not true")
-    if ptr.get("borrowed") and not ptr.get("lifetime"):
-        e.append(f"field {field!r}: borrowed true but lifetime unset")
-    if ptr.get("string") and ptr.get("array"):
-        e.append(f"field {field!r}: string and array both true (must be XOR)")
+    array = ptr.get("array")
+    if array is not None:
+        if not isinstance(array, dict):
+            e.append(f"field {field!r}: array must be null or {{by_val|by_ref}}")
+        else:
+            kinds = [k for k in ("by_val", "by_ref") if array.get(k)]
+            if len(kinds) != 1:
+                e.append(f"field {field!r}: array needs exactly one of by_val / by_ref")
+            elif "by_ref" in kinds and not isinstance(array["by_ref"], dict):
+                e.append(f"field {field!r}: array.by_ref must be {{owned, borrowed}}")
+    if ptr.get("string") and array is not None:
+        e.append(f"field {field!r}: string and array both set (must be XOR)")
+    borrowed = ptr.get("borrowed")
+    if isinstance(borrowed, dict) and not borrowed.get("lifetime"):
+        e.append(f"field {field!r}: borrowed set but lifetime unset")
+    owned = ptr.get("owned")
+    if owned is not None and not isinstance(owned, dict):
+        e.append(f"field {field!r}: owned must be null or {{exclusive, shared}}")
     if "const" in (field_type or "") and ptr.get("mutable") is True:
         e.append(f"field {field!r}: const in type but mutable == true")
     return e
@@ -742,7 +785,7 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
         # Identity is `defined_in or canonical_decl(declared_in)`: an
         # anonymous-typedef struct (e.g. a STACK_OF instance) has a null
         # `defined_in`, so a caller's file identifies it via `declared_in`.
-        if e.get("type") != tag:
+        if (e.get("name") or e.get("type")) != tag:
             return False
         if defined_in is None or e.get("defined_in") == defined_in:
             return True
@@ -772,31 +815,39 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
         # Lifecycle function-name checks.
         for fn in f.get("allocs") or []:
             check_fn(fn, "alloc")
-        if f.get("up_ref"):
-            check_fn(f["up_ref"], "up_ref")
-        for fn in f.get("clones") or []:
-            check_fn(fn, "clone")
-        d = f.get("dtor") or {}
+        clone = f.get("clone") or {}
+        if isinstance(clone, dict):
+            if clone.get("shared"):
+                check_fn(clone["shared"], "clone.shared")
+            for fn in clone.get("exclusive") or []:
+                check_fn(fn, "clone.exclusive")
+        d = f.get("drop") or {}
         if isinstance(d, dict):
             # Current schema is {shared, exclusive, fields}. Old keys (e.g. the
             # pre-split `storage`) are HARD-REJECTED — findings must be current
             # schema, no legacy fields.
-            bad_dtor = set(d) - {"shared", "exclusive", "fields"}
-            if bad_dtor:
-                errors.append(f"dtor has old/unknown key(s) {sorted(bad_dtor)} "
+            bad_drop = set(d) - {"shared", "exclusive", "fields"}
+            if bad_drop:
+                errors.append(f"drop has old/unknown key(s) {sorted(bad_drop)} "
                               "(use shared / exclusive / fields)")
-            # No single C function may fill two dtor roles.
-            seen_dtor: dict[str, str] = {}
+            # Each role is a LIST (a role may hold several distinct destructors
+            # of the same kind); a scalar is tolerated. No single C function may
+            # fill two different roles (roles stay disjoint).
+            seen_drop: dict[str, str] = {}
             for role in ("shared", "exclusive", "fields"):
                 v = d.get(role)
                 if not v:
                     continue
-                if v in seen_dtor:
-                    errors.append(f"dtor.{seen_dtor[v]} and dtor.{role} name "
-                                  f"the same function (must differ)")
-                else:
-                    seen_dtor[v] = role
-                    check_fn(v, f"dtor.{role}")
+                for name in (v if isinstance(v, list) else [v]):
+                    if not name:
+                        continue
+                    if name in seen_drop and seen_drop[name] != role:
+                        errors.append(f"drop.{seen_drop[name]} and drop.{role} "
+                                      f"name the same function {name!r} (roles "
+                                      "must be disjoint)")
+                    else:
+                        seen_drop[name] = role
+                        check_fn(name, f"drop.{role}")
 
         # Per-field checks.
         for fname, fa in (f.get("fields") or {}).items():
@@ -1108,10 +1159,10 @@ def _create_type(layout, target, src: str) -> None:
         raise SystemExit(f"--create: unknown key(s): {sorted(bad_top)}")
 
     errors: list[str] = []
-    tag = f.get("type")
+    tag = f.get("name") or f.get("type")  # `type` tolerated for legacy findings
     kind = f.get("kind")
     if not tag:
-        errors.append("`type` (cluster name) is required")
+        errors.append("`name` (cluster identifier) is required")
     if kind not in _SYNTH_CREATE_KINDS:
         errors.append(f"`kind` must be one of {sorted(_SYNTH_CREATE_KINDS)} "
                       f"(got {kind!r}) — --create is for synthetic clusters only")
@@ -1133,21 +1184,24 @@ def _create_type(layout, target, src: str) -> None:
                 for r in _csv.DictReader(fh):
                     if r.get("name"):
                         universe.add(r["name"])
-    named = list(f.get("allocs") or []) + list(f.get("clones") or [])
-    if f.get("up_ref"):
-        named.append(f["up_ref"])
-    d = f.get("dtor") or {}
+    named = list(f.get("allocs") or [])
+    _clone = f.get("clone") or {}
+    if isinstance(_clone, dict):
+        if _clone.get("shared"):
+            named.append(_clone["shared"])
+        named += list(_clone.get("exclusive") or [])
+    d = f.get("drop") or {}
     if isinstance(d, dict):
         # Current schema {shared, exclusive, fields}; old keys (e.g. the
         # pre-split `storage`) are rejected. No function may fill two roles.
-        bad_dtor = set(d) - {"shared", "exclusive", "fields"}
-        if bad_dtor:
-            errors.append(f"dtor has old/unknown key(s) {sorted(bad_dtor)} "
+        bad_drop = set(d) - {"shared", "exclusive", "fields"}
+        if bad_drop:
+            errors.append(f"drop has old/unknown key(s) {sorted(bad_drop)} "
                           "(use shared / exclusive / fields)")
         present = [v for r in ("shared", "exclusive", "fields")
                    if (v := d.get(r))]
         if len(present) != len(set(present)):
-            errors.append("dtor roles name the same function (must differ)")
+            errors.append("drop roles name the same function (must differ)")
         named += present
 
     # ARRAY-only element surface. `elems` rows are {type, note} — the concrete
@@ -1179,15 +1233,15 @@ def _create_type(layout, target, src: str) -> None:
             "--create REJECTED — fix and re-run:\n  - " + "\n  - ".join(errors))
 
     entry = {
-        "type": tag, "typedef": [], "kind": kind,
+        "name": tag, "typedef": [], "kind": kind,
         "declared_in": f["declared_in"], "defined_in": defined_in,
         "lifetime": {
             # `allocs` = the byte-level allocators of this buffer family (metadata
             # pairing with `dtor` for the CVec strategy); the allocator functions
             # are still wrapped as free syms by the symbol wrapper.
             "allocs": f.get("allocs") or [],
-            "up_ref": f.get("up_ref"), "clones": f.get("clones") or [],
-            "dtor": f.get("dtor") or {"shared": None, "exclusive": None, "fields": None},
+            "clone": f.get("clone") or {"shared": None, "exclusive": []},
+            "drop": f.get("drop") or {"shared": [], "exclusive": [], "fields": []},
             "locking": f.get("locking"),
             "conditional_drop": f.get("conditional_drop"),
         },
@@ -1210,7 +1264,7 @@ def _create_type(layout, target, src: str) -> None:
         entries = doc.setdefault("types", [])
         # idempotent: replace a prior cluster of the same identity, else append.
         entries[:] = [e for e in entries
-                      if not (e.get("type") == tag
+                      if not ((e.get("name") or e.get("type")) == tag
                               and e.get("defined_in") == defined_in)]
         entries.append(entry)
         blob = json.dumps(doc, indent=1) + "\n"
@@ -1264,7 +1318,7 @@ def _load_type_entry(analysis: Path, tag: str, defined_in: str | None) -> dict |
         except (OSError, ValueError):
             continue
         for e in doc.get("types", []):
-            if e.get("type") != tag:
+            if (e.get("name") or e.get("type")) != tag:
                 continue
             if defined_in and e.get("defined_in") == defined_in:
                 return e
@@ -1277,7 +1331,7 @@ def _manifest_path(analysis: Path, kind: str, tag: str,
     """The manifest file that homes ``tag`` (the file an annotating agent writes
     back to) — ``types.json`` for a type, ``syms.json`` for a symbol — preferring
     the one whose entry matches ``defined_in``."""
-    arr, tagkey = (("types", "type") if kind == "type"
+    arr, tagkey = (("types", "name") if kind == "type"
                    else ("symbols", "name"))
     manifest = manifest_name(kind)
     fallback = None
@@ -1332,7 +1386,7 @@ def _resolve(target, *, kind: str, name: str, files: list[str] | None):
     file_set = set(files or [])
 
     # walk the manifest tree (existence + defined_in are composer-filled).
-    arr, tagkey = (("types", "type") if kind == "type"
+    arr, tagkey = (("types", "name") if kind == "type"
                    else ("symbols", "name"))
     manifest = manifest_name(kind)
     uniq: dict = {}                                   # defined_in -> entry (dedup)

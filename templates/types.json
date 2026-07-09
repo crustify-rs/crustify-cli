@@ -1,201 +1,13 @@
 {
   "_comment": [
-    "Example crustify/analysis/<dir>/<stem>/types.json, produced by",
-    "compose/types_manifest.py. Mirrors the symbol analyzer's seed + closure model.",
-    "PORT-SCOPE types (defined_in is a file in <target>/crustify/scope.json) are the",
-    "porting subjects - they carry the full declared-field layout and are rewritten",
-    "as native Rust types. WRAP-SCOPE types (reached by port code) carry the base",
-    "schema with fields[] narrowed to the port-accessed subset (the FFI surface).",
-    "Every struct (port and wrap) also carries the opaque_in + non_opaque_in consumer",
-    "footprints. Records below illustrate port and wrap structs and an enum. (Callbacks",
-    "and other function-pointer typedefs are SYMBOLS - emitted into syms.json, not here.)"
-  ],
-  "_comment_type": [
-    "type - the C struct/union/enum tag, or the synthetic name for a string / array",
-    "cluster entry. Composer-filled."
-  ],
-  "_comment_typedef": [
-    "typedef - list of typedef aliases that resolve to this tag (e.g. SSL_SESSION for",
-    "ssl_session_st). Composer-filled; [] when there is none."
-  ],
-  "_comment_kind": [
-    "kind - Composer-emitted: struct, union (its own kind - same member-layout",
-    "skeleton as a struct, but NOT analyzed: the type-analyzer worklist is",
-    "structs-only, so a union's lifecycle/accessor slots stay at skeleton",
-    "defaults), enum. (Function-pointer typedefs are kind:\"callback\" SYMBOLS in",
-    "syms.json, not types.) Agent-synthesized: string (a NUL-string buffer",
-    "strategy) and array (a sized-buffer strategy, carrying `elems` for its typed",
-    "CVec<T> aliases), both made by the buffer pass. A cluster records the CVec",
-    "strategy family - its byte-level `allocs` and the `dtor` that drives the",
-    "release ZST; the realloc/memdup/cleanse ops and the higher-level duplicating",
-    "constructors are ordinary FREE FUNCTIONS wrapped by the symbol wrapper, NOT",
-    "claimed by the cluster (recorded `allocs` are strategy metadata). A",
-    "generated-container instance (a struct produced by a DEFINE_*/setup macro) is",
-    "NOT a distinct kind - it stays kind:\"struct\" and is analyzed as an ordinary",
-    "struct. The kind axis is orthogonal to port/wrap scope - port types are",
-    "overwhelmingly struct/enum; the synthetic kinds are almost always wrap-scope",
-    "utilities."
-  ],
-  "_comment_declared_in": [
-    "declared_in - LIST of repo-root-relative header paths that declare the type",
-    "(always a JSON array, even for a single header). Same shape as the syms base.",
-    "Composer-filled for composer-emitted types; agent-synthesized kinds (string /",
-    "array) must emit it as a list too - never a bare string."
-  ],
-  "_comment_defined_in": [
-    "defined_in - repo-root-relative path to the file holding the definition;",
-    "nullable. Composer-filled. Port-vs-wrap scope is NOT a manifest field - the",
-    "orchestrator computes it (defined_in in scope.json) and passes it to the analyzer",
-    "as a prompt arg per entry."
-  ],
-  "_comment_array_fields": [
-    "elems - ARRAY-only (a string is a single buffer and carries none). No type,",
-    "concrete or synthetic, has an `ops` field: a cluster records only its",
-    "lifecycle (the byte-level `allocs` and the `dtor`, which drive the CVec",
-    "strategy), and every non-lifecycle routine - field accessors, and a buffer's",
-    "realloc / memdup / cleanse / duplicating constructors - is an ordinary free",
-    "function wrapped by the symbol wrapper, not claimed by any type. `elems` lists",
-    "the concrete element types the buffer holds at call sites - rows {type, note} -",
-    "which become the array wrapper's typed CVec<T> aliases. Length-aware teardown",
-    "is NOT stored: the wrapper reads whether the release takes (ptr, len) and zeroes",
-    "the region (clearing / *_clear_free) off the dtor's signature, and shapes the",
-    "CVec strategy's cleanup accordingly. Whether a ported array DROPS its elements",
-    "(ownership) is NOT here - it is a PORT concern, captured per-field as",
-    "ptr.owned_elem."
-  ],
-  "_comment_allocs": [
-    "allocs - agent-filled: the byte-level allocator routine(s) that produce a raw uninitialized T",
-    "These are",
-    "the malloc/calloc-family allocators from the alloc manifest; a type MAY have",
-    "several, e.g. a heap-vs-mmap split. Empty for",
-    "stack/embedded types never heap-allocated. "
-  ],
-  "_comment_up_ref": [
-    "up_ref - agent-filled, or null: the routine that bumps a source T's refcount and",
-    "returns a shared reference of it. Meant to be called on `impl Clone` for the",
-    "refcounted type in Rust. Coexists with allocs (a refcounted type both allocates",
-    "and up_refs) and with clones."
-  ],
-  "_comment_dtor": [
-    "dtor - agent-filled {shared, exclusive, fields}: the destructor-role split,",
-    "load-bearing for Rust Drop and the CBox / CVal / CArc routing. The releasers",
-    "that map to `impl Drop` in Rust, invoked when T is fully formed and initialized",
-    "(not just storage-allocated): `exclusive` = called when T is owned exclusively",
-    "-> CBox / CFreed; `shared` = called when T is owned shared/refcounted (refcount",
-    "decrement then free; pairs with `up_ref`) -> CArc / CRefCounted; `fields` =",
-    "called to dispose the owned fields of T, separately from the storage free. A type may set",
-    "several, or none (POD); a single C function fills AT MOST ONE role (the three",
-    "MUST name different functions). A dtor taking the base's pointer is the base's,",
-    "even though it may free the fields/storage of the derived - dtor signature wins.",
-    "(Legacy {storage, fields} manifests are tolerated during migration: `storage`",
-    "maps to `shared` when `up_ref` is set, else to `exclusive`; see",
-    "scope.dtor_op_names.)"
-  ],
-  "_comment_clones": [
-    "clones - agent-filled LIST of deep-copy ops (e.g. SSL_dup), [] if none: each",
-    "produces an independent T * from a source T *. Meant to be called on `impl",
-    "Clone` for the exclusive type in Rust. A list because one type may expose",
-    "several (a plain deep-copy plus a copy-that-also-up_refs). May coexist with",
-    "up_ref."
-  ],
-  "_comment_locking": [
-    "locking - agent-filled {acquire, release, locks, locked_fields}, or null."
-  ],
-  "_comment_conditional_drop": [
-    "conditional_drop - agent-filled {skip_when, skip_when_kind}, or null. Names a gate",
-    "a hypothetical Rust Drop on T must honor BUT that the dtor function itself doesn't",
-    "encode. A dtor whose prologue already checks the condition (e.g. if (--p->refcount",
-    "> 0) return;) keeps conditional_drop:null - Rust Drop calling the C dtor",
-    "short-circuits naturally. A dtor that unconditionally releases storage while a",
-    "sibling release function does the gating (refcount-dec in git_mwindow_put_pack ->",
-    "git_packfile_free) fills it so Rust can port the gate into its impl. Plain",
-    "NULL-on-entry guards (if (!p) return;) are NOT conditional_drop."
-  ],
-  "_comment_casted": [
-    "casted - {to: [tags], from: [tags]}, composer-filled from the raw",
-    "struct<->struct pointer-cast graph (edges/casts.ql). `to` = tags this",
-    "type is cast INTO (it is a cast operand); `from` = tags cast INTO this",
-    "type (it is a cast result). Both are canonical struct tags (typedef",
-    "spellings resolved), [] when none. STORED RAW AND UNCLASSIFIED: the same",
-    "relation surfaces several C idioms - generated-container erasure (an instance",
-    "casts to its type-erased engine, e.g. stack_st_X509 -> stack_st, with the",
-    "reverse from value getters); embedded-base DOWNCAST (a base handle cast to a",
-    "wider type, e.g. ssl_st -> ssl_connection_st; the UPCAST is &wider->base field",
-    "arithmetic, NOT a cast, so it is absent); ASN1 ITEM punning (x509_st <->",
-    "ASN1_VALUE_st). Consumers disambiguate by field shape / cast in-degree /",
-    "first-member embedding; nothing is baked in here. An erasure engine is",
-    "recognizable as a high-`from`-in-degree cast target of a name-family of",
-    "sibling tags."
-  ],
-  "_comment_opaque_in": [
-    "opaque_in - composer-filled {file: [symbols]} footprint: functions that touch",
-    "this type but only as an OPAQUE HANDLE, never accessing a field (forwarders,",
-    "allocate-and-return ctors, delegating wrappers like SSL_SESSION_dup -> dup_intern).",
-    "The agent reads it for lifecycle/forwarder op candidates. ALL STRUCTS carry it.",
-    "COMPLETE / scope-agnostic for every type (port AND wrap): every consumer",
-    "tree-wide is listed. The per-target scope view is applied at READ time by",
-    "`query` (--port-only/--wrap-only), never baked into the manifest."
-  ],
-  "_comment_non_opaque_in": [
-    "non_opaque_in - composer-filled {file: [symbols]} footprint: functions that",
-    "read/write a FIELD of this type and so need its concrete layout (incl. transitive",
-    "a->b->field reachers). Strong op signal for the agent. ALL STRUCTS carry it.",
-    "COMPLETE / scope-agnostic like opaque_in: the FULL cross-codebase footprint for",
-    "every type - required for ABI/layout completeness and to retain out-of-scope",
-    "lifecycle ops (a wrap-side up_ref/dup) the Rust port honors. `query` applies the",
-    "per-target scope view at read time (--port-only/--wrap-only)."
-  ],
-  "_comment_fields": [
-    "fields - per-field records. Scalar single -> {name} (layout-agnostic; bindgen",
-    "handles it). Scalar array / by-value aggregate / aggregate array ->",
-    "{name, type, ref:\"value\", array?}. Pointer (single or array) ->",
-    "{name, type, ref:\"pointer\", ptr:{...}, array?}. type is the element type (full,",
-    "including *), omitted for scalar singles. ref is value/pointer (the element's",
-    "reference kind), omitted for scalar singles. array is {size:N} (fixed) /",
-    "{size:null} (flexible/incomplete member), omitted when not an array.",
-    "Port-scope types list ALL declared fields (full layout); wrap-scope types list",
-    "only the port-accessed subset. Anonymous-aggregate-typed fields carry the raw",
-    "(unnamed ...) type string; deep nested inlining is deferred - see docs/TODOS.md Sec anon."
-  ],
-  "_comment_ptr": [
-    "ptr - per pointer field (and per element of a pointer array). Composer emits a",
-    "null skeleton; the agent fills it, folded into the lifecycle pass. Fields: array",
-    "(pointee is a buffer - companion length field), string (pointee is a",
-    "NUL-terminated string; mutually exclusive with array), owned (the struct owns",
-    "the pointee, freed in the type's dtor - the moved analog), exclusive (only when",
-    "owned: sole ownership -> Box/CBox), shared (only when owned, mutually exclusive",
-    "with exclusive: the pointee is refcounted/shared -> Arc/CArc, the pointee type",
-    "has up_ref; mirrors the pointee type's dtor.shared and may be composer-derived",
-    "from it), borrowed (non-owning reference; mutually exclusive with owned),",
-    "nullable (can be NULL -> Rust Option<...>), mutable (3-state null/true/false;",
-    "const-in-type -> false; pointer-to-user-defined-type -> null;",
-    "buffers/out-scalars -> agent decides), lifetime (when borrowed: self = bounded",
-    "by the enclosing struct; field:<name> = points into a sibling field's storage;",
-    "static = global; other = escape hatch with note), container (this pointer holds",
-    "a collection of element pointers - e.g. a stack/map backing array - vs a single",
-    "pointee), owned_elem (only when container=true: does the struct own and free the",
-    "ELEMENTS, or merely borrow them?), note (free-form). Invariants:",
-    "ownedXORborrowed; exclusive only when owned; exclusive XOR shared when owned;",
-    "owned_elem only when container; borrowed=>lifetime set; stringXORarray;",
-    "const=>mutable=false. Ownership analysis applies to BOTH port and wrap pointer",
-    "fields - for wrap fields it also drives accessor generation (interior-mutability",
-    "getters): mutable decides whether the wrap struct needs a field_mut() getter;",
-    "owned/borrowed decide whether the getter returns an owning wrapper or a borrowed",
-    "handle; nullable/array/string decide the return shape (Option / slice / CStr",
-    "view)."
+    "Example records for the per-stem types.json manifest. Field and",
+    "lifecycle-slot MEANING lives in docs/schemas/types.md (served by",
+    "`crustify query --schema`); the submission shape + rules come from",
+    "`crustify query --update-help`."
   ],
   "types": [
     {
-      "_comment_example": [
-        "Port-scope struct (defined in a scope.json file). Full declared-field",
-        "layout + GLOBAL opaque_in/non_opaque_in footprints (port types keep the",
-        "cross-codebase footprint). Method surface = lifecycle ONLY (no `ops`);",
-        "field accessors are derived from the layout, not stored. A pointer field",
-        "carries the ptr ownership block.",
-        "Heap-allocated, non-refcounted -> dtor.exclusive (the *_free); no",
-        "by-value disposer -> dtor.fields null."
-      ],
-      "type": "statem_secret_st",
+      "name": "statem_secret_st",
       "typedef": [
         "STATEM_SECRET"
       ],
@@ -208,15 +20,19 @@
         "allocs": [
           "statem_secret_new"
         ],
-        "up_ref": null,
-        "dtor": {
+        "clone": {
           "shared": null,
-          "exclusive": "statem_secret_free",
-          "fields": null
+          "exclusive": [
+            "statem_secret_dup"
+          ]
         },
-        "clones": [
-          "statem_secret_dup"
-        ],
+        "drop": {
+          "shared": [],
+          "exclusive": [
+            "statem_secret_free"
+          ],
+          "fields": []
+        },
         "locking": null,
         "conditional_drop": null
       },
@@ -249,15 +65,17 @@
           "type": "unsigned char *",
           "ref": "pointer",
           "ptr": {
-            "array": true,
+            "array": {
+              "by_val": true
+            },
             "string": false,
-            "owned": true,
-            "exclusive": true,
-            "shared": null,
-            "borrowed": false,
+            "owned": {
+              "exclusive": true,
+              "shared": null
+            },
+            "borrowed": null,
             "nullable": true,
             "mutable": true,
-            "lifetime": null,
             "note": "Session-secret buffer; allocated in statem_secret_new, zeroed + freed in statem_secret_free."
           }
         },
@@ -272,15 +90,7 @@
       ]
     },
     {
-      "_comment_example": [
-        "Wrap-scope struct (defined outside scope.json) reached by port code.",
-        "Footprints are COMPLETE (scope-agnostic): every consumer tree-wide appears,",
-        "so out-of-scope lifecycle (SSL_SESSION_up_ref / SSL_SESSION_dup) is visible",
-        "via `query --methods` and gets filled here. `query` applies the per-target",
-        "scope view at read time (--port-only/--wrap-only). Fields carry their",
-        "structural shape (type/ref/array); pointer fields also get a ptr block."
-      ],
-      "type": "ssl_session_st",
+      "name": "ssl_session_st",
       "typedef": [
         "SSL_SESSION"
       ],
@@ -293,15 +103,19 @@
         "allocs": [
           "SSL_SESSION_new"
         ],
-        "up_ref": "SSL_SESSION_up_ref",
-        "dtor": {
-          "shared": "SSL_SESSION_free",
-          "exclusive": null,
-          "fields": null
+        "clone": {
+          "shared": "SSL_SESSION_up_ref",
+          "exclusive": [
+            "SSL_SESSION_dup"
+          ]
         },
-        "clones": [
-          "SSL_SESSION_dup"
-        ],
+        "drop": {
+          "shared": [
+            "SSL_SESSION_free"
+          ],
+          "exclusive": [],
+          "fields": []
+        },
         "locking": null,
         "conditional_drop": null
       },
@@ -335,25 +149,22 @@
           "type": "X509 *",
           "ref": "pointer",
           "ptr": {
-            "array": false,
+            "array": null,
             "string": false,
-            "owned": true,
-            "exclusive": false,
-            "shared": null,
-            "borrowed": false,
+            "owned": {
+              "exclusive": false,
+              "shared": null
+            },
+            "borrowed": null,
             "nullable": true,
             "mutable": null,
-            "lifetime": null,
             "note": "Peer cert; refcounted (X509_up_ref / X509_free). mutable=null: opaque-handle field, accessor returns a borrowed handle."
           }
         }
       ]
     },
     {
-      "_comment_example": [
-        "Enum - no fields, no lifecycle (dtor both-null)."
-      ],
-      "type": "ossl_handshake_state",
+      "name": "ossl_handshake_state",
       "typedef": [
         "OSSL_HANDSHAKE_STATE"
       ],
@@ -364,13 +175,15 @@
       "defined_in": "include/openssl/ssl.h",
       "lifetime": {
         "allocs": [],
-        "up_ref": null,
-        "dtor": {
+        "clone": {
           "shared": null,
-          "exclusive": null,
-          "fields": null
+          "exclusive": []
         },
-        "clones": [],
+        "drop": {
+          "shared": [],
+          "exclusive": [],
+          "fields": []
+        },
         "locking": null,
         "conditional_drop": null
       },

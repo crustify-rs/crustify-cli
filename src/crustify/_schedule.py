@@ -264,28 +264,23 @@ def load_type_meta(analysis_root: Path) -> dict[str, tuple[list[str], set[str]]]
         except (OSError, ValueError):
             continue
         for e in doc.get("types", []):
-            tag = e.get("type")
+            tag = e.get("name") or e.get("type")
             if not tag or tag in meta:
                 continue
             fields = [x["name"] for x in (e.get("fields") or []) if x.get("name")]
             from compose.scope import lifetime as _lifetime
             from compose.scope import alloc_fns as _alloc_fns
+            from compose.scope import drop_op_names as _drop_op_names
             lt = _lifetime(e)
             lc = set(_alloc_fns(lt))
-            # `dtor` is `{storage, fields}` (both names are lifecycle funcs);
-            # tolerate the legacy flat string during migration.
-            d = lt.get("dtor")
-            if isinstance(d, dict):
-                lc |= {v for v in (d.get("storage"), d.get("fields")) if v}
-            elif d:
-                lc.add(d)
-            if lt.get("up_ref"):
-                lc.add(lt["up_ref"])
-            lc |= set(lt.get("clones") or [])
-            lock = lt.get("locking") or {}
-            for k in ("acquire", "release"):
-                if lock.get(k):
-                    lc.add(lock[k])
+            # `dtor` roles ({shared, exclusive, fields}) are each a list of
+            # lifecycle fns; scope.drop_op_names flattens them (and tolerates
+            # legacy scalar / {storage, fields} shapes during migration).
+            lc |= set(_drop_op_names(lt.get("drop")))
+            from compose.scope import clone_op_names as _clone_op_names
+            from compose.scope import locking_op_names as _locking_op_names
+            lc |= set(_clone_op_names(lt))
+            lc |= set(_locking_op_names(lt.get("locking")))
             meta[tag] = (fields, lc)
     return meta
 
@@ -310,7 +305,7 @@ def load_polymorphic(analysis_root: Path) -> dict[str, dict]:
         except (OSError, ValueError):
             continue
         for e in doc.get("types", []):
-            tag = e.get("type")
+            tag = e.get("name") or e.get("type")
             if not tag:
                 continue
             p = e.get("polymorphic")

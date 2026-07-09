@@ -515,7 +515,7 @@ def compose_wrap(
     for tag, rec in type_items.items():
         via = sorted(rec["declared_in"])
         types_out.append({
-            "type": tag, "defined_in": rec["defined_in"], "declared_in": via,
+            "name": tag, "defined_in": rec["defined_in"], "declared_in": via,
             **({"reexport": True} if len(via) > 1 else {})})
 
     return {
@@ -531,6 +531,6 @@ def compose_wrap(
         "functions": sorted(buckets["functions"], key=lambda r: (r["name"], r["defined_in"])),
         "globals": sorted(buckets["globals"], key=lambda r: (r["name"], r["defined_in"])),
         "macros": sorted(buckets["macros"], key=lambda r: (r["name"], r["defined_in"])),
-        "types": sorted(types_out, key=lambda r: r["type"]),
+        "types": sorted(types_out, key=lambda r: r["name"]),
     }
 

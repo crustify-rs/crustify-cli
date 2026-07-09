@@ -60,27 +60,33 @@ If you hit a genuine bindgen bug that blocks you, you may adjust the `<lib>-sys`
 `bindgen.h` / allowlist, re-run `cargo check -p <lib>-sys`, and note the fix in
 your summary so the bindgen stage can absorb it.
 
+### Query the analysis oracle
+
+  Query the type analysis oracle using the `crustify-oracle` skill and learn
+  the ownership facet of your type's pointer fields, its lifetime primitives,
+  polymorphism, usage, and more.
+  
+  Leverage these to choose the right type definition and implement the
+  appropriate lifetime contracts for the wrapper newtype.
+  
 ### Emit the safe wrapper
 
-**Type definition.** Use the primitives from the `crustify-wrap-crate` skill to
+**Type definition.** Use the appropriate primitive from the `crustify-wrap-crate` skill to
   define the newtype wrapper over the `ffi::` type.
   
   If no primitive allows expressing certain properties of the newtype, such as
-  lifetimes or type-erased generics, hand-write them manually following the crate's guidelines.
+  lifetimes for borrowed refs or type-erased generics, hand-write them manually following the
+  crate's guidelines and principles.
+    
+**Dual-ownership fields.** If a field can be owned and borrowed and that
+  distinction can be statically monomorphized, then fork the
+  type in two newtypes`<Type><Field>Owned/Borrowed<'a>`, and use a shared trait
+  for the unambiguous field accessors implemented by both. 
+
+  If the owned vs. borrowed decision depends on runtime state (a flag in the
+  struct/container), gate the owned/borrowed accessors on that flag. 
   
-  Read the ownership facet of the pointer fields returned by the
-  `crustify-oracle` skill, and choose the right newtype shape considering
-  whether the type has owned-only or also borrowed fields.
-  
-**Dual-ownership fields.** If a field has dual-ownership semantics (i.e. owned
-  and borrowed) that is statically monomorphized (i.e. it does not depend on
-  runtime state) then fork the type in two
-  newtypes`<Type><Field>Owned/Borrowed<'a>`, and use a shared trait for the
-  unambiguous field accessors implemented by both. If it does depend on runtime
-  state (a flag in the struct/container), gate the owned/borrowed accessors on
-  that flag. 
-  
-**Polymorphism.** Use the `crustify-oracle` skill to find the set of structs
+**Polymorphism.** Use the `crustify-oracle` skill to find the set of types 
   that this type is cast `to` and that others cast `into` this type. Read its
   topology to decide whether it can be represented by a parametric type generator: 
 
@@ -90,7 +96,7 @@ your summary so the bindgen stage can absorb it.
   express its methods, allowing siblings to alias it to become concrete
   parametric instances. Reach for marker subtraits when the base trait's
   fields/methods must diverge due to instance-specific properties, such as
-  dual-ownership fields. The generator's parametric newtype may still wrap
+  different field ownership. The generator's parametric newtype may still wrap
   the raw FFI type (which defines type-erased fields), and provide parametric
   field accessors that coerce the type-erased fields to the type parameter which
   get statically monomorphized.
@@ -102,10 +108,27 @@ your summary so the bindgen stage can absorb it.
   surface - an instance-specific function, or an element-ownership difference
   the record's pointer ownership carries.
   
-**Ownership / lifecycle.** Use the lifetime analysis from the `crustify-oracle`
-skill to find the destructors/releasers/cloners of the type, and use them to implement to the
-right lifetime contract for the newtype using the `crustify-wrap-crate` skill. Some potential
-edge cases and hints:
+**Ownership / lifecycle.** Pull the type's lifetime analysis using `crustify-oracle`
+  skill to discover the destructors/releasers/cloners of the type, and use them to
+  implement to the right lifetime contract for the newtype using the
+  `crustify-wrap-crate` skill.
+  
+  Leverage these hints in case you encounter the following special cases:
+
+  - If a type has multiple destructors / releasers, it is most likely a sign
+  that it requires a generic geneator with dual-ownership fields. Emit wrappers
+  for all variants.
+  
+  - If a lifetime trait cannot be implemented using the convenience macros from
+  `crustify-wrap-crate` (e.g. the type requires parametric args for expressing lifetimes
+  or sub-types) then implement it manually, preserving the guidelines and practices
+  of the crate.
+
+  - A type's C destructor may be stateful, requiring state that cannot be
+  fetched directly from the object. Reach for the fat pointers and their
+  stateful traits from `crustify-wrap-crate` to express these and implement the
+  required stateful dropper strategy. Otherwise, reach for the layout-compatible
+  thin smart pointers. 
   
   - A C type may implement two separate releasers for storage and fields, which
   does not directly map to a single drop method in Rust. You may add a thin shim
@@ -115,13 +138,13 @@ edge cases and hints:
   sequentially.
   
 **Field accessors.** For each field in your fields range window, read its
-  ownership analysis (if pointer) using the `crustify-oracle` skill and emit getters/setters
-  following the established safety discipline and principles.
-  
+  ownership analysis (if pointer) using the `crustify-oracle` skill and emit
+  getters/setters following the established safety discipline and principles.
+
 **Pointer args and returns.** For each method taking or returning a
-  reference, fetch the per-field ownership analysis via `crustify-oracle`, pick the
-  right smart pointer from `crustify-wrap-crate`, and reason the right
-  lifetime bounds for borrowed references.
+  reference, fetch the per-field ownership analysis via `crustify-oracle`, pick
+  the appropriate (thin or fat) smart pointer from `crustify-wrap-crate`, and
+  reason the right lifetime bounds for borrowed references.
 
 **Wrapped deps.** Use the `crustify-oracle` skill to find your deps
   (types, callbacks) and use their safe wrappers over the appropriate
@@ -129,7 +152,7 @@ edge cases and hints:
   reference synthetic types (strings or arrays), query the oracle to learn about
   the already-defined wrapped clusters and use the appropriate one. 
  
- **Raw pointer policy.** DO NOT use raw pointers where safe wrappers exist,
+**Raw pointer policy.** DO NOT use raw pointers where safe wrappers exist,
   except for the documented allowlist and the following temporary case:
   - **hi-deps** that sit at a higher layer in the dag:
     where your wrappers' signatures touch one, reference it as raw pointer 

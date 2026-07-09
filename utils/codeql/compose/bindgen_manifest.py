@@ -314,7 +314,7 @@ def compose(
         keys=wrap_sym_keys,
     )
     wrap_types = _load_inscope_annotated(
-        types_by_dir, analysis_root, "types.json", "types", "type",
+        types_by_dir, analysis_root, "types.json", "types", "name",
         keys=wrap_type_keys,
     )
 
@@ -329,11 +329,11 @@ def compose(
     alias_to_lib: dict[str, str] = {}
     alias_to_names: dict[str, set[str]] = {}
     for t in wrap_types:
-        lib = _lib_of(crate_idx, t["type"], t.get("defined_in"),
+        lib = _lib_of(crate_idx, (t.get("name") or t["type"]), t.get("defined_in"),
                       t.get("declared_in"), t.get("linked_in"))
         if not lib:
             continue
-        names = {t["type"], *(t.get("typedef") or [])}
+        names = {(t.get("name") or t["type"]), *(t.get("typedef") or [])}
         for n in names:
             alias_to_lib[n] = lib
             alias_to_names[n] = names
@@ -359,14 +359,14 @@ def compose(
 
     # ---- types ----
     for t in wrap_types:
-        lib = _lib_of(crate_idx, t["type"], t.get("defined_in"),
+        lib = _lib_of(crate_idx, (t.get("name") or t["type"]), t.get("defined_in"),
                       t.get("declared_in"), t.get("linked_in"))
         if not lib:
             continue
         lp = plan_for(lib)
         if lp is None:
             continue
-        tag = t["type"]
+        tag = (t.get("name") or t["type"])
         kind = t.get("kind")
         if kind in _BINDABLE_TYPE_KINDS:
             lp.allow_types.add(tag)
@@ -464,7 +464,7 @@ def compose(
         for c in doc.get("types") or []:
             if c.get("kind") not in scope.SYNTHETIC_KINDS:
                 continue
-            lib = _lib_of(crate_idx, c["type"], c.get("defined_in"),
+            lib = _lib_of(crate_idx, c.get("name") or c["type"], c.get("defined_in"),
                           c.get("declared_in"), c.get("linked_in"))
             if not lib:
                 continue
@@ -473,10 +473,7 @@ def compose(
                 continue
             lc = scope.lifetime(c)
             fns = set(scope.alloc_fns(lc)) | set(c.get("ops") or [])
-            dt = lc.get("dtor") or {}
-            for k in ("storage", "fields"):
-                if dt.get(k):
-                    fns.add(dt[k])
+            fns |= set(scope.drop_op_names(lc.get("drop")))
             lp.allow_funcs |= fns
             # The cluster's declaring header(s) hold these functions' prototypes.
             for h in c.get("declared_in") or []:

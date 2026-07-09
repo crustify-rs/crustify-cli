@@ -41,6 +41,11 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+try:
+    from . import scope
+except ImportError:  # pragma: no cover - runtime path shim
+    import scope  # type: ignore
+
 Key = tuple[str, str]
 Entry = dict[str, Any]
 KeyFn = Callable[[Entry], Key]
@@ -60,8 +65,9 @@ def symbol_key(entry: Entry) -> Key:
 
 
 def type_key(entry: Entry) -> Key:
-    """Stable identity for type entries: ``(type, defined_in or "")``."""
-    return (entry["type"], entry.get("defined_in") or "")
+    """Stable identity for type entries: ``(name, defined_in or "")`` (the
+    record identifier, `type` on un-migrated records)."""
+    return (scope.entry_tag(entry), entry.get("defined_in") or "")
 
 
 def _overlay_field(existing: dict, incoming: dict) -> dict:
@@ -208,18 +214,18 @@ def _merge_dep_types(existing: list, incoming: list) -> list:
     out: list = []
     by_tag: dict[str, dict] = {}
     for t in (existing or []):
-        if not isinstance(t, dict) or "type" not in t:
+        if not isinstance(t, dict) or not scope.entry_tag(t):
             out.append(t)
             continue
-        by_tag[t["type"]] = t
+        by_tag[scope.entry_tag(t)] = t
         out.append(t)
     for t in (incoming or []):
-        if not isinstance(t, dict) or "type" not in t:
+        if not isinstance(t, dict) or not scope.entry_tag(t):
             continue
-        prev = by_tag.get(t["type"])
+        prev = by_tag.get(scope.entry_tag(t))
         if prev is None:
-            entry = {"type": t["type"], "fields": list(t.get("fields") or [])}
-            by_tag[t["type"]] = entry
+            entry = {"name": scope.entry_tag(t), "fields": list(t.get("fields") or [])}
+            by_tag[scope.entry_tag(t)] = entry
             out.append(entry)
         else:
             prev["fields"] = _append_new(prev.get("fields"), t.get("fields"))

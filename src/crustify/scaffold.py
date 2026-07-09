@@ -172,7 +172,7 @@ def _field_map(layout) -> dict[str, list[str]]:
         except (OSError, ValueError):
             continue
         for e in doc.get("types", []):
-            tag = e.get("type")
+            tag = e.get("name") or e.get("type")
             if tag:
                 out[tag] = [f["name"] for f in (e.get("fields") or [])
                             if isinstance(f, dict) and f.get("name")]

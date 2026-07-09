@@ -294,7 +294,7 @@ def scope_membership(
         for e in sec.get(kind, []):
             if synthetic is not None and bool(e.get("synthetic")) != synthetic:
                 continue
-            nm = e.get("type") or e.get("name")
+            nm = entry_tag(e)
             keys.add(origin_key(nm, e.get("defined_in"), e.get("declared_in")))
     return keys
 
@@ -307,29 +307,84 @@ SYNTHETIC_KINDS = ("string", "array")  # buffer-pass clusters
 # `exclusive` (sole-owner plain free -> CBox); `fields` is the by-value POD
 # disposer (*_dispose / *_cleanup -> CVal). `storage` is the pre-split legacy
 # single free, tolerated until the on-disk types.json schemas are migrated.
-_DTOR_ROLE_KEYS = ("shared", "exclusive", "fields", "storage")
+_DROP_ROLE_KEYS = ("shared", "exclusive", "fields", "storage")
 
 
-def dtor_op_names(d) -> list[str]:
-    """Destructor op function names from a `dtor` value, schema-tolerant.
+def drop_op_names(d) -> list[str]:
+    """Destructor op function names from a `drop` value, schema-tolerant.
 
-    New schema: ``{shared, exclusive, fields}``. Legacy: ``{storage, fields}``
-    (single pre-split free) or a bare string. Returns the non-null names in
-    role order, deduped — so a type's `*_free` / `*_dispose` folds into its
-    lifecycle regardless of which schema version produced the record. This is
-    the single dtor-extraction primitive the dag / scope / consistency stages
-    share, so the dual-dtor split lands uniformly.
+    New schema: ``{shared, exclusive, fields}``, each role a LIST of function
+    names (a role may hold several distinct destructors of the same kind, e.g.
+    a container's shallow free plus its deep element-owning free). Tolerated for
+    migration: a scalar string per role, the legacy ``{storage, fields}``, and a
+    bare top-level string. Returns the non-null names in role order, deduped —
+    so a type's `*_free` / `*_dispose` folds into its lifecycle regardless of
+    which schema version produced the record. This is the single
+    drop-extraction primitive the dag / scope / consistency stages share, so the
+    multi-drop split lands uniformly.
     """
     if isinstance(d, dict):
         seen: set[str] = set()
         out: list[str] = []
-        for k in _DTOR_ROLE_KEYS:
+        for k in _DROP_ROLE_KEYS:
             v = d.get(k)
-            if v and v not in seen:
-                seen.add(v)
-                out.append(v)
+            if v is None:
+                continue
+            for name in (v if isinstance(v, list) else [v]):
+                if name and name not in seen:
+                    seen.add(name)
+                    out.append(name)
         return out
     return [d] if d else []
+
+
+def entry_tag(e: dict):
+    """The identifier of a types.json / scope.json entry: ``name`` (current
+    schema), with a ``type`` fallback for un-migrated records. The record-level
+    identifier was renamed ``type`` -> ``name`` to match the ``syms.json`` base;
+    the field-level ``type`` (a ``fields[]`` element's C type) is unrelated and
+    is NOT read through here."""
+    return e.get("name") or e.get("type")
+
+
+def locking_op_names(locking) -> list[str]:
+    """acquire/release fn names from a ``locking`` value, schema-tolerant.
+
+    New schema: a LIST of ``{acquire, release, locks, locked_fields}``
+    disciplines (a type may guard different field sets with different locks).
+    Legacy: a single such dict. ``null`` / ``[]`` -> ``[]``. This is the single
+    locking-extraction primitive the dag / scope / consistency / schedule stages
+    share, so the multi-lock split lands uniformly."""
+    if not locking:
+        return []
+    disciplines = locking if isinstance(locking, list) else [locking]
+    out: list[str] = []
+    for d in disciplines:
+        if isinstance(d, dict):
+            out += [v for v in (d.get("acquire"), d.get("release")) if v]
+    return out
+
+
+def clone_op_names(lc) -> list[str]:
+    """Clone-role fn names (refcount share + deep dups) from a lifecycle dict,
+    schema-tolerant. New schema: ``lc['clone'] = {shared: <fn>|null, exclusive:
+    [<fn>...]}`` -- ``shared`` is the refcount-bump (`up_ref`, -> CRefCloned /
+    CArc Clone), ``exclusive`` the deep-copy list (-> CCloned / CBox Clone).
+    Legacy: separate ``lc['up_ref']`` (scalar) + ``lc['clones']`` (list). This is
+    the single clone-extraction primitive the dag / scope / consistency / schedule
+    stages share."""
+    clone = lc.get("clone")
+    if isinstance(clone, dict):
+        out: list[str] = []
+        if clone.get("shared"):
+            out.append(clone["shared"])
+        out += clone.get("exclusive") or []
+        return out
+    out = []
+    if lc.get("up_ref"):
+        out.append(lc["up_ref"])
+    out += lc.get("clones") or []
+    return out
 
 
 def lifetime(rec: dict) -> dict:
@@ -374,12 +429,9 @@ def type_method_syms(entry: dict) -> list[str]:
         return list(entry.get("ops") or [])
     lc = lifetime(entry)
     out: list[str] = alloc_fns(lc)
-    out += dtor_op_names(lc.get("dtor"))
-    if lc.get("up_ref"):
-        out.append(lc["up_ref"])
-    out += lc.get("clones") or []
-    lock = lc.get("locking") or {}
-    out += [v for v in (lock.get("acquire"), lock.get("release")) if v]
+    out += drop_op_names(lc.get("drop"))
+    out += clone_op_names(lc)
+    out += locking_op_names(lc.get("locking"))
     seen: set[str] = set()
     return [x for x in out if not (x in seen or seen.add(x))]
 

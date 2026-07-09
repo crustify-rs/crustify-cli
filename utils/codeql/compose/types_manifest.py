@@ -31,7 +31,7 @@ Field schema (per `fields[]` entry):
   - `{name, type, ref:"pointer", ptr:{…}, array?}`   pointer (single/array)
   - anonymous-aggregate-typed fields are emitted as value fields
     carrying the raw `(unnamed …)` type string; deep nested inlining
-    (the `anon` block) is deferred — see docs/TODOS.md.
+    (the `anon` block) is deferred — see docs/TODO.md.
 
 `ref` is `"value"` / `"pointer"` (element reference kind); `array` is
 `{size:N|null}` (multiplicity). The `ptr` block is agent-filled
@@ -126,20 +126,19 @@ def _null_ptr_skeleton() -> dict[str, Any]:
     """Agent-fillable pointer-ownership block, emitted with null/false
     placeholders by the composer."""
     return {
+        # array: null (single pointee) | {by_val: true} (buffer of inline values)
+        # | {by_ref: {owned, borrowed}} (buffer of element pointers -- a
+        # container; owned/borrowed = ELEMENT ownership, vs the buffer ownership
+        # in `owned` below). Mutually exclusive with `string`.
         "array": None,
         "string": None,
+        # owned/borrowed: the pointer's own (buffer/pointee) ownership. `owned`
+        # nests {exclusive, shared} (the owned-mode); `borrowed` nests {lifetime}.
+        # Both may be non-null for runtime-conditional dual ownership.
         "owned": None,
-        "exclusive": None,
-        "shared": None,
         "borrowed": None,
         "nullable": None,
         "mutable": None,
-        "lifetime": None,
-        # Container split: `container` = this pointer holds a collection of
-        # element pointers; `owned_elem` (meaningful when container) = the
-        # struct owns/frees the *elements* (vs `owned`, the *buffer*).
-        "container": None,
-        "owned_elem": None,
         "note": None,
     }
 
@@ -448,20 +447,21 @@ def _lifecycle_skeleton() -> dict[str, Any]:
     # only) via scope.type_method_syms. Only the synthetic string/array clusters
     # (agent-created) carry an explicit `ops`.
     # All lifecycle slots nest under `lifetime` (read via scope.lifetime).
-    # Split destructor:
-    #   `exclusive` = a plain `*_free` releasing a solely-owned heap header
+    # Split destructor, each role a LIST (a role may hold several distinct
+    # destructors of the same kind, e.g. a container's shallow free plus its
+    # deep element-owning free):
+    #   `exclusive` = plain `*_free`(s) releasing a solely-owned heap header
     #     + fields (-> CBox);
     #   `shared`    = a refcount-decrementing free (the dual-ownership /
     #     refcounted teardown, pairs with `up_ref`; -> CArc);
     #   `fields`    = a `*_dispose`/`*_cleanup` releasing owned fields only,
     #     by-value header, POD-style (-> CVal).
-    # See types.json `_comment_lifecycle`.
+    # See docs/schemas/types.md (drop).
     return {
         "lifetime": {
             "allocs": [],
-            "up_ref": None,
-            "dtor": {"shared": None, "exclusive": None, "fields": None},
-            "clones": [],
+            "clone": {"shared": None, "exclusive": []},
+            "drop": {"shared": [], "exclusive": [], "fields": []},
             "locking": None,
             "conditional_drop": None,
         }
@@ -478,7 +478,7 @@ def _struct_skeleton(
     # no agent analysis (the type-analyzer worklist is structs-only); the
     # lifecycle/accessor slots stay at their empty skeleton defaults.
     return {
-        "type": struct_name, "typedef": typedefs, "kind": kind,
+        "name": struct_name, "typedef": typedefs, "kind": kind,
         "declared_in": declared_in, "defined_in": defined_in,
         **_lifecycle_skeleton(),
         "casted": {"to": [], "from": []},
@@ -490,7 +490,7 @@ def _enum_skeleton(
     name: str, declared_in: str | None, defined_in: str | None, typedefs: list[str],
 ) -> dict[str, Any]:
     e = {
-        "type": name, "typedef": typedefs, "kind": "enum",
+        "name": name, "typedef": typedefs, "kind": "enum",
         "declared_in": declared_in, "defined_in": defined_in,
         **_lifecycle_skeleton(),
         "casted": {"to": [], "from": []}, "fields": [],
@@ -552,7 +552,7 @@ def compose(
         without persisting the tag to disk. Assumes a stem-group
         manifest dir carries entries of a single scope only; the
         mixed-scope case (a stem-group split by
-        `config.out_of_scope.paths`) is tracked in docs/TODOS.md.
+        `config.out_of_scope.paths`) is tracked in docs/TODO.md.
 
     See module docstring for the seed/closure + port/wrap model.
     """
@@ -634,7 +634,7 @@ def compose(
         entry["declared_in"] = decls          # full decl list on the stored field
         candidates.append({
             "entry": entry, "is_port": is_port,
-            "key": (entry["type"], entry.get("defined_in") or ""),
+            "key": (scope.entry_tag(entry), entry.get("defined_in") or ""),
             "name": r["name"], "def_file": r["def_file"],
             "forward": forward,
             "target_file": r["def_file"] or _first(r["decl_files"]),
@@ -684,7 +684,7 @@ def compose(
         entry["declared_in"] = decls          # full decl list on the stored field
         candidates.append({
             "entry": entry, "is_port": is_port,
-            "key": (entry["type"], entry.get("defined_in") or ""),
+            "key": (scope.entry_tag(entry), entry.get("defined_in") or ""),
             "name": r["name"], "def_file": r["def_file"],
             "forward": forward,
             "target_file": r["def_file"] or declared_in or "",
@@ -700,7 +700,7 @@ def compose(
     if seed_mode:
         seed_keys: set[tuple[str, str]] = set()
         for c in candidates:
-            if not is_seed(c["entry"], filter_spec, name_key="type"):
+            if not is_seed(c["entry"], filter_spec, name_key="name"):
                 continue
             if scope_enabled and not c["is_port"]:
                 if not _wrap_port_reachable(reach, c["name"], c["def_file"], by_name, port_paths):
@@ -745,7 +745,7 @@ def compose(
     # any of its emitted entries is port-scope, else "wrap". This
     # mirrors the convention used by syms_manifest.compose() and is
     # subject to the mixed-scope-in-one-dir limitation tracked in
-    # docs/TODOS.md.
+    # docs/TODO.md.
     entries_by_dir: dict[Path, list[dict[str, Any]]] = defaultdict(list)
     dir_scope: dict[Path, str] = {}
     # Out-of-band, target-specific analysis surface keyed by entry identity
@@ -768,7 +768,7 @@ def compose(
         else:
             dir_scope.setdefault(rel_dir, "wrap")
         if c.get("touched") is not None:
-            focus_by_key[(c["entry"]["type"], c["entry"].get("defined_in") or "")] = \
+            focus_by_key[(scope.entry_tag(c["entry"]), c["entry"].get("defined_in") or "")] = \
                 c["touched"]
 
     # Fill the raw cast graph per entry, keyed by tag (edges/casts.ql via
@@ -778,9 +778,10 @@ def compose(
     for entries in entries_by_dir.values():
         for e in entries:
             if "casted" in e:
-                e["casted"] = {"to": reach.casts_to(e["type"]),
-                               "from": reach.casts_from(e["type"])}
-        entries.sort(key=lambda e: e["type"])
+                _tag = scope.entry_tag(e)
+                e["casted"] = {"to": reach.casts_to(_tag),
+                               "from": reach.casts_from(_tag)}
+        entries.sort(key=lambda e: scope.entry_tag(e) or "")
     return entries_by_dir, dir_scope, focus_by_key
 
 
@@ -809,7 +810,7 @@ _COMMENT = (
     "downcasts and ASN1 punning all coexist there, unclassified. Synthetic "
     "kinds string/array (buffer-pass clusters) are agent-synthesized. "
     "Anonymous-aggregate fields carry the raw type string; deep inlining "
-    "deferred (see docs/TODOS.md)."
+    "deferred (see docs/TODO.md)."
 )
 
 

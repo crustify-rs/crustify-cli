@@ -14,7 +14,7 @@ description: >-
 # The crustify analysis oracle (`query` / `scaffold` / `audit`)
 
 `query` owns the manifest schema and the file layout: you read your worklist AND
-submit your findings *through it* -- never open or write a `syms.json` /
+submit your findings *through it* -- never write a `syms.json` /
 `types.json` directly. Everything is read-only except the two submit verbs
 (`--update`, `--create`), which validate the findings, map them onto the schema,
 and merge them under a lock (untouched slots left as-is; re-submitting is

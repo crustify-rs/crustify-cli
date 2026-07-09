@@ -180,7 +180,7 @@ def _type_stem(entry: dict[str, Any]) -> str:
     the struct tag with `_st` stripped (`ssl_session_st` -> `ssl_session`).
     """
     typedefs = entry.get("typedef") or []
-    chosen = typedefs[0] if typedefs else entry.get("type", "")
+    chosen = typedefs[0] if typedefs else (entry.get("name") or entry.get("type") or "")
     return _module_name(_strip_st(chosen or ""))
 
 
@@ -188,7 +188,7 @@ def _type_stem(entry: dict[str, Any]) -> str:
 
 class TypeMod(NamedTuple):
     stem: str            # snake module name (pre-collision-resolution)
-    tag: str             # C type tag (entry["type"])
+    tag: str             # C type tag (entry["name"])
     typedef: str | None  # public typedef, if any
     scope: str | None    # "port" / "wrap" / None (unknown)
     fields: tuple = ()   # field names (each gets a `// Field:` accessor anchor)
@@ -254,7 +254,7 @@ def _load_wrap_routing(
     for r in w.get("types", []):
         via = r.get("declared_in") or []
         if via:
-            type_via[r.get("type")] = via[0]
+            type_via[r.get("name") or r.get("type")] = via[0]
     return sym_via, type_via
 
 
@@ -312,8 +312,9 @@ def _synthetic_entries(analysis_root, manifest_dirs, want):
         except (OSError, ValueError):
             continue
         for e in doc.get("types", []):
-            if (e.get("kind") in _SYNTH_KINDS and e.get("type")
-                    and not str(e["type"]).startswith("_")):
+            _tag = e.get("name") or e.get("type")
+            if (e.get("kind") in _SYNTH_KINDS and _tag
+                    and not str(_tag).startswith("_")):
                 yield e
 
 
@@ -405,7 +406,7 @@ def compose_files(
         return _stub_at(f"{crate}/{md.as_posix()}", target_file)
 
     def add_type(entry: dict, scope_label: str) -> None:
-        tag = entry.get("type")
+        tag = entry.get("name") or entry.get("type")
         if not tag:
             return
         kind = entry.get("kind")
@@ -681,7 +682,7 @@ def _op_ownership(
         except (OSError, ValueError):
             continue
         for e in doc.get("types", []):
-            tag = e.get("type")
+            tag = e.get("name") or e.get("type")
             if not tag or str(tag).startswith(("_", "(")):
                 continue
             for op in scope.type_method_syms(e):

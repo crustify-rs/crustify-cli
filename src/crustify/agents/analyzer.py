@@ -183,17 +183,16 @@ class CrustifyTypeAnalyzer(CrustifyAgent):
         alloc_json = str(root_dir / "alloc.json")
         # Both stages are query-oracle agents (read/write through `crustify
         # query types`, which owns the schema + file layout). The `type_analyzer`
-        # stage reads the allocator universe (`alloc_manifest` -> alloc.json) to
-        # recognize the byte-level allocators a heap ctor calls; the
-        # `buffer_analyzer` stage uses the same file (as `alloc_doc`) plus its
+        # stage discovers the allocator universe via the oracle (`query mem`), so
+        # it no longer takes an `alloc_manifest` input. The `buffer_analyzer`
+        # stage still reads alloc.json directly (as `alloc_doc`) plus its
         # `selection`. Nothing else is referenced.
         return {
             "target":               self.target_rel,
             "repo_root":            str(self.repo_root),
             "manifests":            json.dumps(self._manifests, indent=2),
             "codeql_db":            str(root_dir / "codeql" / "db"),
-            "alloc_manifest":       alloc_json,   # type_analyzer
             # buffer_analyzer only:
             "selection":            self._selection,
-            "alloc_doc":            alloc_json,    # buffer_analyzer (same file)
+            "alloc_doc":            alloc_json,    # buffer_analyzer
         }

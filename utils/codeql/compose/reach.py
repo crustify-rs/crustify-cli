@@ -603,7 +603,7 @@ class Reach:
         `is_scalar` is parsed to bool at load time. The list preserves
         the CSV row order (CodeQL `Field` iteration order), which is
         not guaranteed to match declaration order — layout-faithful
-        ordering needs a fields.ql ordinal column (see docs/TODOS.md).
+        ordering needs a fields.ql ordinal column (see docs/TODO.md).
         """
         self._field_metadata: dict[tuple[str, str, str], tuple[str, bool]] = {}
         self._struct_field_list: dict[tuple[str, str], list[tuple[str, str, bool]]] = defaultdict(list)

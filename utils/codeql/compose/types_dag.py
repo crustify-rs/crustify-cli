@@ -154,7 +154,7 @@ def _entry_type_refs(entry: dict[str, Any]) -> set[str]:
 
 
 def _is_entry(entry: dict[str, Any]) -> bool:
-    tag = entry.get("type")
+    tag = entry.get("name") or entry.get("type")
     return bool(tag) and not str(tag).startswith("_")
 
 
@@ -171,7 +171,7 @@ def _collect(analysis_root: Path) -> dict[str, _Node]:
         for entry in doc.get("types", []):
             if not _is_entry(entry):
                 continue
-            tag = entry["type"]
+            tag = entry.get("name") or entry["type"]
             node = nodes.get(tag)
             if node is None:
                 node = nodes[tag] = _Node(tag)
@@ -193,7 +193,7 @@ def _build_typedef_map(nodes: dict[str, _Node],
         for entry in doc.get("types", []):
             if not _is_entry(entry):
                 continue
-            tag = entry["type"]
+            tag = entry.get("name") or entry["type"]
             for alias in entry.get("typedef") or []:
                 # Don't let an alias clobber a real tag of the same spelling.
                 alias_map.setdefault(alias, tag)

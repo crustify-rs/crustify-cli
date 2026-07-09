@@ -589,7 +589,7 @@ where the analysis is hardest.
    `T`'s accessors). Because each agent reasons only about its own
    type, **isolated per-entry agents partition consistently with no
    coordination** — this is what makes the per-entry orchestration
-   (TODOS §2026-06-05, now the default for types) sound. It also
+   (TODO.md §2026-06-05, now the default for types) sound. It also
    removes the "duplication anxiety" that produced the empty-ops bail.
    See `type_analyzer.md` §7.
 2. **Per-entry isolation can over-claim without (1).** Worth recording:
@@ -604,7 +604,7 @@ where the analysis is hardest.
 3. **Workload-weighted batching (structural, deferred).** Cap per-agent
    workload (field count and/or footprint size) and split an
    over-budget manifest dir into **sequential** sub-batches. Orthogonal
-   to (1); see TODOS §2026-06-05.
+   to (1); see TODO.md §2026-06-05.
 
 **Amendment (2026-06-06) — state the rule as declared-subject, both
 directions.** The "principal `self` argument" in (1) is the function's

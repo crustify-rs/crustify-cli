@@ -86,7 +86,7 @@ def _sym_filekey(defined_in: Any, declared_in: Any) -> str | None:
 
 class TypeNode:
     __slots__ = ("tag", "kind", "defined_in", "declared_in",
-                 "ctype_refs", "ops", "ctors", "dtor_syms", "dep_types", "dep_syms",
+                 "ctype_refs", "ops", "ctors", "drop_syms", "dep_types", "dep_syms",
                  "used_by_call", "cast_to", "cast_from", "elem_refs", "nfields")
 
     def __init__(self, tag: str) -> None:
@@ -97,7 +97,7 @@ class TypeNode:
         self.ctype_refs: set[str] = set()   # raw C type strings (field types)
         self.ops: set[str] = set()          # folded op/lifecycle symbol names
         self.ctors: list[str] = []
-        self.dtor_syms: set[str] = set()    # dtor storage/fields fn names (sig-fold only)
+        self.drop_syms: set[str] = set()    # dtor storage/fields fn names (sig-fold only)
         self.dep_types: set[str] = set()    # resolved canonical tags
         self.dep_syms: set[str] = set()     # resolved free-symbol names
         self.used_by_call: set[str] = set()  # callback: consumer fn names (used_by.call)
@@ -172,8 +172,8 @@ def _base_type_name(type_str: str | None) -> str | None:
     return name if _IDENT_RE.match(name) else None
 
 
-def _is_real(entry: dict, key: str = "type") -> bool:
-    v = entry.get(key)
+def _is_real(entry: dict, key: str = "name") -> bool:
+    v = entry.get(key) or entry.get("type")  # `type` fallback: un-migrated records
     # Reject empty and anonymous type tags (`(unnamed struct/union/enum)`):
     # the latter share one synthetic name across hundreds of distinct
     # file-local definitions, are not referenceable by name (a field of anon
@@ -225,7 +225,7 @@ def _collect(analysis_root: Path):
         for e in doc.get("types", []):
             if not _is_real(e):
                 continue
-            tag = e["type"]
+            tag = e.get("name") or e["type"]
             n = types.get(tag) or types.setdefault(tag, TypeNode(tag))
             if n.kind is None:
                 n.kind = e.get("kind")
@@ -271,7 +271,7 @@ def _collect(analysis_root: Path):
             # type_method_syms; a synthetic cluster's is NOT (its `ops` is the
             # explicit op list, sans ctor/dtor) — so its dtor's signature types
             # (e.g. `git_pool_clear(git_pool*)`) would otherwise never fold in.
-            n.dtor_syms |= set(_scope.dtor_op_names(_scope.lifetime(e).get("dtor")))
+            n.drop_syms |= set(_scope.drop_op_names(_scope.lifetime(e).get("drop")))
 
     for f in sorted(analysis_root.rglob("syms.json")):
         try:
@@ -345,7 +345,7 @@ def _alias_map(analysis_root: Path, types: dict[str, TypeNode]) -> dict[str, str
             if not _is_real(e):
                 continue
             for alias in e.get("typedef") or []:
-                amap.setdefault(alias, e["type"])
+                amap.setdefault(alias, e.get("name") or e["type"])
     return amap
 
 
@@ -441,7 +441,7 @@ def _build_edges(types, syms, amap):
             res_ctype(ref, n.dep_types)
             if t in types and t != tag:
                 wedge[(tag, t)] += 1
-        for opname in (set(n.ops) | set(n.ctors) | n.dtor_syms):   # op/ctor/dtor SIGNATURE refs
+        for opname in (set(n.ops) | set(n.ctors) | n.drop_syms):   # op/ctor/dtor SIGNATURE refs
             for sn in name2syms.get(opname, ()):
                 for ref in sn.sig_type_refs:
                     t = _resolve_ctype(ref, amap, types)

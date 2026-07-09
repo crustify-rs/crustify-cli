@@ -22,9 +22,10 @@ Modes:
 Checks run by the GATE:
 
   - op-uniqueness      a non-lifecycle op belongs to at most one type.
-  - ptr-invariants     per pointer field: owned XOR borrowed; exclusive
-                       only when owned; borrowed => lifetime set; string
-                       XOR array; const => mutable == false.
+  - ptr-invariants     per pointer field: exclusive/shared only when owned;
+                       borrowed => lifetime set; string XOR array; const =>
+                       mutable != true. (owned+borrowed and exclusive+shared
+                       MAY co-occur -- runtime-conditional dual ownership.)
 
 Lifecycle ops — the union of every entry's `ctors`, `dtor`, `up_ref`,
 `clone`, `locking.{acquire,release}` — are EXEMPT from op-uniqueness in
@@ -69,7 +70,7 @@ def load(analysis_root: Path) -> dict[str, list[tuple[dict, Path]]]:
         except (ValueError, OSError):
             continue
         for e in doc.get("types", []):
-            tag = e.get("type")
+            tag = e.get("name") or e.get("type")
             if tag:
                 by_type[tag].append((e, f))
     return by_type
@@ -98,17 +99,11 @@ def lifetime_set(by_type) -> set[str]:
             lc = scope.lifetime(entry)
             out |= set(scope.alloc_fns(lc))
             # `dtor` is `{shared, exclusive, fields}` (all lifecycle funcs);
-            # `scope.dtor_op_names` tolerates the legacy `{storage, fields}`
+            # `scope.drop_op_names` tolerates the legacy `{storage, fields}`
             # and flat-string shapes during migration.
-            out |= set(scope.dtor_op_names(lc.get("dtor")))
-            if lc.get("up_ref"):
-                out.add(lc["up_ref"])
-            out |= set(lc.get("clones") or [])
-            lock = lc.get("locking") or {}
-            for key in ("acquire", "release"):
-                v = lock.get(key)
-                if v:
-                    out.add(v)
+            out |= set(scope.drop_op_names(lc.get("drop")))
+            out |= set(scope.clone_op_names(lc))
+            out |= set(scope.locking_op_names(lc.get("locking")))
     return out
 
 
@@ -142,7 +137,7 @@ def check_entry_shape(analysis_root: Path) -> list[Finding]:
             ))
             continue
         for i, e in enumerate(doc.get("types", [])):
-            if not e.get("type"):
+            if not (e.get("name") or e.get("type")):
                 rel = f
                 out.append(Finding(
                     "error", "entry-shape", str(rel),
@@ -202,14 +197,9 @@ def check_ptr_invariants(by_type) -> list[Finding]:
                 fname = fld.get("name", "?")
                 owned = ptr.get("owned")
                 borrowed = ptr.get("borrowed")
-                exclusive = ptr.get("exclusive")
-                shared = ptr.get("shared")
-                lifetime = ptr.get("lifetime")
                 string = ptr.get("string")
                 array = ptr.get("array")
                 mutable = ptr.get("mutable")
-                container = ptr.get("container")
-                owned_elem = ptr.get("owned_elem")
                 const = "const" in (fld.get("type") or "")
 
                 def bad(msg):
@@ -218,22 +208,25 @@ def check_ptr_invariants(by_type) -> list[Finding]:
                         f"field '{fname}': {msg}",
                     ))
 
-                if owned and borrowed:
-                    bad("owned and borrowed both true (must be XOR)")
-                if exclusive and not owned:
-                    bad("exclusive true but owned not true")
-                if shared and not owned:
-                    bad("shared true but owned not true")
-                if exclusive and shared:
-                    bad("exclusive and shared both true (must be XOR when owned)")
-                if borrowed and not lifetime:
-                    bad("borrowed true but lifetime unset")
-                if string and array:
-                    bad("string and array both true (must be XOR)")
+                # Ownership dependencies are now STRUCTURAL: exclusive/shared nest
+                # under `owned`, lifetime under `borrowed`, element-ownership under
+                # `array.by_ref`. `owned` and `borrowed` may BOTH be non-null
+                # (runtime-conditional dual ownership). Only shape validity, the
+                # string/array mutex, borrowed-requires-lifetime, and const/mutable
+                # remain.
+                if array is not None:
+                    if not isinstance(array, dict):
+                        bad("array must be null or {by_val|by_ref}")
+                    elif len([k for k in ("by_val", "by_ref") if array.get(k)]) != 1:
+                        bad("array needs exactly one of by_val / by_ref")
+                if string and array is not None:
+                    bad("string and array both set (must be XOR)")
+                if isinstance(borrowed, dict) and not borrowed.get("lifetime"):
+                    bad("borrowed set but lifetime unset")
+                if owned is not None and not isinstance(owned, dict):
+                    bad("owned must be null or {exclusive, shared}")
                 if const and mutable is True:
                     bad("const in type but mutable == true")
-                if owned_elem is not None and not container:
-                    bad("owned_elem set but container not true")
     return out
 
 

@@ -98,7 +98,7 @@ def _index_entry_files(analysis_root: Path) -> dict[str, str]:
         except (ValueError, OSError):
             continue
         for entry in doc.get("types", []):
-            tag = entry.get("type")
+            tag = entry.get("name") or entry.get("type")
             if tag and not str(tag).startswith("_"):
                 index.setdefault(tag, str(f))
     return index

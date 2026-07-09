@@ -516,7 +516,7 @@ def _forward_syms_of(
     flattened by CodeQL into the enclosing function's call edges, so
     this set captures everything the symbol "touches" regardless of
     whether the touch was written directly in source or came via a
-    macro expansion. See `docs/TODOS.md` §2026-06-04 for the
+    macro expansion. See `docs/TODO.md` §2026-06-04 for the
     consequences.
 
     Returned tuples match `entry_key`-shape: `(name, def_file or "")`.
@@ -551,7 +551,7 @@ def compose(
         manifest with its scope without persisting the tag to disk.
         Assumes a stem-group manifest dir carries entries of a
         single scope only; the mixed-scope case (a stem-group split
-        by `config.out_of_scope.paths`) is tracked in docs/TODOS.md.
+        by `config.out_of_scope.paths`) is tracked in docs/TODO.md.
 
     Behaviour modes (driven by `filter_spec`):
 
@@ -791,7 +791,7 @@ def compose(
     # dirs whose files all sit on one side of scope.json. The
     # mixed-scope-in-one-dir case (a stem-group split by
     # `config.out_of_scope.paths`) is a known limitation tracked in
-    # docs/TODOS.md.
+    # docs/TODO.md.
     entries_by_dir: dict[Path, list[dict[str, Any]]] = defaultdict(list)
     dir_scope: dict[Path, str] = {}
     for c in candidates:

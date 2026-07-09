@@ -113,7 +113,7 @@ def _analysis_focus(entry: dict, scope: str,
     """
     if scope == "port":
         return "all"
-    key = (entry.get("type") or "", entry.get("defined_in") or "")
+    key = (entry.get("name") or entry.get("type") or "", entry.get("defined_in") or "")
     if focus_by_key is not None and key in focus_by_key:
         fields = list(focus_by_key[key])
     else:
@@ -167,9 +167,10 @@ def _build_chains(
         path; jobs within a chain share the path and run sequentially
         (write-safe); chains run in parallel.
 
-    `entry_tag_key` is ``"name"`` for symbols and ``"type"`` for
-    types — the key under which each entry carries its unique identity
-    within a manifest. Both subjects emit schema-agnostic identity
+    `entry_tag_key` is ``"name"`` for both symbols and types — the key
+    under which each entry carries its unique identity within a manifest
+    (types were migrated from ``type`` -> ``name``). Both subjects emit
+    schema-agnostic identity
     records (a type's ``{tag, file}``; a symbol batch's ``{symbols:
     [{name, file}], scope}``) that the agent resolves through `crustify
     query`; the merge primitive always preserves prior-run annotations.
@@ -338,7 +339,7 @@ def _run_subject_manifests_list(
         from compose.manifest_merge import merge_manifest_file, type_key as key_fn
         manifest_filename = manifest_name("types")
         entries_key = "types"
-        entry_tag_key = "type"
+        entry_tag_key = "name"
         agent_cls = CrustifyTypeAnalyzer
     else:
         raise ValueError(f"unknown subject: {subject!r}")
@@ -768,7 +769,7 @@ def redo_types(
     _delete_entries(
         target, manifest_name("types"),
         entries_key="types",
-        name_key="type",
+        name_key="name",
         all_entries=all_entries,
         dirs=dirs, files=files, names=names,
     )
