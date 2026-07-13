@@ -20,12 +20,12 @@
           "type": "SSL_CONNECTION",
           "const": false,
           "depth": 1,
-          "array": false,
+          "array": null,
           "string": false,
-          "moved": false,
-          "borrowed": false,
+          "owned": null,
+          "borrowed": null,
+          "nullable": false,
           "mutable": null,
-          "lifetime": null,
           "note": null
         }
       ],
@@ -75,6 +75,7 @@
     {
       "name": "SSL_new",
       "kind": "function_exported",
+      "macro": null,
       "declared_in": [
         "include/openssl/ssl.h",
         "ssl/ssl_local.h"
@@ -88,27 +89,34 @@
           "type": "SSL_CTX",
           "const": false,
           "depth": 1,
-          "array": false,
+          "array": null,
           "string": false,
-          "moved": false,
-          "borrowed": false,
+          "owned": {
+            "exclusive": false,
+            "shared": true
+          },
+          "borrowed": null,
+          "nullable": false,
           "mutable": null,
-          "lifetime": null,
-          "note": null
+          "note": "SSL_new bumps the SSL_CTX refcount and retains a shared ref -> CArc"
         }
       ],
       "ptr_ret": {
         "type": "SSL",
         "const": false,
         "depth": 1,
-        "array": false,
+        "array": null,
         "string": false,
-        "moved": true,
-        "borrowed": false,
+        "owned": {
+          "exclusive": true,
+          "shared": false
+        },
+        "borrowed": null,
+        "nullable": true,
         "mutable": null,
-        "lifetime": null,
-        "note": null
-      }
+        "note": "fresh SSL, caller owns -> CBox"
+      },
+      "lifetime": null
     },
     {
       "name": "PACKET_remaining",
@@ -125,12 +133,12 @@
           "type": "PACKET",
           "const": true,
           "depth": 1,
-          "array": false,
+          "array": null,
           "string": false,
-          "moved": false,
-          "borrowed": false,
+          "owned": null,
+          "borrowed": null,
+          "nullable": false,
           "mutable": false,
-          "lifetime": null,
           "note": null
         }
       ],
@@ -139,6 +147,11 @@
     {
       "name": "TLS_MAX_VERSION_INTERNAL",
       "kind": "macro",
+      "macro": {
+        "alias": false,
+        "const": true,
+        "typegen": false
+      },
       "declared_in": [
         "ssl/statem/statem.h"
       ],
@@ -158,11 +171,56 @@
     {
       "name": "SSL_OP_NO_TLSv1_3",
       "kind": "macro",
+      "macro": {
+        "alias": false,
+        "const": true,
+        "typegen": false
+      },
       "declared_in": [
         "include/openssl/ssl.h"
       ],
       "defined_in": "include/openssl/ssl.h",
       "type": null
+    },
+    {
+      "_comment": [
+        "A type generator: one instantiation emits the `stack_st_X509` struct and",
+        "its whole `sk_X509_*` op family. Bindgen binds the EXPANSION, so the",
+        "macro itself needs no shim."
+      ],
+      "name": "DEFINE_STACK_OF",
+      "kind": "macro",
+      "macro": {
+        "alias": false,
+        "const": false,
+        "typegen": true
+      },
+      "declared_in": [
+        "include/openssl/safestack.h"
+      ],
+      "defined_in": "include/openssl/safestack.h",
+      "type": null,
+      "lifetime": null
+    },
+    {
+      "_comment": [
+        "None of the three: the expansion yields no constant, references no symbol,",
+        "and declares no type. It has no bindgen binding, so this is the one macro",
+        "shape that gets a C shim."
+      ],
+      "name": "PACKET_remaining_bytes",
+      "kind": "macro",
+      "macro": {
+        "alias": false,
+        "const": false,
+        "typegen": false
+      },
+      "declared_in": [
+        "ssl/packet_local.h"
+      ],
+      "defined_in": "ssl/packet_local.h",
+      "type": null,
+      "lifetime": null
     },
     {
       "name": "tls11downgrade",
@@ -188,12 +246,12 @@
           "type": "X509_STORE_CTX",
           "const": false,
           "depth": 1,
-          "array": false,
+          "array": null,
           "string": false,
-          "moved": null,
+          "owned": null,
           "borrowed": null,
+          "nullable": false,
           "mutable": null,
-          "lifetime": null,
           "note": null
         }
       ],
@@ -219,6 +277,265 @@
           }
         ]
       }
+    },
+    {
+      "name": "CRYPTO_malloc",
+      "kind": "function_exported",
+      "declared_in": [
+        "include/openssl/crypto.h"
+      ],
+      "defined_in": "crypto/mem.c",
+      "type": "void *CRYPTO_malloc(size_t num, const char *file, int line)",
+      "ptr_args": [
+        {
+          "position": 1,
+          "name": "file",
+          "type": "char",
+          "const": true,
+          "depth": 1,
+          "array": null,
+          "string": true,
+          "owned": null,
+          "borrowed": null,
+          "nullable": false,
+          "mutable": null,
+          "note": null
+        }
+      ],
+      "ptr_ret": {
+        "type": "void",
+        "const": false,
+        "depth": 1,
+        "array": null,
+        "string": false,
+        "owned": {
+          "exclusive": true,
+          "shared": false
+        },
+        "borrowed": null,
+        "nullable": true,
+        "mutable": null,
+        "note": "raw region, caller owns -> CBox / CVec"
+      },
+      "lifetime": {
+        "alloc": {
+          "role": "allocator",
+          "freed_by": [
+            "CRYPTO_free"
+          ],
+          "synth": "array"
+        }
+      }
+    },
+    {
+      "name": "CRYPTO_free",
+      "kind": "function_exported",
+      "declared_in": [
+        "include/openssl/crypto.h"
+      ],
+      "defined_in": "crypto/mem.c",
+      "type": "void CRYPTO_free(void *ptr, const char *file, int line)",
+      "ptr_args": [
+        {
+          "position": 0,
+          "name": "ptr",
+          "type": "void",
+          "const": false,
+          "depth": 1,
+          "array": null,
+          "string": false,
+          "owned": {
+            "exclusive": true,
+            "shared": false
+          },
+          "borrowed": null,
+          "nullable": true,
+          "mutable": null,
+          "note": "consumed and freed (free(NULL) is a no-op)"
+        },
+        {
+          "position": 1,
+          "name": "file",
+          "type": "char",
+          "const": true,
+          "depth": 1,
+          "array": null,
+          "string": true,
+          "owned": null,
+          "borrowed": null,
+          "nullable": false,
+          "mutable": null,
+          "note": null
+        }
+      ],
+      "ptr_ret": null,
+      "lifetime": {
+        "alloc": {
+          "role": "free"
+        }
+      }
+    },
+    {
+      "name": "CRYPTO_strdup",
+      "kind": "function_exported",
+      "declared_in": [
+        "include/openssl/crypto.h"
+      ],
+      "defined_in": "crypto/mem.c",
+      "type": "char *CRYPTO_strdup(const char *str, const char *file, int line)",
+      "ptr_args": [
+        {
+          "position": 0,
+          "name": "str",
+          "type": "char",
+          "const": true,
+          "depth": 1,
+          "array": null,
+          "string": true,
+          "owned": null,
+          "borrowed": null,
+          "nullable": false,
+          "mutable": null,
+          "note": null
+        },
+        {
+          "position": 1,
+          "name": "file",
+          "type": "char",
+          "const": true,
+          "depth": 1,
+          "array": null,
+          "string": true,
+          "owned": null,
+          "borrowed": null,
+          "nullable": false,
+          "mutable": null,
+          "note": null
+        }
+      ],
+      "ptr_ret": {
+        "type": "char",
+        "const": false,
+        "depth": 1,
+        "array": null,
+        "string": true,
+        "owned": {
+          "exclusive": true,
+          "shared": false
+        },
+        "borrowed": null,
+        "nullable": true,
+        "mutable": null,
+        "note": "fresh string, caller owns"
+      },
+      "lifetime": {
+        "clone": {
+          "freed_by": [
+            "CRYPTO_free"
+          ],
+          "synth": "string"
+        }
+      }
+    },
+    {
+      "name": "CRYPTO_UP_REF",
+      "kind": "function_inline_header",
+      "declared_in": [
+        "include/internal/refcount.h"
+      ],
+      "defined_in": "include/internal/refcount.h",
+      "type": "int CRYPTO_UP_REF(CRYPTO_REF_COUNT *refcnt, int *ret)",
+      "ptr_args": [
+        {
+          "position": 0,
+          "name": "refcnt",
+          "type": "CRYPTO_REF_COUNT",
+          "const": false,
+          "depth": 1,
+          "array": null,
+          "string": false,
+          "owned": null,
+          "borrowed": null,
+          "nullable": false,
+          "mutable": true,
+          "note": null
+        },
+        {
+          "position": 1,
+          "name": "ret",
+          "type": "int",
+          "const": false,
+          "depth": 1,
+          "array": null,
+          "string": false,
+          "owned": null,
+          "borrowed": null,
+          "nullable": false,
+          "mutable": true,
+          "note": null
+        }
+      ],
+      "ptr_ret": null,
+      "lifetime": {
+        "refcount": {
+          "op": "up",
+          "cluster": "CRYPTO_REF_COUNT"
+        }
+      }
+    },
+    {
+      "name": "CRYPTO_THREAD_write_lock",
+      "kind": "function_exported",
+      "declared_in": [
+        "include/openssl/crypto.h"
+      ],
+      "defined_in": "crypto/threads_pthread.c",
+      "type": "int CRYPTO_THREAD_write_lock(CRYPTO_RWLOCK *lock)",
+      "ptr_args": [
+        {
+          "position": 0,
+          "name": "lock",
+          "type": "CRYPTO_RWLOCK",
+          "const": false,
+          "depth": 1,
+          "array": null,
+          "string": false,
+          "owned": null,
+          "borrowed": null,
+          "nullable": false,
+          "mutable": true,
+          "note": null
+        }
+      ],
+      "ptr_ret": null,
+      "lifetime": {
+        "lock": {
+          "op": "write_lock",
+          "cluster": "CRYPTO_RWLOCK"
+        }
+      }
+    },
+    {
+      "_comment": [
+        "Aliases `CRYPTO_malloc(n, __FILE__, __LINE__)`. Rust calls the target, so",
+        "the macro needs no shim -- and it carries `lifetime: null`: the allocator",
+        "block lives on `CRYPTO_malloc`, the callable."
+      ],
+      "name": "OPENSSL_malloc",
+      "kind": "macro",
+      "macro": {
+        "alias": true,
+        "const": false,
+        "typegen": false
+      },
+      "declared_in": [
+        "include/openssl/crypto.h"
+      ],
+      "defined_in": "include/openssl/crypto.h",
+      "type": null,
+      "ptr_args": [],
+      "ptr_ret": null,
+      "lifetime": null
     }
   ]
 }

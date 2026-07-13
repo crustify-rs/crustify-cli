@@ -17,10 +17,10 @@ Gating rules (intentionally strict — no implicit transitions):
   | Subcommand        | Required pre-state                | Action               |
   |-------------------|-----------------------------------|----------------------|
   | `build propose`   | build.json must NOT exist         | run Phase 1          |
-  | `build propose --redo` | (any)                        | delete build.json,   |
+  | `build propose --reset` | (any)                        | delete build.json,   |
   |                   |                                   | then run Phase 1     |
   | `build execute`   | build.json MUST exist             | run Phase 2 + Phase 3|
-  | `build execute --redo` | build.json MUST exist        | delete codeql/db/,   |
+  | `build execute --reset` | build.json MUST exist        | delete codeql/db/,   |
   |                   |                                   | then run Phase 2 + 3 |
 
 `build execute` always runs the full configure + build + tests +
@@ -39,28 +39,28 @@ from pathlib import Path
 from crustify.agents.build import CrustifyBuildExecute, CrustifyBuildPropose
 
 
-def build_propose(target: Path, *, redo: bool = False) -> None:
+def build_propose(target: Path, *, reset: bool = False) -> None:
     """Phase 1: draft `<repo_root>/.crustify/build.json`.
 
-    Refuses to run if `build.json` already exists, unless `redo=True`,
+    Refuses to run if `build.json` already exists, unless `reset=True`,
     in which case the existing file is deleted first.
     """
     propose = CrustifyBuildPropose(target)
     build_json = propose.root_store.path("build.json")
 
     if build_json.exists():
-        if not redo:
+        if not reset:
             print(
                 f"[crustify build propose] build.json already exists at "
                 f"{build_json}.\n"
-                f"                          Pass --redo to delete it and "
+                f"                          Pass --reset to delete it and "
                 f"re-propose, or run `build execute` to use it.",
                 file=sys.stderr,
             )
             sys.exit(1)
         build_json.unlink()
         print(
-            f"[crustify build propose] --redo: deleted {build_json}; "
+            f"[crustify build propose] --reset: deleted {build_json}; "
             f"re-proposing."
         )
 
@@ -72,11 +72,11 @@ def build_propose(target: Path, *, redo: bool = False) -> None:
     )
 
 
-def build_execute(target: Path, *, redo: bool = False) -> None:
+def build_execute(target: Path, *, reset: bool = False) -> None:
     """Phase 2 + 3: configure + build + tests + CodeQL DB, then T1/T2 extract.
 
     Refuses to run if `build.json` does not exist (point user at
-    `build propose`). With `redo=True`, deletes any existing CodeQL
+    `build propose`). With `reset=True`, deletes any existing CodeQL
     database before re-executing so Phase 2 produces a fresh DB.
     """
     execute = CrustifyBuildExecute(target)
@@ -96,10 +96,10 @@ def build_execute(target: Path, *, redo: bool = False) -> None:
     from crustify.layout import Layout
     codeql_db = Layout(repo_root).codeql_db
 
-    if redo and codeql_db.exists():
+    if reset and codeql_db.exists():
         shutil.rmtree(codeql_db)
         print(
-            f"[crustify build execute] --redo: deleted {codeql_db}; "
+            f"[crustify build execute] --reset: deleted {codeql_db}; "
             f"re-executing."
         )
 

@@ -1,3 +1,10 @@
+# THIS DOCUMENT IS OBSOLETE
+
+The instructions, principles, guidelines in this document
+should not be followed anymore.
+
+---
+
 # Porting rules — hard discipline for the C→Rust port
 
 Rules that apply across every wrapper, accessor, and FFI export.

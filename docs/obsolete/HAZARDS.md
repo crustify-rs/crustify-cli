@@ -1,3 +1,10 @@
+# THIS DOCUMENT IS OBSOLETE
+
+The instructions, principles, guidelines in this document
+should not be followed anymore.
+
+---
+
 # Hazards — UB, soundness gaps, borrow-checker frontiers
 
 A catalogue of the failure modes the port engineers against. Each

@@ -10,8 +10,10 @@ import time as _time
 SESSION_ID: str = _time.strftime("%Y-%m-%d_%H-%M-%S")
 """Timestamp label shared by all agents in a single ``crustify`` run.
 
-Used to group per-session log files under ``.crustify/logs/<SESSION_ID>/``
-and KISS trajectory artifacts under ``.crustify/kiss/<SESSION_ID>/``.
+Used to group per-session log files under ``.crustify/logs/<SESSION_ID>/``,
+and -- under the ``relentless`` backend only -- KISS trajectory artifacts
+under ``.crustify/kiss/<SESSION_ID>/``. The ``agents_sdk`` backend writes no
+kiss artifacts and creates no such directory.
 """
 
 
@@ -76,6 +78,16 @@ MODEL_OVERRIDE: str | None = None
 """Set by the CLI ``--model`` flag. When non-None, every agent runs against
 this model name (kiss naming, e.g. ``codex/gpt-5.5``, ``claude-opus-4-8``)
 instead of its hard-coded per-agent default. None => each agent's own default."""
+
+BACKEND: str = "agents_sdk"
+"""Which agent backend drives each stage (set by the CLI ``--backend`` flag):
+
+  - ``agents_sdk`` (default) -- the OpenAI Agents SDK. Claude models route
+    through LiteLLM to the Anthropic API; OpenAI models run natively. API-key
+    auth, pure in-process.
+  - ``relentless`` -- the original kiss ``RelentlessAgent`` path.
+
+See :mod:`crustify.agents.backends`."""
 
 LOG_TO_CONSOLE: bool = True
 """When ``False``, suppress live console output from agents."""

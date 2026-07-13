@@ -170,10 +170,10 @@ def _build_chains(
     `entry_tag_key` is ``"name"`` for both symbols and types — the key
     under which each entry carries its unique identity within a manifest
     (types were migrated from ``type`` -> ``name``). Both subjects emit
-    schema-agnostic identity
-    records (a type's ``{tag, file}``; a symbol batch's ``{symbols:
-    [{name, file}], scope}``) that the agent resolves through `crustify
-    query`; the merge primitive always preserves prior-run annotations.
+    schema-agnostic identity records (a type's ``{tag, file, scope}``; a
+    symbol batch's ``{symbols: [{name, file}]}``) that the agent resolves
+    through `crustify query`; the merge primitive always preserves
+    prior-run annotations.
     """
     def mfest_path(rel_dir: Path) -> str:
         return str(out_root / rel_dir / manifest_filename)
@@ -217,8 +217,7 @@ def _build_chains(
                     # (per_entry=False); this single-symbol shape keeps the
                     # per-entry path consistent if it is ever enabled for syms.
                     record = {"symbols": [{"name": tag,
-                                           "file": e.get("defined_in")}],
-                              "scope": scope}
+                                           "file": e.get("defined_in")}]}
                 chains.append([(stage_suffix, [record])])
         if not parallel:
             # Collapse into one big chain so all jobs run serially.
@@ -245,24 +244,23 @@ def _build_chains(
     # symbol via `query syms --name <name> --file <file>` and submits findings
     # via `--update`, never opening the manifest (mirrors the type analyzer).
     # `file` is the entry's defining file (None for a header typedef such as a
-    # callback — disambiguated by name). Scope is per-dir (a stem-group manifest
-    # is single-scope by contract), applied to every symbol in the batch.
+    # callback — disambiguated by name). No `scope` rides along: symbol analysis
+    # is uniform, a fact about the C code, independent of what the porter later
+    # does with it.
     def syms_for(entries: list[dict]) -> list[dict]:
         return [{"name": e["name"], "file": e.get("defined_in")}
                 for e in entries if e.get("name")]
 
     if not parallel:
         all_records = [
-            {"symbols": syms_for(entries), "scope": dir_scope_for(rel_dir)}
-            for rel_dir, entries in sorted_dirs
+            {"symbols": syms_for(entries)} for rel_dir, entries in sorted_dirs
         ]
         return [[("all", all_records)]]
 
     chains: list[list[tuple[str, list[dict]]]] = []
     for rel_dir, entries in sorted_dirs:
         slug = str(rel_dir).replace("/", "_")
-        record = {"symbols": syms_for(entries), "scope": dir_scope_for(rel_dir)}
-        chains.append([(slug, [record])])
+        chains.append([(slug, [{"symbols": syms_for(entries)}])])
     return chains
 
 
@@ -469,8 +467,8 @@ def _run_subject_manifests_list(
             f"invocation(s) failed:\n{details}\n\n"
             f"Successfully ran {total_jobs - len(failures)}/{total_jobs} "
             f"agents. The merge primitive's field-level union means a "
-            f"retry (e.g. `--redo --dir <failed_dir>` or "
-            f"`--name <failed_tag>`) only redoes the failed work."
+            f"retry (e.g. `--reset --dir <failed_dir>` or "
+            f"`--name <failed_tag>`) only re-runs the failed work."
         )
 
 
@@ -585,6 +583,26 @@ def analyze_types(
     # --compose-only (and in seed mode, as before).
     if not seed_mode and not compose_only:
         run_buffer_pass(target)
+
+
+def run_lifetime_pass(target: Path) -> None:
+    """Single cross-cutting pass that tags lifecycle primitives. The symbol
+    analyzer, run in `selection="lifetimes"` mode, discovers each allocator /
+    free / clone / refcount / lock primitive from source and writes a
+    `lifetime` block onto that symbol's entry.
+
+    No pre-compose and no gate: the primitive's deterministic base record is
+    composed ON DEMAND by the agent itself (`analyze symbols --compose-only
+    --name <prim>`) right before it tags it, so the pass needs no prior tree
+    state. Discovery mode is signalled by the sentinel `LIFETIMES_TAG`
+    worklist record. See prompts/analyzer/symbol_analyzer.md (lifetime mode).
+    """
+    tag = CrustifySymbolAnalyzer.LIFETIMES_TAG
+    CrustifySymbolAnalyzer(
+        target,
+        manifests=[{"symbols": [{"name": tag, "file": None}]}],
+        stage_suffix="lifetimes",
+    ).run()
 
 
 def run_buffer_pass(target: Path) -> None:
@@ -708,25 +726,25 @@ def _wrap_scope(target: Path) -> None:
     )
 
 
-# ---------------------------------------------------------------- redo helpers
+# ---------------------------------------------------------------- reset helpers
 
-def redo_scope(target: Path) -> None:
+def reset_scope(target: Path) -> None:
     """Delete scope.json so the next ``analyze scope`` re-emits fresh."""
     p = Layout.discover(target).scope(target)
     if p.exists():
         p.unlink()
-        print(f"[crustify --redo] removed {p}")
+        print(f"[crustify --reset] removed {p}")
 
 
-def redo_dag(target: Path) -> None:
+def reset_dag(target: Path) -> None:
     """Delete deps-dag.json so the next ``analyze dag`` re-emits fresh."""
     p = Layout.discover(target).analysis / "deps-dag.json"
     if p.exists():
         p.unlink()
-        print(f"[crustify --redo] removed {p}")
+        print(f"[crustify --reset] removed {p}")
 
 
-def redo_syms(
+def reset_syms(
     target: Path, *,
     all_entries: bool = False,
     dirs: Iterable[str] | None = None,
@@ -734,7 +752,7 @@ def redo_syms(
     names: Iterable[str] | None = None,
 ) -> None:
     """Delete syms.json entries matching the narrowing flags (or all of them
-    when `all_entries` — the `--all --redo` reset).
+    when `all_entries` — the `--all --reset` reset).
 
     - `dirs`: repo-rel source-tree dirs; deletes every entry whose
       `defined_in` (or, when null, `declared_in[0]`) is under one of
@@ -757,7 +775,7 @@ def redo_syms(
     )
 
 
-def redo_types(
+def reset_types(
     target: Path, *,
     all_entries: bool = False,
     dirs: Iterable[str] | None = None,
@@ -765,7 +783,7 @@ def redo_types(
     names: Iterable[str] | None = None,
 ) -> None:
     """Delete types.json entries matching the narrowing flags (or all of them
-    when `all_entries` — the `--all --redo` reset)."""
+    when `all_entries` — the `--all --reset` reset)."""
     _delete_entries(
         target, manifest_name("types"),
         entries_key="types",
@@ -835,7 +853,7 @@ def _delete_entries(
 ) -> None:
     """Walk the analysis tree; for each `<filename>`, delete entries
     matching any of the narrowing predicates (dirs, files, names, kinds),
-    or EVERY entry when `all_entries` is set (the `--all --redo` reset — so a
+    or EVERY entry when `all_entries` is set (the `--all --reset` reset — so a
     full re-analysis recomposes fresh, current-schema skeletons rather than
     merging onto stale ones).
 
@@ -874,4 +892,4 @@ def _delete_entries(
         if removed:
             doc[entries_key] = kept
             p.write_text(json.dumps(doc, indent=2) + "\n")
-            print(f"[crustify --redo] removed {removed} entries from {p}")
+            print(f"[crustify --reset] removed {removed} entries from {p}")

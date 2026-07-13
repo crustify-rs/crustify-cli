@@ -1,137 +1,13 @@
 {
   "_comment": [
-    "Example `<target>/.crustify/alloc.json` produced by `CrustifyAllocAnalyzer`.",
-    "Catalogues a codebase's UNTYPED allocator surface organised BY DEALLOCATOR",
-    "FAMILY: each `families` entry is ONE free/deallocator plus the FLAT list of",
-    "routines whose output it releases. SCOPE: only untyped allocators are catalogued",
-    "- byte-level producers returning `void*` (raw bytes) and string producers",
-    "returning `char*` / single-byte scalar pointers. An allocator parameterised by",
-    "or returning a named aggregate type is a TYPE CONSTRUCTOR owned by the type-lifecycle /",
-    "wrapper analysis, NOT catalogued here; a typed disposer likewise does not anchor a family. Every in-scope",
-    "buffer-producer is one `allocators[]` entry - a plain allocation, a resize",
-    "(`realloc`, a `(ptr,size)` signature), or a duplicator (`*strdup`/`*memdup`)",
-    "alike - with the operation read from its `type` signature and qualifier flags,",
-    "NOT an explicit `op` tag. An allocator may appear under MORE THAN ONE family",
-    "when its output can be released by more than one deallocator (e.g. a plain free",
-    "and a clearing free - distinct families because the wrapper's drop strategy is",
-    "fixed by which C free it calls). Non-allocating copies (`memcpy`) that write",
-    "into a CALLER-owned dest are attached to each family's `copies[]`. Plus",
-    "`refcounts`, `locks`, `cleansers`. Macro variants are RESOLVED to the underlying",
-    "symbols they expand to (FFI never calls macros). Downstream: the buffer pass of",
-    "`CrustifyTypeAnalyzer` (synthesizes `string`/`array` clusters), the",
-    "strings/arrays type-wrapper prompts, lifecycle classification. Values are",
-    "GENERIC (libc + a fictional `proj_*` layer) illustrating every archetype; a real",
-    "run substitutes the target's symbols, one family per deallocator."
-  ],
-  "_comment_syms_base": [
-    "Every primitive (alloc, free, copy, refcount op, lock op, refcount type, lock",
-    "type) carries the **syms.json base shape**: `{name, kind, linked_in,",
-    "declared_in[], defined_in, type}`. The `kind` field uses the same 10-value",
-    "taxonomy as syms.json (function_{exported,static,inline_header,inline_tu},",
-    "macro_{constant,symbol,typegen,misc}, global_{static,extern}) and is `null` for",
-    "typedefs/structs that aren't classifiable as a `kind` (plain typedefs, struct",
-    "declarations). External symbols (libc, pthread, ...) carry `defined_in: null`",
-    "with `declared_in` populated. `linked_in` is composer-emitted null; future",
-    "link-time attribution may fill it. Downstream agents resolve any primitive",
-    "against the syms tree by walking",
-    "`<repo_root>/.crustify/analysis/<defined_in-stem>/syms.json` (or",
-    "`<declared_in[0]>-stem>/syms.json` when defined_in is null)."
-  ],
-  "_comment_macro_variants": [
-    "**Macro resolution**: a user-facing macro (e.g. `PROJ_malloc(n)` expanding to",
-    "`proj_malloc(n, __FILE__, __LINE__)`) is RESOLVED to the underlying function",
-    "symbol it expands to - there is no separate macro entry and no `expands_to`",
-    "field. Rust FFI never calls macros, so the catalogue records only the callable",
-    "function/global symbols. Resolve every allocator / dup / refcount / lock macro",
-    "to its underlying primitive before emitting."
-  ],
-  "_comment_families": [
-    "**Allocator families.** One entry per deallocator/`free`, which MUST be an",
-    "untyped free (releasing a `void*` raw buffer - e.g. `free`, `CRYPTO_free`,",
-    "`git__free`). A typed disposer that takes a named struct (`git_str_dispose`,",
-    "`foo_free(foo *)`) marks a TYPE and is out of scope here (the type-lifecycle /",
-    "wrapper analysis owns it). `family` is a free-form grouping string. Families",
-    "come in two flavours, both discriminated by their `free`: BYTE-LEVEL (allocators",
-    "return `void*` raw bytes) and STRING (allocators return `char*` / single-byte",
-    "scalar pointers over NUL-terminated strings, not aggregate types). `free` is the",
-    "syms-base entry for THE deallocator that anchors the family. `allocators[]` is",
-    "the flat list of every routine producing a buffer this `free` releases (alloc /",
-    "resize / dup alike); `copies[]` lists the non-allocating copy primitives that",
-    "write INTO this family's buffers. A cleansing or secure deallocator",
-    "(`*_clear_free`, `*_secure_free`) is a SEPARATE family from the plain free even",
-    "when they share an allocator (e.g. `proj_zalloc` released by both `proj_free`",
-    "and `proj_clear_free`): the wrapper's drop strategy is monomorphic in the C free",
-    "it calls, so a different `free` symbol means a different `CVec<_, S>` type. The",
-    "cleansing itself is done C-side by the `*_clear_free`; the porter just binds the",
-    "family's `free` (its `(ptr, size_t)` signature carries the length). The SAME",
-    "allocator may appear under multiple families."
-  ],
-  "_comment_allocator_entry": [
-    "An `allocators[]` element - ONE routine producing a buffer owned by this family",
-    "(released by its `free`). Its signature MUST be untyped: every pointer in the",
-    "params and return is a raw byte/string pointer (`void*`, `char*`, `unsigned",
-    "char*`, `const char*`, `void**`), never a named-struct pointer - an allocator",
-    "that takes or returns a typed object is a type constructor, catalogued by the",
-    "type analysis, not here. Each entry IS a syms-base record",
-    "(`name`/`kind`/`linked_in`/`declared_in[]`/`defined_in`/`type`, exactly as in",
-    "syms.json - see `_comment_syms_base`) EXTENDED with allocator qualifier flags:",
-    "`zeroing` (result zero-filled - zalloc/calloc), `sized` (takes `(count,size)`,",
-    "overflow-checked - `*_array`/calloc), `aligned` (honours an alignment arg),",
-    "`string` (duplicates a NUL-terminated string), `bounded` (bounded copy that need",
-    "not NUL-terminate). The operation - plain alloc vs resize (`realloc`, a",
-    "`(ptr,size)` signature) vs duplicator (`*strdup`/`*memdup`, a source-to-copy",
-    "signature) - is read from the routine's `type` and these flags; there is no",
-    "separate `op` tag. Macro variants are resolved to the underlying symbol. The",
-    "SAME allocator may appear under multiple families when its output is released by",
-    "more than one deallocator."
-  ],
-  "_comment_copies": [
-    "A family `copies[]` element - a non-allocating copy primitive used to fill this",
-    "family's buffers (caller owns the dest; nothing is allocated or freed). Each is",
-    "a syms-base record (fields at top, as in syms.json) plus",
-    "`string`/`sized`/`bounded` flags. The buffer pass uses these to recognise",
-    "copy-INTO-existing-buffer call-sites (no cluster synthesized); the safe Rust",
-    "shim is a `CCell`-parametric `mem_copy` over shared interior-mutable borrows,",
-    "not an owned constructor. A copy primitive may be listed under multiple",
-    "families."
-  ],
-  "_comment_refcounts": [
-    "**Category 3.** One cluster per (refcount type, primitive family). Booleans",
-    "`atomic` (backend uses hardware atomics on the common platform),",
-    "`has_lock_fallback` (a non-atomic backend uses a lock). `fallback_lock` is a",
-    "name-reference into `locks[*].type.name` (e.g. `\"PROJ_RWLOCK\"`) or null. `type`",
-    "is the syms-base entry for the C type (struct or typedef declaration; `kind:",
-    "null` is normal). `field_layout` is `{field: <name>, type: <C type>}` describing",
-    "the in-struct integer field the primitives manipulate (composer hint for the",
-    "buffer/lifecycle agent; not a full type description). The primitive set: `new`,",
-    "`up`, `down`, `get`, `free` - each a syms-base entry, all required when present",
-    "in the codebase. `assert` is an **optional** sanity-check macro (e.g. an",
-    "`ASSERT_NOT_NEGATIVE`-style guard) for catching double-frees."
-  ],
-  "_comment_locks": [
-    "**Category 4.** One cluster per (lock type, primitive family). `kind` is one of",
-    "`\"rwlock\"`, `\"mutex\"`, `\"spinlock\"`. Booleans `reentrant` (recursive acquisition",
-    "allowed) and `opaque` (type is opaque to callers - true for `typedef void *`",
-    "style). `type` carries the syms-base entry for the lock type. Primitives: `new`,",
-    "`read_lock` (or null when `kind != \"rwlock\"`), `write_lock` (also acts as the",
-    "single `lock` for non-rwlock kinds - still called `write_lock` for schema",
-    "uniformity), `unlock`, `free`. The buffer/lifecycle agent resolves",
-    "`refcounts[*].fallback_lock` references against this list's `type.name` values."
-  ],
-  "_comment_cleansers": [
-    "Standalone zero-without-free primitives (e.g. a `proj_cleanse` that uses a",
-    "volatile memset to defeat dead-store elimination) - small enough to keep at the",
-    "top level instead of a full category. One cluster per primitive: `{note, op:",
-    "<syms-base entry>}`. Used by the buffer pass when a cluster needs a length-aware",
-    "sensitive-data wipe separate from its dtor."
+    "Example catalogue for the repo-tier `crustify/alloc.json` produced by",
+    "`CrustifyAllocAnalyzer`. Field MEANING lives in docs/schemas/alloc.md.",
+    "The worked examples below are illustrative (libc + a fictional `proj_*`",
+    "layer); a real run substitutes the target's symbols, one family per",
+    "deallocator."
   ],
   "families": [
     {
-      "_comment_example": [
-        "libc archetype - the universal `free` and the routines it releases: `malloc`",
-        "(plain), `calloc` (zeroing+sized), `realloc` (a resize - a peer allocator, not a",
-        "field of malloc). External: defined_in null."
-      ],
       "family": "libc",
       "free": {
         "name": "free",
@@ -193,12 +69,6 @@
       "copies": []
     },
     {
-      "_comment_example": [
-        "Project-wrapper archetype anchored on `proj_free`. One flat allocator list: the",
-        "plain/zeroing/array/aligned allocs, BOTH reallocs, and the string/mem",
-        "duplicators - all peers, all freed by `proj_free`. `proj_zalloc` also appears",
-        "under `proj_clear`."
-      ],
       "family": "proj",
       "free": {
         "name": "proj_free",
@@ -349,12 +219,6 @@
       ],
       "copies": [
         {
-          "_comment_example": [
-            "Non-allocating bounded copy used to fill this family's buffers - copies into a",
-            "`proj_*`-allocated, caller-owned dest; allocates nothing, frees nothing. A copy",
-            "primitive may be attached to MORE THAN ONE family (every family whose buffers it",
-            "writes into), exactly like a shared allocator."
-          ],
           "name": "memcpy",
           "kind": "function_exported",
           "linked_in": null,
@@ -370,12 +234,6 @@
       ]
     },
     {
-      "_comment_example": [
-        "Clearing family anchored on the cleansing deallocator `proj_clear_free` -",
-        "SEPARATE from `proj` (zero-on-free drop semantics for secrets). Releases",
-        "`proj_zalloc` (SHARED with `proj`) and the cleansing resize",
-        "`proj_clear_realloc`."
-      ],
       "family": "proj_clear",
       "free": {
         "name": "proj_clear_free",
@@ -422,11 +280,6 @@
       "copies": []
     },
     {
-      "_comment_example": [
-        "Secure-heap family anchored on `proj_secure_free` - buffers from a locked-pages",
-        "region (mlock'd vs swap-to-disk). Distinct family even when it falls back to the",
-        "primary allocator internally."
-      ],
       "family": "proj_secure",
       "free": {
         "name": "proj_secure_free",
@@ -460,18 +313,6 @@
   ],
   "refcounts": [
     {
-      "_comment_example": [
-        "Project refcount archetype - the typical hardware-atomic-with-lock-fallback",
-        "wrapper struct most C codebases use. The wrapped int field is `val`. `atomic:",
-        "true` is the COMMON-platform truth (C11 atomics, GCC builtins, MSVC intrinsics -",
-        "whichever the build selects); `has_lock_fallback: true` records that a",
-        "non-atomic fallback exists using a lock. `fallback_lock` is the name-reference",
-        "into the `locks` list below. All primitives are typically `static inline` (kind:",
-        "function_inline_header) - Rust must call them through C wrappers",
-        "(`wrapper_inlines.c` or equivalent). `assert` carries the optional",
-        "refcount-sanity macro used in every `*_free` (typically guards against the",
-        "refcount going negative)."
-      ],
       "note": "Project refcount. Wraps an int (atomic on common platforms, lock-protected on the fallback). The standard `*_free` pattern is: NULL check -> DOWN_REF -> assert non-negative -> early-return if i > 0 -> free children -> FREE_REF -> free the struct.",
       "atomic": true,
       "has_lock_fallback": true,
@@ -554,14 +395,6 @@
   ],
   "locks": [
     {
-      "_comment_example": [
-        "Project RWLOCK archetype. `kind: \"rwlock\"` - has separate `read_lock` and",
-        "`write_lock`. `opaque: true` because the public type is typically a `typedef",
-        "void` - callers never see the underlying `pthread_rwlock_t` / `SRWLOCK`.",
-        "`reentrant: false` (POSIX rwlocks aren't reentrant by default). All primitives",
-        "are real exported functions (defined per-platform in a `threads_pthread.c` /",
-        "`threads_win.c` pair), reachable from Rust via bindgen."
-      ],
       "note": "Project reader-writer lock. Opaque typedef; the underlying implementation is `pthread_rwlock_t` on POSIX, `SRWLOCK` on Windows. Used to protect refcount fallback paths and per-object internal state.",
       "kind": "rwlock",
       "reentrant": false,
@@ -625,27 +458,6 @@
         ],
         "defined_in": "src/threads_pthread.c",
         "type": "void proj_thread_lock_free(PROJ_RWLOCK *lock)"
-      }
-    }
-  ],
-  "cleansers": [
-    {
-      "_comment_example": [
-        "Standalone cleanse - zero a buffer without freeing it. Often implemented with a",
-        "volatile function pointer to memset to defeat dead-store-elimination",
-        "optimisations. Used internally by `*_clear_free` and called directly by code",
-        "that wants length-aware sensitive-data wipe without giving up the allocation."
-      ],
-      "note": "Length-aware sensitive-data wipe. Uses a volatile memset to defeat dead-store-elimination. Does NOT free.",
-      "op": {
-        "name": "proj_cleanse",
-        "kind": "function_exported",
-        "linked_in": null,
-        "declared_in": [
-          "include/proj/mem.h"
-        ],
-        "defined_in": "src/mem_clr.c",
-        "type": "void proj_cleanse(void *ptr, size_t len)"
       }
     }
   ]

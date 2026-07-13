@@ -28,6 +28,8 @@ signal; the body is the procedure.
 ### Learn the analysis schema
 
 Use `crustify-oracle` to fetch the analysis schema and learn its structure.
+Identify which fields are yours to fill and which are owned by the deterministic
+composer.
 
 ### Identify lifecycle routines
 

@@ -44,12 +44,12 @@ crustify [--no-console] [--no-file-log] [--model NAME] [--parallel] [--parallel-
 **build** - two explicit phases.
 | subcommand | flags | does |
 |---|---|---|
-| `propose` | `--redo` | draft `build.json` (LLM) |
-| `execute` | `--redo` | run configure+build+tests+CodeQL, extract T1/T2 CSVs |
+| `propose` | `--reset` | draft `build.json` (LLM) |
+| `execute` | `--reset` | run configure+build+tests+CodeQL, extract T1/T2 CSVs |
 
 **alloc** - `crustify <r> <t> alloc` -> `alloc.json` (feeds the analyze buffer pass).
 
-**analyze** `[--redo]` `<subject>`
+**analyze** `[--reset]` `<subject>`
 | subject | flags | does |
 |---|---|---|
 | `scope` | `--port-only` \| `--wrap-only` | port set (config) / wrap import-closure -> `scope.json` |

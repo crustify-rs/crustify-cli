@@ -47,6 +47,7 @@ def query(
     strings: bool = False,
     arrays: bool = False,
     typegens: bool = False,
+    lifetime: bool = False,
     fields: bool = False,
     ops: bool = False,
     methods: bool = False,
@@ -98,7 +99,11 @@ def query(
     if type_facets and subject != "types":
         raise SystemExit("query syms: --fields/--ops/--methods/--accessors apply to types only.")
     if typegens and subject != "syms":
-        raise SystemExit("query types: --typegens applies to syms only (macro_typegen primitives).")
+        raise SystemExit("query types: --typegens applies to syms only (macros with macro.typegen).")
+    if lifetime and subject != "syms":
+        raise SystemExit("query types: --lifetime applies to syms only (the raw "
+                         "lifecycle primitives). A type's lifecycle is its whole "
+                         "`lifetime` block; query it with --with-details.")
     if (type_facets or manifest or update is not None) and len(name_list) != 1:
         raise SystemExit(
             f"query {subject}: facets / --manifest / --update need exactly one --name.")
@@ -112,7 +117,7 @@ def query(
         _enumerate(target, kind=kind, files=files,
                    wrap_only=wrap_only, port_only=port_only,
                    strings=strings, arrays=arrays, typegens=typegens,
-                   with_details=with_details)
+                   lifetime=lifetime, with_details=with_details)
 
 
 def _summarize(entry: dict | None, kind: str) -> dict | None:
@@ -138,14 +143,17 @@ def _summarize(entry: dict | None, kind: str) -> dict | None:
         s["ops"] = scope.type_method_syms(entry)
         return s
     # the symbol's signature lives in `type` (some manifests use `signature`).
+    # `macro` / `lifetime` are small agent-facet blocks (not the heavy per-arg
+    # ptr analysis), so they ride the light view — matching the type branch's
+    # lifecycle summary and this function's "identity + lifecycle" contract.
     keep = ("name", "kind", "defined_in", "declared_in",
-            "type", "signature")
+            "type", "signature", "macro", "lifetime")
     return {k: entry[k] for k in keep if k in entry}
 
 
 def _enumerate(
     target: Path, *, kind: str, files, wrap_only, port_only,
-    strings, arrays, typegens=False, with_details=False,
+    strings, arrays, typegens=False, lifetime=False, with_details=False,
 ) -> None:
     """List the (filtered) type/symbol entries straight from the manifest — one
     ``name<TAB>defined_in<TAB>declared_in`` line each (the placement provenance),
@@ -206,9 +214,20 @@ def _enumerate(
             if port_only and (is_synth or not any(
                     scope.origin_key(c, d, decls) in port_keys for c in cands)):
                 continue
-            if synth_sel and sk not in synth_sel:
+            if lifetime:
+                # Lifecycle-primitive filter: keep only entries carrying a
+                # `lifetime` block; --strings/--arrays reinterpret as a synth
+                # filter on that block (alloc/clone), not the entry kind.
+                lt = e.get("lifetime")
+                if not lt:
+                    continue
+                if synth_sel:
+                    got = (lt.get("alloc") or lt.get("clone") or {}).get("synth")
+                    if got not in synth_sel:
+                        continue
+            elif synth_sel and sk not in synth_sel:
                 continue
-            if typegens and sk != "macro_typegen":
+            if typegens and not ((e.get("macro") or {}).get("typegen")):
                 continue
             if file_set and d not in file_set:
                 continue
@@ -216,7 +235,9 @@ def _enumerate(
 
     rows.sort(key=lambda e: (e.get(tagkey) or "", e.get("defined_in") or ""))
 
-    if with_details:
+    # `--lifetime` prints full records by default (like the `query mem` it
+    # replaces): you want each primitive's block in hand, not just its name.
+    if with_details or lifetime:
         print(json.dumps(rows, indent=2))
         return
     # Plain output: one TSV line per (name, kind, defined_in, declared_in) — the
@@ -481,11 +502,14 @@ _CREATE_TOP = {
     "elems"}
 
 # Symbol findings (functions / callbacks / macros) — the agent-fillable surface.
-_SYM_FINDINGS_TOP = {"kind", "ptr_args", "ptr_ret", "forks"}
-_PTR_ARG_AGENT_KEYS = {"array", "string", "moved", "borrowed", "lifetime",
+_SYM_FINDINGS_TOP = {"macro", "lifetime", "ptr_args", "ptr_ret", "forks"}
+# Same structured ownership block as a struct field's `ptr` (see types.md#ptr):
+# `owned` nests {exclusive, shared}, `borrowed` nests {lifetime}, `array` is
+# null|{by_val}|{by_ref:{owned,borrowed}}. A pointer at a call boundary and a
+# pointer in a struct extract identical properties, so args and returns share it.
+_PTR_ARG_AGENT_KEYS = {"array", "string", "owned", "borrowed", "nullable",
                        "mutable", "note"}
-_PTR_RET_AGENT_KEYS = {"array", "string", "moved", "borrowed", "lifetime",
-                       "mutable", "note"}
+_PTR_RET_AGENT_KEYS = _PTR_ARG_AGENT_KEYS
 _FORK_KEYS = {"ptr_args", "ptr_ret", "callsites"}
 
 
@@ -614,36 +638,147 @@ def _findings_schema(kind: str) -> dict:
         "_subject": "symbol",
         "_doc": ("Submit ONLY the facets you are filling. Merge is partial and "
                  "idempotent. Unknown top-level keys are hard-rejected. `kind` is "
-                 "for MACROS only — functions / globals / callbacks are "
-                 "composer-fixed and must omit it."),
-        "kind": "<macro subkind> (macros only)",
+                 "composer-fixed and is never submitted; `macro` is for MACROS "
+                 "only — functions / globals / callbacks must omit it."),
+        "macro": {
+            "alias": "<bool: expands to existing symbol(s)/type(s)>",
+            "const": "<bool: expands to a compile-time constant>",
+            "typegen": "<bool: declares new types and/or their ops>",
+        },
+        "_lifetime_note": ("The lifecycle-primitive block: null for an ordinary "
+                           "symbol, else EXACTLY ONE of alloc / clone / refcount "
+                           "/ lock (the subfield name IS the primitive kind). See "
+                           "`query syms --schema`, ## lifetime."),
+        "lifetime": {
+            "alloc": {"role": "'allocator' | 'free'",
+                      "freed_by": "[<free names>] (allocator only)",
+                      "synth": "'string' | 'array' (allocator only)"},
+            "clone": {"freed_by": "[<free names>]", "synth": "'string' | 'array'"},
+            "refcount": {"op": "new|up|down|get|free|assert", "cluster": "<type name>"},
+            "lock": {"op": "new|read_lock|write_lock|unlock|free", "cluster": "<type name>"},
+        },
+        "_ptr_note": ("`ptr_args` records and `ptr_ret` carry the SAME ownership "
+                      "block — identical to a struct field's `ptr` (see "
+                      "`query types --schema`, ## ptr). `owned` gives CBox vs "
+                      "CArc; `borrowed.lifetime` sources are arg-oriented "
+                      "(`arg:<name>`, `arg:<name>->path`, `static`, `other`)."),
         "ptr_args": {
             "<position:int>": {
-                "array": "bool", "string": "bool", "moved": "bool",
-                "borrowed": "bool", "lifetime": "<source> | null",
-                "mutable": "bool", "note": "<str>",
+                "array": "null | {by_val: true} | {by_ref: {owned: bool, borrowed: bool}}",
+                "string": "bool",
+                "owned": "null | {exclusive: bool, shared: bool}",
+                "borrowed": "null | {lifetime: <source>}",
+                "nullable": "bool", "mutable": "bool", "note": "<str>",
             }
         },
-        "ptr_ret": {
-            "array": "bool", "string": "bool", "moved": "bool",
-            "borrowed": "bool", "lifetime": "<source> | null",
-            "mutable": "bool", "note": "<str>",
-        },
+        "ptr_ret": "<same block as one ptr_args record> | null",
         "forks": [{
             "ptr_args": "<as ptr_args above>",
             "ptr_ret": "<as ptr_ret above>",
             "callsites": ["<callsite id>"],
         }],
         "_rules": [
+            "macro: macros only; all three flags required, each a bool. They are "
+            "independent (a macro may be none of them — that is the shape that "
+            "needs a C shim, since bindgen binds a const, an alias' target, and "
+            "a typegen's expansion).",
+            "lifetime: null, or EXACTLY ONE of alloc/clone/refcount/lock. "
+            "alloc.role='allocator' needs synth (string|array); role='free' takes "
+            "neither freed_by nor synth. clone needs synth. refcount/lock need "
+            "op (from their enum) + cluster. Any symbol kind may carry it (a "
+            "refcount 'assert' may be a macro).",
             "ptr_ret only on a pointer-returning symbol.",
-            "string XOR array (structural); a const pointee implies mutable != "
-            "true; on an arg OR return moved+borrowed MAY BOTH be true "
-            "(runtime-conditional ownership), and borrowed implies lifetime set.",
+            "ptr: array = null | {by_val:true} | {by_ref:{owned,borrowed}} (by_ref "
+            "is a container; its owned/borrowed is ELEMENT ownership). string XOR "
+            "array; a const pointee implies mutable != true; a borrowed pointer "
+            "needs a lifetime; exclusive/shared only under owned. owned + borrowed "
+            "MAY both be non-null (runtime-conditional dual ownership); likewise "
+            "owned.exclusive + owned.shared and by_ref.owned + by_ref.borrowed.",
             "forks: callbacks only; each callsite claimed by exactly one entry.",
         ],
         "_valid_top_keys": sorted(_SYM_FINDINGS_TOP),
     }
-_MACRO_KINDS = {"macro_constant", "macro_symbol", "macro_typegen", "macro_misc"}
+_MACRO_FLAGS = frozenset({"alias", "const", "typegen"})
+
+# `lifetime` block: exactly one of these primitive-kind subfields is populated
+# (the subfield name IS the kind); the whole block is null for ordinary symbols.
+# See docs/schemas/syms.md `## lifetime`.
+_LIFETIME_KINDS = frozenset({"alloc", "clone", "refcount", "lock"})
+_SYNTH_VALUES = frozenset({"string", "array"})
+_REFCOUNT_OPS = frozenset({"new", "up", "down", "get", "free", "assert"})
+_LOCK_OPS = frozenset({"new", "read_lock", "write_lock", "unlock", "free"})
+
+
+def _lifetime_block_errors(blk) -> list[str]:
+    """Validate a submitted `lifetime` block against docs/schemas/syms.md.
+
+    `null` (ordinary symbol) is accepted. Otherwise EXACTLY ONE of
+    `{alloc, clone, refcount, lock}` must be populated, and that subfield's
+    shape is checked per its kind. Semantic rules (untyped-only, tag-the-callable)
+    are the agent's judgement, not enforced here."""
+    if blk is None:
+        return []
+    if not isinstance(blk, dict):
+        return ["lifetime: must be an object or null"]
+    kinds = set(blk)
+    bad = kinds - _LIFETIME_KINDS
+    if bad:
+        return [f"lifetime: unknown subfield(s) {sorted(bad)} "
+                f"(one of {sorted(_LIFETIME_KINDS)})"]
+    if len(kinds) != 1:
+        return ["lifetime: exactly ONE of "
+                f"{sorted(_LIFETIME_KINDS)} must be populated (got {sorted(kinds)})"]
+    (kind,) = kinds
+    sub = blk[kind]
+    e: list[str] = []
+    if not isinstance(sub, dict):
+        return [f"lifetime.{kind}: must be an object"]
+
+    def _synth(v):
+        if v not in _SYNTH_VALUES:
+            e.append(f"lifetime.{kind}.synth: {v!r} not in {sorted(_SYNTH_VALUES)}")
+
+    def _freed_by(v):
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            e.append(f"lifetime.{kind}.freed_by: must be a list of symbol names")
+
+    if kind == "alloc":
+        bad = set(sub) - {"role", "freed_by", "synth"}
+        if bad:
+            e.append(f"lifetime.alloc: unknown key(s) {sorted(bad)}")
+        role = sub.get("role")
+        if role not in ("allocator", "free"):
+            e.append("lifetime.alloc.role: must be 'allocator' or 'free'")
+        if role == "allocator":
+            if "synth" not in sub:
+                e.append("lifetime.alloc.synth: required for an allocator")
+            else:
+                _synth(sub["synth"])
+            _freed_by(sub.get("freed_by", []))
+        elif role == "free":
+            extra = {"freed_by", "synth"} & set(sub)
+            if extra:
+                e.append(f"lifetime.alloc: {sorted(extra)} apply to an allocator, "
+                         f"not a free")
+    elif kind == "clone":
+        bad = set(sub) - {"freed_by", "synth"}
+        if bad:
+            e.append(f"lifetime.clone: unknown key(s) {sorted(bad)}")
+        if "synth" not in sub:
+            e.append("lifetime.clone.synth: required")
+        else:
+            _synth(sub["synth"])
+        _freed_by(sub.get("freed_by", []))
+    else:  # refcount | lock
+        bad = set(sub) - {"op", "cluster"}
+        if bad:
+            e.append(f"lifetime.{kind}: unknown key(s) {sorted(bad)}")
+        ops = _REFCOUNT_OPS if kind == "refcount" else _LOCK_OPS
+        if sub.get("op") not in ops:
+            e.append(f"lifetime.{kind}.op: must be one of {sorted(ops)}")
+        if not (isinstance(sub.get("cluster"), str) and sub.get("cluster")):
+            e.append(f"lifetime.{kind}.cluster: required (the cluster type name)")
+    return e
 
 
 def _apply_ptr_agent(entry: dict, ptr_args_f: dict | None,
@@ -889,20 +1024,33 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
 def _sym_ptr_invariant_errors(label: str, blk: dict, const: bool,
                               is_ret: bool) -> list[str]:
     """Hard-reject the IMPOSSIBLE shapes in one symbol `ptr_args[*]` / `ptr_ret`
-    block (string⊕array; const⟹mutable≠true; borrowed⟹lifetime).
+    block. These are the SAME structural invariants a struct field's `ptr`
+    obeys (see check_types_consistency): `array` is null|{by_val}|{by_ref};
+    string⊕array; borrowed⟹lifetime; owned is null|{exclusive,shared};
+    const⟹mutable≠true.
 
-    `moved`+`borrowed` is NOT rejected: an arg or return may be BOTH to mean
-    runtime-conditional ownership (moved on one path, borrowed on another).
-    The `borrowed`⟹lifetime dependency still holds — the borrow branch has a
-    source. (`is_ret` is retained for call-site symmetry; the invariants are
-    now uniform across args and returns.)"""
+    `owned`+`borrowed` is NOT rejected: an arg or return may be BOTH to mean
+    runtime-conditional dual ownership (owned on one path, borrowed on another);
+    likewise owned.exclusive+shared and array.by_ref.owned+borrowed. (`is_ret`
+    is retained for call-site symmetry; the invariants are uniform across args
+    and returns.)"""
     e: list[str] = []
-    if blk.get("string") and blk.get("array"):
-        e.append(f"{label}: string and array both true (must be XOR)")
+    array = blk.get("array")
+    if array is not None:
+        if not isinstance(array, dict):
+            e.append(f"{label}: array must be null or {{by_val|by_ref}}")
+        elif len([k for k in ("by_val", "by_ref") if array.get(k)]) != 1:
+            e.append(f"{label}: array needs exactly one of by_val / by_ref")
+    if blk.get("string") and array is not None:
+        e.append(f"{label}: string and array both set (must be XOR)")
+    borrowed = blk.get("borrowed")
+    if isinstance(borrowed, dict) and not borrowed.get("lifetime"):
+        e.append(f"{label}: borrowed set but lifetime unset")
+    owned = blk.get("owned")
+    if owned is not None and not isinstance(owned, dict):
+        e.append(f"{label}: owned must be null or {{exclusive, shared}}")
     if const and blk.get("mutable") is True:
         e.append(f"{label}: const pointee but mutable == true")
-    if blk.get("borrowed") and not blk.get("lifetime"):
-        e.append(f"{label}: borrowed true but lifetime unset")
     return e
 
 
@@ -912,17 +1060,18 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
     — the schema boundary, so the agent never opens the manifest.
 
     `src` is a path, or ``"-"`` for stdin. Findings shape:
-    ``{kind?, ptr_args?: {<position>: {array, string, moved, mutable, note}},
-    ptr_ret?: {…, borrowed, lifetime, …}, forks?: [{ptr_args, ptr_ret,
-    callsites}]}``. `kind` is the macro subkind (macros only — composer-fixed
-    for functions/globals/callbacks). `forks` (callbacks only) splits a
-    typedef whose invokers realize different ownership contracts into extra
-    ``kind:"callback"`` entries (variant>=1), partitioning ``used_by.call`` —
-    one Rust wrapper per entry. We HARD-REJECT on unknown keys, an invalid macro
-    kind, an unknown arg position, a `ptr_ret` on a non-pointer-return, a fork on
-    a non-callback / with an unknown or double-claimed callsite, or ptr-invariant
-    violations; else partial-merge (primary) + idempotent fork replace, under a
-    lock + atomic rename."""
+    ``{macro?, ptr_args?: {<position>: <ptr block>}, ptr_ret?: <ptr block>,
+    forks?: [{ptr_args, ptr_ret, callsites}]}``, where a ptr block is the
+    structured ownership record ``{array, string, owned, borrowed, nullable,
+    mutable, note}`` shared with a struct field's `ptr`. `macro` is the
+    expansion facets (macros only — `kind` itself is composer-fixed and never
+    submitted). `forks` (callbacks only) splits a typedef whose invokers realize
+    different ownership contracts into extra ``kind:"callback"`` entries
+    (variant>=1), partitioning ``used_by.call`` — one Rust wrapper per entry. We
+    HARD-REJECT on unknown keys, a bad macro block, an unknown arg position, a
+    `ptr_ret` on a non-pointer-return, a fork on a non-callback / with an unknown
+    or double-claimed callsite, or ptr-invariant violations; else partial-merge
+    (primary) + idempotent fork replace, under a lock + atomic rename."""
 
     raw = sys.stdin.read() if src == "-" else Path(src).read_text()
     try:
@@ -967,37 +1116,43 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
         errors: list[str] = []
         ekind = entry.get("kind") or ""
 
-        # `kind`: only a macro's subkind is agent-set; for everything else
-        # (functions, globals, callbacks) the composer fixed it.
-        if "kind" in f:
-            if ekind != "macro" and not ekind.startswith("macro_"):
+        # `macro`: the expansion facets, agent-set on macros only. `kind` itself
+        # is composer-fixed and terminal for every symbol (see docs/schemas/
+        # syms.md `## kind`), so it is not a submittable key at all.
+        if "macro" in f:
+            blk = f["macro"]
+            if ekind != "macro":
                 errors.append(
-                    f"kind: {name!r} is {ekind!r}, not a macro — kind is "
-                    f"composer-fixed and must not be set")
-            elif f["kind"] not in _MACRO_KINDS:
-                errors.append(
-                    f"kind: {f['kind']!r} is not a macro kind "
-                    f"{sorted(_MACRO_KINDS)}")
+                    f"macro: {name!r} is {ekind!r}, not a macro — the macro "
+                    f"block applies to macros only")
+            elif not isinstance(blk, dict):
+                errors.append("macro: must be an object")
+            else:
+                bad = set(blk) - _MACRO_FLAGS
+                if bad:
+                    errors.append(f"macro: unknown key(s) {sorted(bad)}")
+                missing = _MACRO_FLAGS - set(blk)
+                if missing:
+                    errors.append(
+                        f"macro: missing flag(s) {sorted(missing)} — all of "
+                        f"{sorted(_MACRO_FLAGS)} are required")
+                for k in sorted(_MACRO_FLAGS & set(blk)):
+                    if not isinstance(blk[k], bool):
+                        errors.append(
+                            f"macro.{k}: must be a boolean, got {blk[k]!r}")
+
+        # `lifetime`: the lifecycle-primitive block (alloc / clone / refcount /
+        # lock). Any symbol kind may carry it — a refcount `assert` guard is
+        # legitimately a macro, so we do NOT gate it on kind.
+        if "lifetime" in f:
+            errors += _lifetime_block_errors(f["lifetime"])
 
         arg_by_pos = {str(a.get("position")): a
                       for a in entry.get("ptr_args") or []}
-        for pos, blk in (f.get("ptr_args") or {}).items():
-            if not isinstance(blk, dict):
-                errors.append(f"ptr_args[{pos}]: must be an object")
-                continue
-            if str(pos) not in arg_by_pos:
-                errors.append(
-                    f"ptr_args: no pointer arg at position {pos} in {name!r}")
-                continue
-            bad = set(blk) - _PTR_ARG_AGENT_KEYS
-            if bad:
-                errors.append(f"ptr_args[{pos}]: unknown key(s) {sorted(bad)}")
-            errors += _sym_ptr_invariant_errors(
-                f"ptr_args[{pos}]", blk,
-                bool(arg_by_pos[str(pos)].get("const")), is_ret=False)
-
         pr = f.get("ptr_ret")
 
+        # Validates one ownership contract — the primary's (`where=""`) or a
+        # fork's. Both shapes are identical, so forks reuse it verbatim.
         def _check_ptr(args_f, ret_f, where):
             for pos, blk in (args_f or {}).items():
                 if not isinstance(blk, dict):
@@ -1082,8 +1237,10 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                 + "\n  - ".join(errors))
 
         # Merge primary (partial, idempotent): only the slots/args mentioned.
-        if "kind" in f:
-            entry["kind"] = f["kind"]
+        if "macro" in f:
+            entry["macro"] = {k: f["macro"][k] for k in sorted(_MACRO_FLAGS)}
+        if "lifetime" in f:
+            entry["lifetime"] = f["lifetime"]
         _apply_ptr_agent(entry, f.get("ptr_args"), pr)
 
         # Materialize forks (idempotent replace): drop any prior forks, then

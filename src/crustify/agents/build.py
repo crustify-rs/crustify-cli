@@ -62,7 +62,7 @@ class CrustifyBuildExecute(CrustifyAgent):
     # (configure + build + codeql extract + tests). configure is not
     # incremental, CodeQL extraction is not incremental, and tests are
     # by-design always-on. Users requesting idempotent skip should
-    # check `codeql/db/` existence themselves and pass `--redo` to
+    # check `codeql/db/` existence themselves and pass `--reset` to
     # force re-extraction.
     tier = "repo_root"
 

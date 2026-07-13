@@ -48,7 +48,10 @@ plus the idioms `--help` can't tell you.
 |----------|------------|
 | a symbol's record (signature, pointer analysis, type/sym deps) | `query syms --name <name> --with-details` |
 | a lifecycle candidate's signature / body location | `query syms --name <fn> --with-details` |
-| the **type-generator** primitives (`DEFINE_*` / `DECLARE_*` macro families, kind `macro_typegen`) | `query syms --typegens` |
+| the **type-generator** primitives (`DEFINE_*` / `DECLARE_*` macro families, `macro.typegen`) | `query syms --typegens` |
+| the **lifecycle** primitives -- allocator / `free` / `clone` / refcount / lock, one full record each | `query syms --lifetime` |
+| just the string- / array-buffer allocators + duplicators | `query syms --lifetime --strings` / `--arrays` |
+| one primitive's `lifetime` block | `query syms --lifetime --name <sym>` |
 | **submit** symbol findings (WRITE) | `query syms --name <name> --file <file> --update <file>` |
 
 ## `query dag` -- dependency closure
@@ -64,21 +67,6 @@ plus the idioms `--help` can't tell you.
 | you need | invocation |
 |----------|------------|
 | the port set / wrap closure file lists | `query files --port-only` / `--wrap-only` |
-
-## `query mem` -- allocator clusters (from `alloc.json`)
-
-Every allocator family returned **verbatim**: the family name, its `free`, and
-each allocator's full record (`name` + the `zeroing` / `sized` / `aligned` /
-`string` / `bounded` flags + `defined_in` / `declared_in` / `type`). Use it to
-emit the `CBox` exclusive-freed strategy ZST (one per cluster, keyed on the free)
-plus the constructor wrappers. **No string/byte gate** -- the per-allocator
-`string` flag rides along, so you decide what is a nul-terminated string vs a raw
-byte buffer. Output is JSON.
-
-| you need | invocation |
-|----------|------------|
-| every allocator cluster | `query mem` |
-| the cluster(s) owning a specific allocator/free (pick the free for your `CBox` strategy) | `query mem --name <sym>` |
 
 ## `scaffold` -- locate a Rust module
 

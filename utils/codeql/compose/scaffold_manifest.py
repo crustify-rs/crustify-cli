@@ -100,10 +100,10 @@ _SKIP_CRATES: frozenset[str] = frozenset()
 # to their real `defined_in`/`declared_in` like any other type (see `add_type`).
 _SYNTH_KINDS: frozenset[str] = frozenset({"string", "array", "typegen"})
 
-# --- per-symbol anchor model (scheduler idempotency / --redo targets) --------
+# --- per-symbol anchor model (scheduler idempotency / --reset targets) --------
 # Every emitted symbol gets a stable, scaffolded location anchor + a
 # ``// crustify:todo`` placeholder; the scheduler treats todo-absent as "done"
-# and ``--redo`` resets the anchor's region. Anchors are laid for the symbol
+# and ``--reset`` resets the anchor's region. Anchors are laid for the symbol
 # subkinds the wrap/port stages actually emit; the rest are filtered out.
 _TODO = "// crustify:todo"
 _MANAGED = "//! crustify:managed"

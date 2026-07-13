@@ -281,19 +281,28 @@ def _compose_dep_syms(
     return out
 
 
+def _null_ptr_agent() -> dict:
+    """Agent-fillable ownership block for a `ptr_args[*]` / `ptr_ret` record --
+    the SAME structured shape a struct field's `ptr` carries (see
+    types_manifest._null_ptr_skeleton), so a pointer is described identically
+    whether it sits in a struct or crosses a call boundary. `owned` nests
+    `{exclusive, shared}` (CBox vs CArc), `borrowed` nests `{lifetime}`, and
+    `array.by_ref` carries element ownership."""
+    return {
+        "array": None,
+        "string": None,
+        "owned": None,
+        "borrowed": None,
+        "nullable": None,
+        "mutable": None,
+        "note": None,
+    }
+
+
 def _compose_ptr_args(reach: Reach, fn_name: str, fn_def_file: str) -> list[dict]:
     out: list[dict] = []
     for arg in reach.ptr_args_of(fn_name, fn_def_file):
-        out.append({
-            **arg,
-            "array": None,
-            "string": None,
-            "moved": None,
-            "borrowed": None,
-            "mutable": None,
-            "lifetime": None,
-            "note": None,
-        })
+        out.append({**arg, **_null_ptr_agent()})
     return out
 
 
@@ -301,16 +310,7 @@ def _compose_ptr_ret(reach: Reach, fn_name: str, fn_def_file: str) -> dict | Non
     ret = reach.ptr_ret_of(fn_name, fn_def_file)
     if ret is None:
         return None
-    return {
-        **ret,
-        "array": None,
-        "string": None,
-        "moved": None,
-        "borrowed": None,
-        "mutable": None,
-        "lifetime": None,
-        "note": None,
-    }
+    return {**ret, **_null_ptr_agent()}
 
 
 # ------------------------------------------------------------------ per-kind composers
@@ -418,8 +418,9 @@ def _port_additions_global(row: dict, reach: Reach) -> dict[str, Any]:
 def _base_macro(row: dict) -> dict[str, Any]:
     return {
         "name": row["name"],
-        "kind": "macro",  # deterministic tag; the agent refines the subkind
-                          # (macro_constant / macro_misc / macro_symbol / …)
+        "kind": "macro",  # deterministic + terminal; the agent records what the
+                          # macro expands to in the `macro` {alias,const,typegen}
+                          # block via --update, not by subdividing `kind`.
         "declared_in": [row["def_file"]] if row["def_file"] else [],
         "defined_in": row["def_file"] or None,
         "type": None,
@@ -457,8 +458,8 @@ def _base_callback(
     function-pointer signature CSVs the function composer uses (a callback is a
     subject there); `used_by.{call,ref}` from the function-side inverse +
     callsites. The one ownership bit inferable from the type alone is
-    `mutable = not const` (a `const` pointee can't be written through); `moved`
-    stays null — transfer-vs-borrow is decided per concrete instance.
+    `mutable = not const` (a `const` pointee can't be written through); `owned`
+    stays null — owned-vs-borrowed is decided per concrete instance.
 
     A callback has no def_file (a header typedef) and is never ported to native
     Rust (it becomes an `extern "C" fn` type), so it is always wrap-shape;
@@ -577,6 +578,9 @@ def compose(
     """
     if filter_spec is None:
         filter_spec = FilterSpec()
+    # Unscoped (repo-wide): still classify port/wrap via scope.json, but never
+    # DROP an out-of-scope entry. The default keeps the reachability gate.
+    unscoped = filter_spec.unscoped
     port_paths = (
         scope.load_port_paths(filter_spec.scope_json_path)
         if filter_spec.scope_json_path is not None
@@ -631,7 +635,7 @@ def compose(
 
     for r in funcs:
         is_port = scope_enabled and (r["name"], r["def_file"]) in port_funcs
-        if scope_enabled and not is_port:
+        if scope_enabled and not is_port and not unscoped:
             if r["linkage"] in _WRAP_DISALLOWED_FN_KINDS:
                 continue
             if not seed_mode and not reach.is_function_port_reachable(
@@ -662,7 +666,7 @@ def compose(
 
     for r in globals_:
         is_port = scope_enabled and (r["name"], r["def_file"]) in port_globals_set
-        if scope_enabled and not is_port:
+        if scope_enabled and not is_port and not unscoped:
             if r["linkage"] in _WRAP_DISALLOWED_GLOBAL_KINDS:
                 continue
             if not seed_mode and not reach.is_global_port_reachable(
@@ -691,7 +695,7 @@ def compose(
         # Rust translation. Hence a macro is port-scope iff it's defined in a
         # `.c` (etc.) file that's in scope.
         is_port = scope_enabled and (r["name"], r["def_file"]) in port_macros_set
-        if scope_enabled and not is_port and not seed_mode:
+        if scope_enabled and not is_port and not seed_mode and not unscoped:
             if not reach.is_macro_port_reachable(r["name"], r["def_file"]):
                 continue
         base = _base_macro(r)

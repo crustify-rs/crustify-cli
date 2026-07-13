@@ -146,8 +146,8 @@ Per pointer field. The composer emits a null skeleton; the agent fills it.
 - **`borrowed`** -- `null`, or `{lifetime}`: `self` = the enclosing struct; `field:<name>` =
   a sibling field's storage; `static` = global; `other` = note.
 - **`nullable`** -- can be NULL -> Rust `Option<...>`.
-- **`mutable`** -- null/true/false: const-in-type -> false; pointer-to-user-type -> null;
-  buffers/out-scalars -> agent decides.
+- **`mutable`** -- null/true/false: const-in-type -> false, otherwise -> agent decides;
+  null when undecidable.
 - **`note`** -- free-form.
 
 `owned` and `borrowed` may both be set -- runtime-conditional dual ownership (owned on one

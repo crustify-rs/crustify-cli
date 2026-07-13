@@ -7,6 +7,13 @@ Your task is to catalogue the allocator surface of the codebase at
 
 ## Inputs
 
+- `{repo_root}`: top level repo that the targeted port-scope elements belong to.
+
+- `{target}`: dir path to the port-scope elements targeted by this session.
+  Although the target dir may include several files, only a subset of them may be
+  port-scope. Use the `crustify-oracle` skill to
+  obtain the port and wrap closures relevant for your session.
+
 | Path | Purpose |
 |---|---|
 | `{alloc_template}` | **Schema authority.** Read this file FIRST and in full; the `_comment` / `_comment_*` blocks describe every field. The worked examples are illustrative - your job is to enumerate the codebase's actual allocator surface. |
@@ -16,55 +23,41 @@ refcounting primitives, lock primitives. |
 
 ## Steps
 
-1. **Read the schema.** Open `{alloc_template}` with the `Read` tool.
-   Every JSON field is documented there. The schema is closed - do
-   not invent fields.
+### Read the schema
+  Open `{alloc_template}` with the `Read` tool.
+  Every JSON field is documented there. The schema is closed - do
+  not invent fields.
 
-2. **Walk the allocator surface.** Use `Bash` + `Read` (and CodeQL if
-   the codebase has a database) to enumerate:
+### Walk the allocator surface
 
-     - **Byte-level allocator families** - Generally, these are untyped `void*`
-     that are used by the application to (de-)allocate raw bytes (e.g.  `malloc`
-     and `free`). Each deallocator/free is a discriminator for composing a
-     family, paired with the allocators that return the objects freed by this
-     deallocator. Allocators may be shared by multiple families.  Resolve macro
-     variants to the symbols they expand to.  We do not call macros via FFI.
-     Allocator sets may include `memdup`, `realloc`, `calloc`, `realloc` on
-     single objects as well as arrays of objects - they all belong to the same
-     family as long as they free via the same destructor. Also look for
-     **byte-level duplicators** -- every copy/dup primitive (`*memdup`,
-     `memcpy`) -- and add them to the families above thay may use them.
-     
-     - **String allocator families** - Clusters operating on NIL-terminated
-     strings (`strdup`, `strndup`, etc.) also get their own families,
-     discriminated by the multiple deallocators. Generally, these operate on
-     `char*` pointers or similar single-byte scalar pointers, and not
-     aggregate types. These will be typed routines under our translations,
-     so they get a different family than the un-typed ones, and are not part
-     of those. 
-     
-     - **Refcounts** - every refcount type and its primitive family
-       (`new` / `up` / `down` / `get` / `free`, optional `assert`).
-       Record whether the backend is atomic, whether there's a lock
-       fallback, and the name of the fallback lock type.
-     
-     - **Locks** - every lock type (rwlock, mutex, spinlock) and its
-       primitive family. Record `read_lock: null` when `kind != "rwlock"`.
-     
-     - **Cleansers** - standalone zero-without-free primitives.
+  Use `Bash` + `Read` (and CodeQL if the codebase has a database) to enumerate:
 
-3. **Fill out the fields of each entry.** 
+   - **Byte-level allocator families** - Generally, these are untyped `void*`
+   that are used by the application to (de-)allocate raw bytes (e.g.  `malloc`
+   and `free`). Each deallocator/free is a discriminator for forming a
+   family, paired with the allocators that return the objects freed by it.
+   Allocators may be shared by multiple families and may generate
+   singleton as well as arrays of objects -- they all belong to the same
+   family as long as they free via the same destructor. Also include
+   byte-level copy/duplicator primitives, and add them to the families
+   above that may use them.
+   
+   - **Refcounts** - every refcount type and its primitive family
+     (`new` / `up` / `down` / `get` / `free`, optional `assert`).
+     Record whether the backend is atomic, whether there's a lock
+     fallback, and the name of the fallback lock type.
+   
+   - **Locks** - every lock type (rwlock, mutex, spinlock) and its
+     primitive family. Record `read_lock: null` when `kind != "rwlock"`.
+   
+### Submit findings
 
-4. **Write the catalogue.** Use the `Write` tool to emit
-   `{repo_root}/crustify/alloc.json`.
+Fill out the fields of each entry and emit the catalogue using the `Write` tool
+to emit `{repo_root}/crustify/alloc.json`.
 
-5. **Validate.** Run:
+### Validate 
 
-   ```bash
-   python3 -c "import json; json.load(open('{repo_root}/crustify/alloc.json'))"
-   ```
-
-   Fix any parse errors before declaring done.
+Validate that the generated schema parses cleanly and fix any errors.
 
 ## Tools
 

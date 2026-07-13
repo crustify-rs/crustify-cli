@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import json
-import threading
 from pathlib import Path
 from typing import IO
 
-from kiss.agents.sorcar.useful_tools import UsefulTools
 from kiss.core.print_to_console import ConsolePrinter
 from kiss.core.printer import MultiPrinter, Printer
-from kiss.core.relentless_agent import RelentlessAgent
 
 from crustify.artifact_store import ArtifactStore
 from crustify.layout import Layout
@@ -158,23 +155,20 @@ class CrustifyAgent:
         from crustify import config as _cfg0
         if getattr(_cfg0, "ISOLATED_WAVE", False) and getattr(self, "_commits_own_work", True):
             prompt += _ISOLATED_COMMIT_FOOTER
-        tools = self._tools()
-
         printer, log_fh = self._make_printer()
 
         try:
             from crustify import config as _cfg
-            agent = RelentlessAgent(self.name)
-            agent.run(
-                model_name=_cfg.MODEL_OVERRIDE or self.model,
+            from crustify.agents.backends import get_backend
+            get_backend(_cfg.BACKEND).run(
+                name=self.name,
+                model=_cfg.MODEL_OVERRIDE or self.model,
                 prompt_template=prompt,
                 arguments=self._arguments(),
-                tools=tools,
                 # Agents default to the target dir; a worktree-isolated agent
                 # (e.g. CrustifyMerge) overrides this to its own worktree.
                 work_dir=str(getattr(self, "_work_dir", None) or self.target),
                 printer=printer,
-                verbose=False,  # output is managed via the printer
             )
         finally:
             if log_fh is not None:
@@ -260,10 +254,6 @@ class CrustifyAgent:
         # together the two positionals every `crustify <repo_root> <target> …`
         # invocation in a prompt needs. Subclasses extend (super()._arguments()).
         return {"target": self.target_rel, "repo_root": str(self.repo_root)}
-
-    def _tools(self) -> list:
-        useful = UsefulTools(stop_event=threading.Event())
-        return [useful.Bash, useful.Read, useful.Edit, useful.Write]
 
     def _template(self, name: str) -> str:
         return (_PKG_ROOT.parent / "templates" / name).read_text()

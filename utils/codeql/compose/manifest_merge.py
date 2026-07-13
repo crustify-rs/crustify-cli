@@ -15,7 +15,7 @@ than the older "existing entry wins, ignore new" semantic:
     ``casted`` / footprints) are overwritten from the new run, and each field's
     composer-owned structure (``name`` / ``type`` / ``ref`` / ``array`` + the
     *presence* of ``ptr``) is overlaid by `_merge_fields` → `_overlay_field`.
-    This is what lets a composer fix land without a full `--redo` (e.g. a
+    This is what lets a composer fix land without a full `--reset` (e.g. a
     typedef'd function pointer that used to collapse to a bare scalar now
     surfaces as a proper pointer field).
   - **Agent-owned values are preserved**: the ``ptr`` ownership *block*
@@ -30,7 +30,7 @@ than the older "existing entry wins, ignore new" semantic:
     (`_merge_used_by` / `_merge_depends_on`). Symbol composer keys
     (``ptr_args`` / ``ptr_ret``) stay under the add-missing rule as before.
   - **A full reset** (drop agent annotations too) remains the explicit
-    `--redo`, which deletes matching entries before the compose.
+    `--reset`, which deletes matching entries before the compose.
 
 This module is intentionally narrow — no hashing, no staleness
 detection beyond the field-level merge above.

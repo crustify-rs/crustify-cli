@@ -37,7 +37,7 @@ def _add_analyze_filter_flags(p: argparse.ArgumentParser) -> None:
     exclusive). Apply after seed/closure logic to keep only entries
     with port additions (port-only) or without (wrap-only).
 
-    `--redo` may combine with any of these.
+    `--reset` may combine with any of these.
     """
     p.add_argument(
         "--all", action="store_true",
@@ -65,7 +65,15 @@ def _add_analyze_filter_flags(p: argparse.ArgumentParser) -> None:
              "names as a space-separated list after a single --name (e.g. "
              "`--name a b c`); repeating the flag keeps only the last group.",
     )
+    # Scope selection (mutually exclusive). Default (none set) = --scope-only:
+    # emit + analyze port ∪ wrap. The composer classifies port/wrap into the
+    # per-target scope.json (no per-entry tag); these pick which slice rides.
     post_filter = p.add_mutually_exclusive_group()
+    post_filter.add_argument(
+        "--scope-only", action="store_true",
+        help="Port ∪ wrap (the default): emit the port-reachable surface and "
+             "analyze it. Explicit form of the default scope.",
+    )
     post_filter.add_argument(
         "--port-only", action="store_true",
         help="After seed/closure, keep only port-shape entries (with "
@@ -78,8 +86,15 @@ def _add_analyze_filter_flags(p: argparse.ArgumentParser) -> None:
              "Equivalent to wanting just the wrap-scope subset of "
              "the result.",
     )
+    post_filter.add_argument(
+        "--unscoped", action="store_true",
+        help="Repo-wide: emit EVERY candidate, skipping the out-of-scope "
+             "reachability drop (so dispatch-table-only handlers and their "
+             "primitives are present). scope.json still classifies port/wrap. "
+             "Pairs with --compose-only for a cheap comprehensive foundation.",
+    )
     p.add_argument(
-        "--redo", action="store_true",
+        "--reset", action="store_true",
         help="Delete matching entries before running.",
     )
     p.add_argument(
@@ -211,9 +226,13 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
     p.add_argument("--strings", action="store_true",
                    help="Synthetic string clusters.")
     p.add_argument("--typegens", action="store_true",
-                   help="(syms) Type-generator macro primitives (kind "
-                        "macro_typegen) — the DEFINE_*/DECLARE_* families that "
-                        "generate types.")
+                   help="(syms) Type-generator macro primitives (macro.typegen) "
+                        "— the DEFINE_*/DECLARE_* families that generate types.")
+    p.add_argument("--lifetime", action="store_true",
+                   help="(syms) Lifecycle primitives: entries carrying a "
+                        "`lifetime` block (alloc/clone/refcount/lock). Combine "
+                        "with --strings/--arrays to filter by synth. Supersedes "
+                        "`query mem` now that tags replace alloc.json.")
     p.add_argument("--name", nargs="+", action="extend", default=None, metavar="NAME",
                    help="No --name → enumerate; one → introspect; several → batch records.")
     p.add_argument("--file", nargs="+", default=None, metavar="FILE",
@@ -391,6 +410,14 @@ def main() -> None:
              "hard-coded model.",
     )
     parser.add_argument(
+        "--backend",
+        default=None,
+        choices=["agents_sdk", "relentless"],
+        help="Agent backend driving each stage: agents_sdk (OpenAI Agents SDK, "
+             "default) or relentless (kiss RelentlessAgent). "
+             "Default: config.BACKEND.",
+    )
+    parser.add_argument(
         "--parallel",
         action="store_true",
         default=False,
@@ -431,12 +458,12 @@ def main() -> None:
         "propose",
         help=(
             "Phase 1: draft <repo_root>/.crustify/build.json. Refuses "
-            "to run if build.json already exists (use --redo to "
+            "to run if build.json already exists (use --reset to "
             "regenerate)."
         ),
     )
     build_propose_p.add_argument(
-        "--redo", action="store_true",
+        "--reset", action="store_true",
         help="Delete an existing build.json before proposing so the "
              "pipeline regenerates it fresh.",
     )
@@ -448,12 +475,12 @@ def main() -> None:
             "database creation per build.json, then extract T1/T2 "
             "CSVs the analyze pipeline consumes. Refuses to run if "
             "build.json does not exist (run `build propose` first). "
-            "--redo deletes the existing CodeQL database before "
+            "--reset deletes the existing CodeQL database before "
             "re-executing."
         ),
     )
     build_execute_p.add_argument(
-        "--redo", action="store_true",
+        "--reset", action="store_true",
         help="Delete the existing CodeQL database (codeql/db/) before "
              "executing so the pipeline rebuilds it fresh.",
     )
@@ -509,7 +536,7 @@ def main() -> None:
         ),
     )
     analyze_p.add_argument(
-        "--redo", action="store_true", dest="redo_stages",
+        "--reset", action="store_true", dest="reset_stages",
         help="Delete matching entries before running so the pipeline "
              "regenerates them fresh.",
     )
@@ -539,6 +566,16 @@ def main() -> None:
         help="Run the syms composer skeleton + symbol analyzer agent.",
     )
     _add_analyze_filter_flags(analyze_symbols_p)
+    # Cross-cutting discovery pass, runnable standalone (a single whole-tree
+    # agent run). Mirrors `analyze types --buffers`: it walks the syms tree
+    # and tags lifecycle primitives, taking no narrowing selection.
+    analyze_symbols_synth = analyze_symbols_p.add_mutually_exclusive_group()
+    analyze_symbols_synth.add_argument(
+        "--lifetimes", action="store_true",
+        help="Run ONLY the lifetime pass: tag lifecycle primitives "
+             "(allocator / free / clone / refcount / lock) across the whole "
+             "syms tree. Requires a composed syms tree. Skips the per-dir pass.",
+    )
 
     analyze_types_p = analyze_sub.add_parser(
         "types",
@@ -835,25 +872,32 @@ def main() -> None:
         crustify_config.LOG_TO_FILE = False
     if getattr(args, "model", None):
         crustify_config.MODEL_OVERRIDE = args.model
+    if getattr(args, "backend", None):
+        crustify_config.BACKEND = args.backend
 
-    # -- Redirect KISS trajectory storage into a per-session subdir
-    from kiss.core.config import set_artifact_base_dir
-    from crustify import config as _cfg
+    # -- Redirect KISS trajectory storage into a per-session subdir.
+    # Only the `relentless` backend runs kiss agents. Under `agents_sdk` this
+    # call would still mkdir an empty `kiss/<session>/.kiss.artifacts/jobs/
+    # <job>/` tree on every invocation and never write a trajectory into it,
+    # so it is skipped entirely.
+    if crustify_config.BACKEND == "relentless":
+        from kiss.core.config import set_artifact_base_dir
+        from crustify import config as _cfg
 
-    from crustify.layout import Layout as _Layout
-    try:
-        _kiss_base = _Layout.discover(target).kiss(target) / _cfg.SESSION_ID
-    except SystemExit:  # crustify/ not set up yet (pre-init command)
-        _kiss_base = Path(target) / "crustify" / "kiss" / _cfg.SESSION_ID
-    set_artifact_base_dir(_kiss_base)
+        from crustify.layout import Layout as _Layout
+        try:
+            _kiss_base = _Layout.discover(target).kiss(target) / _cfg.SESSION_ID
+        except SystemExit:  # crustify/ not set up yet (pre-init command)
+            _kiss_base = Path(target) / "crustify" / "kiss" / _cfg.SESSION_ID
+        set_artifact_base_dir(_kiss_base)
 
     if args.command == "build":
         from crustify.build import build_propose, build_execute
-        redo = bool(getattr(args, "redo", False))
+        reset = bool(getattr(args, "reset", False))
         if args.build_subject == "propose":
-            build_propose(target, redo=redo)
+            build_propose(target, reset=reset)
         elif args.build_subject == "execute":
-            build_execute(target, redo=redo)
+            build_execute(target, reset=reset)
         else:
             print(
                 f"error: unknown build subject {args.build_subject!r}",
@@ -902,14 +946,14 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
     from crustify import analyze as analyze_mod
 
     subject = args.subject
-    redo_stages = getattr(args, "redo_stages", False)
+    reset_stages = getattr(args, "reset_stages", False)
 
     if subject == "scope":
         port_only = bool(getattr(args, "port_only", False))
-        # --redo wipes the port seed; meaningful only for --port-only. The
+        # --reset wipes the port seed; meaningful only for --port-only. The
         # wrap section is a derived augmentation that recomputes in place.
-        if redo_stages and port_only:
-            analyze_mod.redo_scope(target)
+        if reset_stages and port_only:
+            analyze_mod.reset_scope(target)
         analyze_mod.analyze_scope(
             target,
             port_only=port_only,
@@ -919,8 +963,8 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
 
 
     if subject == "dag":
-        if redo_stages:
-            analyze_mod.redo_dag(target)
+        if reset_stages:
+            analyze_mod.reset_dag(target)
         analyze_mod.analyze_dag(target)
         return
 
@@ -930,7 +974,7 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
 
     # --out-suffix isolates this run onto types_<suffix>.json / syms_<suffix>.json.
     # Export it so the composer emit, the agents' `crustify query` subprocesses
-    # (env-inherited; no path is pushed to them), and redo all resolve the same
+    # (env-inherited; no path is pushed to them), and reset all resolve the same
     # suffixed file. Validate as a filename-safe token.
     out_suffix = getattr(args, "out_suffix", None)
     if out_suffix:
@@ -944,7 +988,7 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
         os.environ[OUT_SUFFIX_ENV] = out_suffix
 
     # Resolve --file basenames to repo-rel paths before building the
-    # selection / filter (so composer, agent, and redo all see the
+    # selection / filter (so composer, agent, and reset all see the
     # resolved paths).
     repo_root = analyze_mod._repo_root_for(target)
     resolved_files = _resolve_file_args(args, repo_root)
@@ -965,8 +1009,12 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
     parallel_max = int(getattr(args, "parallel_max", 8))
 
     if subject == "symbols":
-        if getattr(args, "redo", False):
-            analyze_mod.redo_syms(
+        # Standalone cross-cutting discovery pass.
+        if getattr(args, "lifetimes", False):
+            analyze_mod.run_lifetime_pass(target)
+            return
+        if getattr(args, "reset", False):
+            analyze_mod.reset_syms(
                 target,
                 all_entries=getattr(args, "all", False),
                 dirs=getattr(args, "dir", None),
@@ -985,8 +1033,8 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
         if getattr(args, "buffers", False):
             analyze_mod.run_buffer_pass(target)
             return
-        if getattr(args, "redo", False):
-            analyze_mod.redo_types(
+        if getattr(args, "reset", False):
+            analyze_mod.reset_types(
                 target,
                 all_entries=getattr(args, "all", False),
                 dirs=getattr(args, "dir", None),
@@ -1011,9 +1059,9 @@ def _validate_narrowing(args: argparse.Namespace) -> None:
     --port-only / --wrap-only may combine with either --all or seed
     selectors — they're orthogonal post-emission filters.
     """
-    # Standalone cross-cutting synthesis passes (types only) run over
-    # the whole tree and take no narrowing selection.
-    if getattr(args, "buffers", False):
+    # Standalone cross-cutting passes (types: --buffers; symbols:
+    # --lifetimes) run over the whole tree and take no narrowing selection.
+    if getattr(args, "buffers", False) or getattr(args, "lifetimes", False):
         return
     want_all = bool(getattr(args, "all", False))
     seed = (
@@ -1115,7 +1163,7 @@ def _build_filter_spec(
 
     `resolved_files` is the basename-resolved file list (see
     `_resolve_file_args`); we pass it in rather than re-resolving from
-    `args.file` so the composer / agent / redo all share the same
+    `args.file` so the composer / agent / reset all share the same
     canonical paths.
 
     Always returns a `FilterSpec` (never ``None``) so the composer
@@ -1159,6 +1207,7 @@ def _build_filter_spec(
         scope_json_path=scope_arg if scope_arg else None,
         port_only=bool(getattr(args, "port_only", False)),
         wrap_only=bool(getattr(args, "wrap_only", False)),
+        unscoped=bool(getattr(args, "unscoped", False)),
     )
 
 
@@ -1246,6 +1295,7 @@ def _handle_query(args: argparse.Namespace, target: Path) -> None:
         strings=bool(getattr(args, "strings", False)),
         arrays=bool(getattr(args, "arrays", False)),
         typegens=bool(getattr(args, "typegens", False)),
+        lifetime=bool(getattr(args, "lifetime", False)),
         fields=bool(getattr(args, "fields", False)),
         ops=bool(getattr(args, "ops", False)),
         methods=bool(getattr(args, "methods", False)),

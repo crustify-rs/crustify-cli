@@ -65,6 +65,13 @@ class FilterSpec:
     port_only: bool = False
     wrap_only: bool = False
 
+    # Emit EVERY candidate, skipping the out-of-scope reachability drop
+    # (repo-wide inventory). scope.json still classifies port/wrap for
+    # entries that qualify; out-of-scope entries emit as base-shape and are
+    # classified out-of-scope by scope.json absence. The default (False) is
+    # scope-only: emit port + wrap-reachable, drop the rest.
+    unscoped: bool = False
+
     def is_empty(self) -> bool:
         """True iff every narrowing flag is at its default value."""
         return (
