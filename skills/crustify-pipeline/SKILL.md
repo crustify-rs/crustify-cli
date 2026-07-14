@@ -19,8 +19,9 @@ each command's `--help`** — run it; this is the router.
 > Invocation: `crustify <repo_root> <target> <command> …`. Global flags
 > (`--model`, `--parallel`) **before** `<repo_root>`; stage flags
 > (`--parallel-max`, `--name`, `--dry-run`, `-y`) **after** the subcommand.
-> `<target>` is the dir owning a `scope.json` (e.g. `src/libgit2`); `_root` is
-> the whole-repo target. `--dry-run` previews a plan without spawning agents.
+> `<target>` is the dir owning a `scope.json` (e.g. `src/libgit2`); for a
+> repo-wide run add `--unscoped` on a real target. `--dry-run` previews a plan
+> without spawning agents.
 
 ## Stage order (each consumes the prior artifacts)
 

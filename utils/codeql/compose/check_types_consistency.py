@@ -96,14 +96,12 @@ def lifetime_set(by_type) -> set[str]:
     out: set[str] = set()
     for entries in by_type.values():
         for entry, _ in entries:
-            lc = scope.lifetime(entry)
-            out |= set(scope.alloc_fns(lc))
-            # `dtor` is `{shared, exclusive, fields}` (all lifecycle funcs);
-            # `scope.drop_op_names` tolerates the legacy `{storage, fields}`
-            # and flat-string shapes during migration.
-            out |= set(scope.drop_op_names(lc.get("drop")))
-            out |= set(scope.clone_op_names(lc))
-            out |= set(scope.locking_op_names(lc.get("locking")))
+            # Top-level `dropped_by`/`cloned_by` = {exclusive, shared} fn lists
+            # (bridge falls back to a cluster's lifetime.{drop,clone}). allocs +
+            # type-level locking retired in Phase 2 -- their fns reach the set via
+            # the call graph.
+            out |= set(scope.drop_op_names(scope.type_dropped_by(entry)))
+            out |= set(scope.clone_op_names(scope.type_cloned_by(entry)))
     return out
 
 

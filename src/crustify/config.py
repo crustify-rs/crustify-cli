@@ -1,19 +1,25 @@
 """Tunable knobs for the crustify pipeline.
 """
 
+import secrets as _secrets
 import time as _time
 
 # ---------------------------------------------------------------------------
 # Session identity — generated once per CLI invocation
 # ---------------------------------------------------------------------------
 
-SESSION_ID: str = _time.strftime("%Y-%m-%d_%H-%M-%S")
+SESSION_ID: str = f"{_time.strftime('%Y-%m-%d_%H-%M-%S')}_{_secrets.token_hex(2)}"
 """Timestamp label shared by all agents in a single ``crustify`` run.
 
 Used to group per-session log files under ``.crustify/logs/<SESSION_ID>/``,
 and -- under the ``relentless`` backend only -- KISS trajectory artifacts
 under ``.crustify/kiss/<SESSION_ID>/``. The ``agents_sdk`` backend writes no
 kiss artifacts and creates no such directory.
+
+The timestamp keeps sessions chronologically sortable; the trailing 4-hex
+random token disambiguates crustify processes launched within the same second
+(e.g. parallel ``--out-suffix`` model-comparison runs), so their per-session log
+dirs never collide and clobber each other's ``<stage>.log``.
 """
 
 

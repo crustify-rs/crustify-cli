@@ -268,19 +268,15 @@ def load_type_meta(analysis_root: Path) -> dict[str, tuple[list[str], set[str]]]
             if not tag or tag in meta:
                 continue
             fields = [x["name"] for x in (e.get("fields") or []) if x.get("name")]
-            from compose.scope import lifetime as _lifetime
-            from compose.scope import alloc_fns as _alloc_fns
             from compose.scope import drop_op_names as _drop_op_names
-            lt = _lifetime(e)
-            lc = set(_alloc_fns(lt))
-            # `dtor` roles ({shared, exclusive, fields}) are each a list of
-            # lifecycle fns; scope.drop_op_names flattens them (and tolerates
-            # legacy scalar / {storage, fields} shapes during migration).
-            lc |= set(_drop_op_names(lt.get("drop")))
             from compose.scope import clone_op_names as _clone_op_names
-            from compose.scope import locking_op_names as _locking_op_names
-            lc |= set(_clone_op_names(lt))
-            lc |= set(_locking_op_names(lt.get("locking")))
+            from compose.scope import type_dropped_by, type_cloned_by
+            # Top-level `dropped_by`/`cloned_by` = {exclusive, shared} fn lists
+            # (the bridge falls back to a cluster's lifetime.{drop,clone}).
+            # (allocs + type-level locking retired in Phase 2; their fns reach the
+            # wrap set via the normal call graph, not lifecycle bundling.)
+            lc = set(_drop_op_names(type_dropped_by(e)))
+            lc |= set(_clone_op_names(type_cloned_by(e)))
             meta[tag] = (fields, lc)
     return meta
 

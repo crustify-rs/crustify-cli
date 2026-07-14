@@ -47,7 +47,6 @@ def query(
     strings: bool = False,
     arrays: bool = False,
     typegens: bool = False,
-    lifetime: bool = False,
     fields: bool = False,
     ops: bool = False,
     methods: bool = False,
@@ -96,14 +95,10 @@ def query(
         _create_type(Layout.discover(target), target, create)
         return
     type_facets = fields or ops or methods or accessors
-    if type_facets and subject != "types":
-        raise SystemExit("query syms: --fields/--ops/--methods/--accessors apply to types only.")
-    if typegens and subject != "syms":
-        raise SystemExit("query types: --typegens applies to syms only (macros with macro.typegen).")
-    if lifetime and subject != "syms":
-        raise SystemExit("query types: --lifetime applies to syms only (the raw "
-                         "lifecycle primitives). A type's lifecycle is its whole "
-                         "`lifetime` block; query it with --with-details.")
+    if type_facets and kind != "type":
+        raise SystemExit("query symbols: --fields/--ops/--methods/--accessors apply to types only.")
+    if typegens and kind != "symbol":
+        raise SystemExit("query types: --typegens applies to symbols only (macros with macro.typegen).")
     if (type_facets or manifest or update is not None) and len(name_list) != 1:
         raise SystemExit(
             f"query {subject}: facets / --manifest / --update need exactly one --name.")
@@ -117,7 +112,7 @@ def query(
         _enumerate(target, kind=kind, files=files,
                    wrap_only=wrap_only, port_only=port_only,
                    strings=strings, arrays=arrays, typegens=typegens,
-                   lifetime=lifetime, with_details=with_details)
+                   with_details=with_details)
 
 
 def _summarize(entry: dict | None, kind: str) -> dict | None:
@@ -131,11 +126,8 @@ def _summarize(entry: dict | None, kind: str) -> dict | None:
         from compose import scope
         keep = ("type", "typedef", "kind", "declared_in", "defined_in", "casted")
         s = {k: entry[k] for k in keep if k in entry}
-        lc = scope.lifetime(entry)
-        s["lifetime"] = {"allocs": scope.alloc_fns(lc),
-                         **{k: lc.get(k) for k in
-                            ("clone", "drop",
-                             "locking", "conditional_drop")}}
+        s["dropped_by"] = scope.type_dropped_by(entry)
+        s["cloned_by"] = scope.type_cloned_by(entry)
         s["fields"] = [f.get("name") for f in entry.get("fields") or []]
         # Method surface: lifecycle ops for a concrete type; the explicit `ops`
         # list for a synthetic cluster. (Field accessors are not part of it —
@@ -143,17 +135,17 @@ def _summarize(entry: dict | None, kind: str) -> dict | None:
         s["ops"] = scope.type_method_syms(entry)
         return s
     # the symbol's signature lives in `type` (some manifests use `signature`).
-    # `macro` / `lifetime` are small agent-facet blocks (not the heavy per-arg
-    # ptr analysis), so they ride the light view — matching the type branch's
-    # lifecycle summary and this function's "identity + lifecycle" contract.
+    # `macro` is a small agent-facet block (not the heavy per-arg ptr analysis),
+    # so it rides the light view. The lifecycle role of a symbol is now derived
+    # from the ptr `owned.{dropped_by,cloned_by}` bindings, not a stored block.
     keep = ("name", "kind", "defined_in", "declared_in",
-            "type", "signature", "macro", "lifetime")
+            "type", "signature", "macro")
     return {k: entry[k] for k in keep if k in entry}
 
 
 def _enumerate(
     target: Path, *, kind: str, files, wrap_only, port_only,
-    strings, arrays, typegens=False, lifetime=False, with_details=False,
+    strings, arrays, typegens=False, with_details=False,
 ) -> None:
     """List the (filtered) type/symbol entries straight from the manifest — one
     ``name<TAB>defined_in<TAB>declared_in`` line each (the placement provenance),
@@ -175,7 +167,7 @@ def _enumerate(
     # (defined_in or canonical_decl(declared_in)). This excludes out-of-closure
     # files (test/) and collapses null-def extern twins (only the real def is in
     # scope.json). Empty when scope.json is absent, so --port-only/--wrap-only
-    # yield nothing for an unscoped target (e.g. _root) rather than mislabeling.
+    # yield nothing for a scope-less target (e.g. ".") rather than mislabeling.
     # Synthetic types (string/array clusters) are NOT in scope.json — they are
     # *always* wrap-scope, classified by kind here.
     sub = ("types",) if kind == "type" else ("functions", "globals", "macros")
@@ -214,18 +206,7 @@ def _enumerate(
             if port_only and (is_synth or not any(
                     scope.origin_key(c, d, decls) in port_keys for c in cands)):
                 continue
-            if lifetime:
-                # Lifecycle-primitive filter: keep only entries carrying a
-                # `lifetime` block; --strings/--arrays reinterpret as a synth
-                # filter on that block (alloc/clone), not the entry kind.
-                lt = e.get("lifetime")
-                if not lt:
-                    continue
-                if synth_sel:
-                    got = (lt.get("alloc") or lt.get("clone") or {}).get("synth")
-                    if got not in synth_sel:
-                        continue
-            elif synth_sel and sk not in synth_sel:
+            if synth_sel and sk not in synth_sel:
                 continue
             if typegens and not ((e.get("macro") or {}).get("typegen")):
                 continue
@@ -235,9 +216,7 @@ def _enumerate(
 
     rows.sort(key=lambda e: (e.get(tagkey) or "", e.get("defined_in") or ""))
 
-    # `--lifetime` prints full records by default (like the `query mem` it
-    # replaces): you want each primitive's block in hand, not just its name.
-    if with_details or lifetime:
+    if with_details:
         print(json.dumps(rows, indent=2))
         return
     # Plain output: one TSV line per (name, kind, defined_in, declared_in) — the
@@ -476,10 +455,13 @@ def _accessors(layout, target, tag: str, defined_in: str | None, *,
 
 # ----------------------------------------------------------- --update ingest
 
-_LIFECYCLE_KEYS = ("allocs", "clone", "drop", "locking",
-                   "conditional_drop")
-_FINDINGS_TOP = set(_LIFECYCLE_KEYS) | {"fields", "_comment_agent"}
-_FIELD_AGENT_KEYS = {"ptr"}
+# Phase 2 reshape: `allocs`/`locking`/`conditional_drop` retired; the
+# `lifetime.{drop,clone}` wrapper unwrapped into TOP-LEVEL type bindings
+# `dropped_by`/`cloned_by`, each `{exclusive, shared}` of fn lists. The old
+# `drop.fields` dispose role is now per-field (`owned.disposed_in`).
+_TYPE_LIFECYCLE_KEYS = ("dropped_by", "cloned_by")
+_FINDINGS_TOP = set(_TYPE_LIFECYCLE_KEYS) | {"fields", "_comment_agent"}
+_FIELD_AGENT_KEYS = {"ptr", "locked_by"}
 
 # --create ingest (buffer pass): a whole synthetic string/array cluster entry.
 # A cluster records the CVec strategy family: its identity, the byte-level
@@ -502,15 +484,20 @@ _CREATE_TOP = {
     "elems"}
 
 # Symbol findings (functions / callbacks / macros) — the agent-fillable surface.
-_SYM_FINDINGS_TOP = {"macro", "lifetime", "ptr_args", "ptr_ret", "forks"}
+_SYM_FINDINGS_TOP = {"macro", "ptr_args", "ptr_ret", "forks", "ptr", "locked_by"}
 # Same structured ownership block as a struct field's `ptr` (see types.md#ptr):
 # `owned` nests {exclusive, shared}, `borrowed` nests {lifetime}, `array` is
 # null|{by_val}|{by_ref:{owned,borrowed}}. A pointer at a call boundary and a
 # pointer in a struct extract identical properties, so args and returns share it.
-_PTR_ARG_AGENT_KEYS = {"array", "string", "owned", "borrowed", "nullable",
-                       "mutable", "note"}
+_PTR_ARG_AGENT_KEYS = {"scalar", "array", "string", "owned", "borrowed",
+                       "nullable", "mutable", "note"}
 _PTR_RET_AGENT_KEYS = _PTR_ARG_AGENT_KEYS
 _FORK_KEYS = {"ptr_args", "ptr_ret", "callsites"}
+# The concurrency binding on a GLOBAL (or, in types.json, a struct field): the
+# lock object guarding the slot plus its acquire/release op lists. It sits at the
+# entry level (sibling of `ptr`), not inside `ptr`, because the guarded datum is
+# often a non-pointer (a refcount int, a flag).
+_LOCKED_BY_KEYS = {"lock", "lock_op", "unlock_op"}
 
 
 # `types.json` is shared with the synthetic string/array-cluster analyzers; the
@@ -575,62 +562,70 @@ def _findings_schema(kind: str) -> dict:
     if kind == "type":
         return {
             "_subject": "type",
-            "_doc": ("Submit ONLY the lifecycle slots / fields you are filling. "
+            "_doc": ("Submit ONLY the top-level bindings / fields you are filling. "
                      "Merge is partial, idempotent, and lock-serialized; "
                      "unmentioned slots/fields are left untouched. Unknown "
-                     "top-level keys are hard-rejected. (Lifecycle slots are "
-                     "stored under the entry's `lifetime` block, but you submit "
-                     "them FLAT, as shown.)"),
-            "allocs": ["<byte-level allocator fn that produces a raw T (heap types: "
-                       "malloc/calloc-family from alloc.json; may be several for "
-                       "polymorphic backends or a heap/mmap split). Empty for "
-                       "stack/embedded types. Higher-level open/lookup/init logic "
-                       "stays a free function, NOT here.>"],
-            "clone": {
-                "shared": "<refcount-bump fn (the up_ref) -> CRefCloned / CArc Clone> | null",
-                "exclusive": ["<deep-copy / dup fn -> CCloned / CBox Clone>"],
+                     "top-level keys are hard-rejected. `dropped_by`/`cloned_by` "
+                     "are TOP-LEVEL type fields (no `lifetime` wrapper)."),
+            "dropped_by": {
+                "exclusive": ["<exclusive destructor fn -> CBox::drop>"],
+                "shared": ["<refcount-decrementing destructor fn -> CArc::drop>"],
             },
-            "drop": {
-                "exclusive": ["<exclusive destructor fn>"],
-                "shared": ["<shared/refcounted destructor fn>"],
-                "fields": ["<fields-only disposer fn>"],
+            "cloned_by": {
+                "exclusive": ["<deep-copy / dup fn -> CBox::clone>"],
+                "shared": ["<refcount-bump / up_ref fn -> CArc::clone>"],
             },
-            "locking": [{
-                "acquire": "<lock fn>", "release": "<unlock fn>",
-                "locks": ["<field storing the lock object>"],
-                "locked_fields": ["<field the lock guards>"],
-            }],  # or null; a LIST -- one entry per distinct lock/field discipline
-            "conditional_drop": "<drop-condition descriptor> | null",
             "fields": {
                 "<field_name>": {
                     "ptr": {
-                        "array": "null | {by_val: true} | {by_ref: {owned: bool, borrowed: bool}}",
+                        "scalar": ("bool: true = MAY be a single object "
+                                   "(-> COwn/CBox); false = never a single object, "
+                                   "only array/string. Co-exists with array; XOR string"),
+                        "array": ("null | {by_val: true} | {by_ref: {owned: <owned "
+                                  "block>|null, borrowed: {lifetime}|null}} -- by_ref "
+                                  "owned/borrowed is ELEMENT ownership, each the same "
+                                  "block as this record's owned/borrowed"),
                         "string": "bool",
-                        "owned": "null | {exclusive: bool, shared: bool}",
+                        "owned": ("null | {exclusive: bool, shared: bool, "
+                                  "dropped_by: [<free fns>]|null, "
+                                  "cloned_by: [<dup/up_ref fns>]|null, "
+                                  "disposed_in: [<this type's methods that free "
+                                  "this field>]|null}"),
                         "borrowed": "null | {lifetime: <source>}",
                         "nullable": "bool", "mutable": "bool", "note": "<str>",
-                    }
+                    },
+                    "locked_by": {
+                        "lock": "<field/global storing the guarding lock>",
+                        "lock_op": ["<acquire fn>", "..."],
+                        "unlock_op": ["<release fn>", "..."],
+                    },
                 }
             },
             "_comment_agent": "<your rationale (optional free text)>",
             "_rules": [
-                "drop: each role (shared / exclusive / fields) is a LIST and may "
-                "name several destructors of that kind; a single C function must "
-                "not appear in two different roles (roles stay disjoint). A "
-                "parameterized free (one taking an element-free callback, e.g. "
-                "OPENSSL_sk_pop_free) is STILL a destructor - the owned-element "
-                "variant - not disqualified.",
+                "dropped_by / cloned_by: TOP-LEVEL {exclusive, shared}, each a LIST; "
+                "a single C function must not appear in both roles of dropped_by "
+                "(roles disjoint). A parameterized free (one taking an element-free "
+                "callback, e.g. OPENSSL_sk_pop_free) is STILL a destructor.",
                 "every named op must be a real function, not a macro "
                 "(record the underlying function it expands to).",
-                "field.ptr: `array` = null | {by_val:true} | {by_ref:{owned,"
-                "borrowed}}, where by_ref is a pointer array (container) and its "
-                "owned/borrowed is ELEMENT ownership. `owned` = null | {exclusive,"
-                "shared} (the pointer/buffer ownership); `borrowed` = null | "
-                "{lifetime}. `owned` and `borrowed` MAY both be non-null "
-                "(runtime-conditional dual ownership); likewise owned.exclusive + "
-                "owned.shared, and by_ref.owned + by_ref.borrowed. Still enforced: "
-                "string XOR array; a borrowed pointer requires a lifetime; a const "
-                "pointee implies mutable != true.",
+                "field.ptr: `owned` = null | {exclusive, shared, dropped_by, "
+                "cloned_by, disposed_in} -- dropped_by/cloned_by are the LISTs "
+                "naming how this field is freed / cloned (the freeing agent); "
+                "`disposed_in` is the LIST of THIS type's methods whose body calls "
+                "the field's dropped_by (the call site it happens in). "
+                "`array` = null | {by_val:true} | {by_ref:{owned,borrowed}}, where "
+                "by_ref owned/borrowed is ELEMENT ownership -- each the same block "
+                "as the top-level owned/borrowed. SHAPE: `scalar` (single-object) "
+                "co-exists with `array`; `string` is exclusive with BOTH scalar "
+                "and array; a pointer is at least one of {scalar, array, string}. "
+                "owned + borrowed MAY both be non-null; likewise owned.exclusive + "
+                "owned.shared and by_ref.owned + by_ref.borrowed. Enforced: string "
+                "XOR array; string XOR scalar; a borrowed pointer needs a "
+                "lifetime; a const pointee implies mutable != true.",
+                "field.locked_by: null | {lock, lock_op, unlock_op} on the GUARDED "
+                "field (pointer or not) -- lock names the lock field/global; "
+                "lock_op/unlock_op are lists of real acquire/release functions.",
             ],
             "_valid_top_keys": sorted(_FINDINGS_TOP),
         }
@@ -645,18 +640,6 @@ def _findings_schema(kind: str) -> dict:
             "const": "<bool: expands to a compile-time constant>",
             "typegen": "<bool: declares new types and/or their ops>",
         },
-        "_lifetime_note": ("The lifecycle-primitive block: null for an ordinary "
-                           "symbol, else EXACTLY ONE of alloc / clone / refcount "
-                           "/ lock (the subfield name IS the primitive kind). See "
-                           "`query syms --schema`, ## lifetime."),
-        "lifetime": {
-            "alloc": {"role": "'allocator' | 'free'",
-                      "freed_by": "[<free names>] (allocator only)",
-                      "synth": "'string' | 'array' (allocator only)"},
-            "clone": {"freed_by": "[<free names>]", "synth": "'string' | 'array'"},
-            "refcount": {"op": "new|up|down|get|free|assert", "cluster": "<type name>"},
-            "lock": {"op": "new|read_lock|write_lock|unlock|free", "cluster": "<type name>"},
-        },
         "_ptr_note": ("`ptr_args` records and `ptr_ret` carry the SAME ownership "
                       "block — identical to a struct field's `ptr` (see "
                       "`query types --schema`, ## ptr). `owned` gives CBox vs "
@@ -664,14 +647,39 @@ def _findings_schema(kind: str) -> dict:
                       "(`arg:<name>`, `arg:<name>->path`, `static`, `other`)."),
         "ptr_args": {
             "<position:int>": {
-                "array": "null | {by_val: true} | {by_ref: {owned: bool, borrowed: bool}}",
+                "scalar": ("bool: true = MAY be a single pointee (-> COwn/CBox); "
+                           "false = never a single object, only array/string. "
+                           "CO-EXISTS with `array` (a generic void* allocator "
+                           "serves both -> scalar:true + array:{by_val}, wrap "
+                           "forks COwn + CVec); XOR `string`. calloc/*_array = "
+                           "scalar:false; a typed single object (SSL*) = "
+                           "scalar:true, array:null"),
+                "array": ("null | {by_val: true} | {by_ref: {owned: <owned "
+                          "block>|null, borrowed: {lifetime: <source>}|null}} "
+                          "(by_ref = pointer array/container; its owned/borrowed "
+                          "is ELEMENT ownership, EACH the same block as this "
+                          "record's owned/borrowed — e.g. a raw X509** array -> "
+                          "by_ref.owned.dropped_by = [\"X509_free\"])"),
                 "string": "bool",
-                "owned": "null | {exclusive: bool, shared: bool}",
+                "owned": ("null | {exclusive: bool, shared: bool, "
+                          "dropped_by: [<free names>]|null, cloned_by: [<dup/up_ref names>]|null}"),
                 "borrowed": "null | {lifetime: <source>}",
                 "nullable": "bool", "mutable": "bool", "note": "<str>",
             }
         },
         "ptr_ret": "<same block as one ptr_args record> | null",
+        "_global_note": ("`ptr` and `locked_by` are GLOBALS ONLY (functions use "
+                         "ptr_args/ptr_ret; macros use neither). `ptr` is the "
+                         "ownership block of a global that is itself a pointer — a "
+                         "'static global normally leaves owned.dropped_by/"
+                         "cloned_by null; null for a non-pointer global. "
+                         "`locked_by` is the lock discipline guarding the global."),
+        "ptr": "<same block as one ptr_args record> | null   (globals only)",
+        "locked_by": {
+            "lock": "<name of the guarding lock global/field>",
+            "lock_op": ["<acquire fn>", "..."],
+            "unlock_op": ["<release fn>", "..."],
+        },
         "forks": [{
             "ptr_args": "<as ptr_args above>",
             "ptr_ret": "<as ptr_ret above>",
@@ -682,104 +690,29 @@ def _findings_schema(kind: str) -> dict:
             "independent (a macro may be none of them — that is the shape that "
             "needs a C shim, since bindgen binds a const, an alias' target, and "
             "a typegen's expansion).",
-            "lifetime: null, or EXACTLY ONE of alloc/clone/refcount/lock. "
-            "alloc.role='allocator' needs synth (string|array); role='free' takes "
-            "neither freed_by nor synth. clone needs synth. refcount/lock need "
-            "op (from their enum) + cluster. Any symbol kind may carry it (a "
-            "refcount 'assert' may be a macro).",
             "ptr_ret only on a pointer-returning symbol.",
-            "ptr: array = null | {by_val:true} | {by_ref:{owned,borrowed}} (by_ref "
-            "is a container; its owned/borrowed is ELEMENT ownership). string XOR "
-            "array; a const pointee implies mutable != true; a borrowed pointer "
-            "needs a lifetime; exclusive/shared only under owned. owned + borrowed "
-            "MAY both be non-null (runtime-conditional dual ownership); likewise "
-            "owned.exclusive + owned.shared and by_ref.owned + by_ref.borrowed.",
+            "ptr block (ptr_args/ptr_ret and the global `ptr`): array = null | "
+            "{by_val:true} | {by_ref:{owned,borrowed}}, where by_ref is a "
+            "container and its owned/borrowed is ELEMENT ownership — each the "
+            "SAME block as the top-level owned/borrowed (so by_ref.owned carries "
+            "dropped_by/cloned_by). SHAPE: `scalar` (single-object) co-exists "
+            "with `array` (buffer) — a generic void* allocator is scalar+array, "
+            "the wrap stage forks one owner per shape (scalar->COwn, "
+            "array->CVec); `string` is exclusive with BOTH scalar and array; a "
+            "pointer should be at least one of {scalar, array, string}. string "
+            "XOR array; a const pointee implies mutable != true; "
+            "a borrowed pointer needs a lifetime; exclusive/shared only under "
+            "owned. owned + borrowed MAY both be non-null (runtime-conditional "
+            "dual ownership); likewise owned.exclusive + owned.shared and "
+            "by_ref.owned + by_ref.borrowed.",
+            "ptr / locked_by: GLOBALS only. `ptr` is the global-pointer ownership "
+            "block (null for a non-pointer global); `locked_by` is null | {lock, "
+            "lock_op, unlock_op} with lock_op/unlock_op lists of real functions.",
             "forks: callbacks only; each callsite claimed by exactly one entry.",
         ],
         "_valid_top_keys": sorted(_SYM_FINDINGS_TOP),
     }
 _MACRO_FLAGS = frozenset({"alias", "const", "typegen"})
-
-# `lifetime` block: exactly one of these primitive-kind subfields is populated
-# (the subfield name IS the kind); the whole block is null for ordinary symbols.
-# See docs/schemas/syms.md `## lifetime`.
-_LIFETIME_KINDS = frozenset({"alloc", "clone", "refcount", "lock"})
-_SYNTH_VALUES = frozenset({"string", "array"})
-_REFCOUNT_OPS = frozenset({"new", "up", "down", "get", "free", "assert"})
-_LOCK_OPS = frozenset({"new", "read_lock", "write_lock", "unlock", "free"})
-
-
-def _lifetime_block_errors(blk) -> list[str]:
-    """Validate a submitted `lifetime` block against docs/schemas/syms.md.
-
-    `null` (ordinary symbol) is accepted. Otherwise EXACTLY ONE of
-    `{alloc, clone, refcount, lock}` must be populated, and that subfield's
-    shape is checked per its kind. Semantic rules (untyped-only, tag-the-callable)
-    are the agent's judgement, not enforced here."""
-    if blk is None:
-        return []
-    if not isinstance(blk, dict):
-        return ["lifetime: must be an object or null"]
-    kinds = set(blk)
-    bad = kinds - _LIFETIME_KINDS
-    if bad:
-        return [f"lifetime: unknown subfield(s) {sorted(bad)} "
-                f"(one of {sorted(_LIFETIME_KINDS)})"]
-    if len(kinds) != 1:
-        return ["lifetime: exactly ONE of "
-                f"{sorted(_LIFETIME_KINDS)} must be populated (got {sorted(kinds)})"]
-    (kind,) = kinds
-    sub = blk[kind]
-    e: list[str] = []
-    if not isinstance(sub, dict):
-        return [f"lifetime.{kind}: must be an object"]
-
-    def _synth(v):
-        if v not in _SYNTH_VALUES:
-            e.append(f"lifetime.{kind}.synth: {v!r} not in {sorted(_SYNTH_VALUES)}")
-
-    def _freed_by(v):
-        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
-            e.append(f"lifetime.{kind}.freed_by: must be a list of symbol names")
-
-    if kind == "alloc":
-        bad = set(sub) - {"role", "freed_by", "synth"}
-        if bad:
-            e.append(f"lifetime.alloc: unknown key(s) {sorted(bad)}")
-        role = sub.get("role")
-        if role not in ("allocator", "free"):
-            e.append("lifetime.alloc.role: must be 'allocator' or 'free'")
-        if role == "allocator":
-            if "synth" not in sub:
-                e.append("lifetime.alloc.synth: required for an allocator")
-            else:
-                _synth(sub["synth"])
-            _freed_by(sub.get("freed_by", []))
-        elif role == "free":
-            extra = {"freed_by", "synth"} & set(sub)
-            if extra:
-                e.append(f"lifetime.alloc: {sorted(extra)} apply to an allocator, "
-                         f"not a free")
-    elif kind == "clone":
-        bad = set(sub) - {"freed_by", "synth"}
-        if bad:
-            e.append(f"lifetime.clone: unknown key(s) {sorted(bad)}")
-        if "synth" not in sub:
-            e.append("lifetime.clone.synth: required")
-        else:
-            _synth(sub["synth"])
-        _freed_by(sub.get("freed_by", []))
-    else:  # refcount | lock
-        bad = set(sub) - {"op", "cluster"}
-        if bad:
-            e.append(f"lifetime.{kind}: unknown key(s) {sorted(bad)}")
-        ops = _REFCOUNT_OPS if kind == "refcount" else _LOCK_OPS
-        if sub.get("op") not in ops:
-            e.append(f"lifetime.{kind}.op: must be one of {sorted(ops)}")
-        if not (isinstance(sub.get("cluster"), str) and sub.get("cluster")):
-            e.append(f"lifetime.{kind}.cluster: required (the cluster type name)")
-    return e
-
 
 def _apply_ptr_agent(entry: dict, ptr_args_f: dict | None,
                      ptr_ret_f: dict | None) -> None:
@@ -822,12 +755,20 @@ def _ptr_invariant_errors(field: str, ptr: dict, field_type: str) -> list[str]:
                 e.append(f"field {field!r}: array.by_ref must be {{owned, borrowed}}")
     if ptr.get("string") and array is not None:
         e.append(f"field {field!r}: string and array both set (must be XOR)")
+    if ptr.get("scalar") is not None and not isinstance(ptr.get("scalar"), bool):
+        e.append(f"field {field!r}: scalar must be a boolean")
+    if ptr.get("string") and ptr.get("scalar"):
+        e.append(f"field {field!r}: string and scalar both set (a string is not a scalar)")
     borrowed = ptr.get("borrowed")
     if isinstance(borrowed, dict) and not borrowed.get("lifetime"):
         e.append(f"field {field!r}: borrowed set but lifetime unset")
     owned = ptr.get("owned")
     if owned is not None and not isinstance(owned, dict):
         e.append(f"field {field!r}: owned must be null or {{exclusive, shared}}")
+    if isinstance(owned, dict) and owned.get("disposed_in") is not None and not (
+            isinstance(owned["disposed_in"], list)
+            and all(isinstance(x, str) for x in owned["disposed_in"])):
+        e.append(f"field {field!r}: owned.disposed_in must be a list of method names")
     if "const" in (field_type or "") and ptr.get("mutable") is True:
         e.append(f"field {field!r}: const in type but mutable == true")
     return e
@@ -947,42 +888,37 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
                               f"record the underlying function it expands to, "
                               f"or omit it (§2.3)")
 
-        # Lifecycle function-name checks.
-        for fn in f.get("allocs") or []:
-            check_fn(fn, "alloc")
-        clone = f.get("clone") or {}
-        if isinstance(clone, dict):
-            if clone.get("shared"):
-                check_fn(clone["shared"], "clone.shared")
-            for fn in clone.get("exclusive") or []:
-                check_fn(fn, "clone.exclusive")
-        d = f.get("drop") or {}
-        if isinstance(d, dict):
-            # Current schema is {shared, exclusive, fields}. Old keys (e.g. the
-            # pre-split `storage`) are HARD-REJECTED — findings must be current
-            # schema, no legacy fields.
-            bad_drop = set(d) - {"shared", "exclusive", "fields"}
-            if bad_drop:
-                errors.append(f"drop has old/unknown key(s) {sorted(bad_drop)} "
-                              "(use shared / exclusive / fields)")
-            # Each role is a LIST (a role may hold several distinct destructors
-            # of the same kind); a scalar is tolerated. No single C function may
-            # fill two different roles (roles stay disjoint).
+        # Top-level type bindings: `dropped_by`/`cloned_by` = {exclusive, shared},
+        # each a LIST of function names.
+        cl = f.get("cloned_by") or {}
+        if isinstance(cl, dict):
+            bad = set(cl) - {"exclusive", "shared"}
+            if bad:
+                errors.append(f"cloned_by unknown key(s) {sorted(bad)} "
+                              "(use exclusive / shared)")
+            for role in ("exclusive", "shared"):
+                for fn in cl.get(role) or []:
+                    if fn:
+                        check_fn(fn, f"cloned_by.{role}")
+        dr = f.get("dropped_by") or {}
+        if isinstance(dr, dict):
+            bad = set(dr) - {"exclusive", "shared"}
+            if bad:
+                errors.append(f"dropped_by unknown key(s) {sorted(bad)} "
+                              "(use exclusive / shared)")
+            # No single C function may fill both roles (roles stay disjoint).
             seen_drop: dict[str, str] = {}
-            for role in ("shared", "exclusive", "fields"):
-                v = d.get(role)
-                if not v:
-                    continue
-                for name in (v if isinstance(v, list) else [v]):
+            for role in ("exclusive", "shared"):
+                for name in dr.get(role) or []:
                     if not name:
                         continue
                     if name in seen_drop and seen_drop[name] != role:
-                        errors.append(f"drop.{seen_drop[name]} and drop.{role} "
-                                      f"name the same function {name!r} (roles "
-                                      "must be disjoint)")
+                        errors.append(f"dropped_by.{seen_drop[name]} and "
+                                      f"dropped_by.{role} name the same function "
+                                      f"{name!r} (roles must be disjoint)")
                     else:
                         seen_drop[name] = role
-                        check_fn(name, f"drop.{role}")
+                        check_fn(name, f"dropped_by.{role}")
 
         # Per-field checks.
         for fname, fa in (f.get("fields") or {}).items():
@@ -995,20 +931,21 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
             if "ptr" in fa and isinstance(fa["ptr"], dict):
                 errors += _ptr_invariant_errors(
                     fname, fa["ptr"], field_by_name[fname].get("type") or "")
+            if fa.get("locked_by") is not None:
+                errors += _locked_by_errors(
+                    f"field {fname!r} locked_by", fa["locked_by"])
 
         if errors:
             raise SystemExit(
                 "--update REJECTED — fix and re-run:\n  - "
                 + "\n  - ".join(errors))
 
-        # Merge (partial, idempotent): only the slots/fields mentioned. Lifecycle
-        # slots land under `lifetime` (scope.lifetime returns the mutable dict —
-        # the nested block for migrated records, the flat record otherwise).
-        from compose.scope import lifetime as _lifetime
-        lc = _lifetime(entry)
-        for k in _LIFECYCLE_KEYS:
+        # Merge (partial, idempotent): only the slots/fields mentioned.
+        # `dropped_by`/`cloned_by` are TOP-LEVEL type fields now (no `lifetime`).
+        for k in _TYPE_LIFECYCLE_KEYS:
             if k in f:
-                lc[k] = f[k]
+                entry[k] = f[k]
+                entry.pop("lifetime", None)  # drop any legacy nested block
         if "_comment_agent" in f:
             entry["_comment_agent"] = f["_comment_agent"]
         for fname, fa in (f.get("fields") or {}).items():
@@ -1043,6 +980,15 @@ def _sym_ptr_invariant_errors(label: str, blk: dict, const: bool,
             e.append(f"{label}: array needs exactly one of by_val / by_ref")
     if blk.get("string") and array is not None:
         e.append(f"{label}: string and array both set (must be XOR)")
+    # `scalar` (single-object capability) co-exists with `array` (a generic
+    # allocator serves both a singleton and a buffer) but is mutually exclusive
+    # with `string` (a NUL-string is not a scalar object). The "at least one of
+    # {scalar,array,string}" floor is a property of the MERGED record, not
+    # enforceable on a partial submission.
+    if blk.get("scalar") is not None and not isinstance(blk.get("scalar"), bool):
+        e.append(f"{label}: scalar must be a boolean")
+    if blk.get("string") and blk.get("scalar"):
+        e.append(f"{label}: string and scalar both set (a string is not a scalar)")
     borrowed = blk.get("borrowed")
     if isinstance(borrowed, dict) and not borrowed.get("lifetime"):
         e.append(f"{label}: borrowed set but lifetime unset")
@@ -1051,6 +997,27 @@ def _sym_ptr_invariant_errors(label: str, blk: dict, const: bool,
         e.append(f"{label}: owned must be null or {{exclusive, shared}}")
     if const and blk.get("mutable") is True:
         e.append(f"{label}: const pointee but mutable == true")
+    return e
+
+
+def _locked_by_errors(label: str, lb) -> list[str]:
+    """Validate a `locked_by` block: null | {lock, lock_op, unlock_op}. `lock`
+    names the guarding lock object; `lock_op`/`unlock_op` are lists of the real
+    acquire/release functions (the read-vs-write discipline lives in which ops are
+    listed). Shared by globals (syms.json) and, later, struct fields (types.json)."""
+    e: list[str] = []
+    if not isinstance(lb, dict):
+        e.append(f"{label}: must be null or {{lock, lock_op, unlock_op}}")
+        return e
+    bad = set(lb) - _LOCKED_BY_KEYS
+    if bad:
+        e.append(f"{label}: unknown key(s) {sorted(bad)}")
+    if "lock" in lb and not isinstance(lb["lock"], str):
+        e.append(f"{label}.lock: must be a string (the guarding lock's name)")
+    for k in ("lock_op", "unlock_op"):
+        if k in lb and not (
+                isinstance(lb[k], list) and all(isinstance(x, str) for x in lb[k])):
+            e.append(f"{label}.{k}: must be a list of function names")
     return e
 
 
@@ -1141,11 +1108,34 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                         errors.append(
                             f"macro.{k}: must be a boolean, got {blk[k]!r}")
 
-        # `lifetime`: the lifecycle-primitive block (alloc / clone / refcount /
-        # lock). Any symbol kind may carry it — a refcount `assert` guard is
-        # legitimately a macro, so we do NOT gate it on kind.
-        if "lifetime" in f:
-            errors += _lifetime_block_errors(f["lifetime"])
+        # `ptr` / `locked_by`: GLOBALS only. A global has no call boundary, so it
+        # carries no ptr_args/ptr_ret; instead a pointer global gets a single
+        # `ptr` block (same shape as a ptr_args record) and any lock-guarded
+        # global gets `locked_by`.
+        is_global = ekind.startswith("global")
+        gptr = f.get("ptr")
+        if gptr is not None:
+            if not is_global:
+                errors.append(
+                    f"ptr: {name!r} is {ekind!r}, not a global — the singular "
+                    f"`ptr` block is for globals; functions/callbacks use "
+                    f"ptr_args/ptr_ret")
+            elif not isinstance(gptr, dict):
+                errors.append("ptr: must be an object")
+            else:
+                bad = set(gptr) - _PTR_ARG_AGENT_KEYS
+                if bad:
+                    errors.append(f"ptr: unknown key(s) {sorted(bad)}")
+                errors.extend(_sym_ptr_invariant_errors(
+                    "ptr", gptr, "const" in (entry.get("type") or ""),
+                    is_ret=False))
+        if "locked_by" in f and f["locked_by"] is not None:
+            if not is_global:
+                errors.append(
+                    f"locked_by: {name!r} is {ekind!r}, not a global — a struct "
+                    f"field's lock binding lives on its field record (types.json)")
+            else:
+                errors.extend(_locked_by_errors("locked_by", f["locked_by"]))
 
         arg_by_pos = {str(a.get("position")): a
                       for a in entry.get("ptr_args") or []}
@@ -1239,9 +1229,17 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
         # Merge primary (partial, idempotent): only the slots/args mentioned.
         if "macro" in f:
             entry["macro"] = {k: f["macro"][k] for k in sorted(_MACRO_FLAGS)}
-        if "lifetime" in f:
-            entry["lifetime"] = f["lifetime"]
         _apply_ptr_agent(entry, f.get("ptr_args"), pr)
+        # Globals: partial-merge the singular `ptr` (per key, like ptr_args);
+        # `locked_by` is one cohesive block, replaced wholesale (null clears it).
+        if gptr is not None:
+            cur = entry.get("ptr") or {}
+            for k in _PTR_ARG_AGENT_KEYS:
+                if k in gptr:
+                    cur[k] = gptr[k]
+            entry["ptr"] = cur
+        if "locked_by" in f:
+            entry["locked_by"] = f["locked_by"]
 
         # Materialize forks (idempotent replace): drop any prior forks, then
         # spawn one variant>=1 entry per cluster (inheriting the primary's
@@ -1903,45 +1901,3 @@ def query_files(
         for f in wrap_files:
             print(f)
 
-
-def query_mem(
-    target: Path,
-    *,
-    names: list[str] | None = None,
-) -> None:
-    """Read-only oracle over the allocator clusters in ``alloc.json`` — every
-    allocator family returned **verbatim**: the family name, its ``free``, and
-    the full record of each allocator (``name`` + the ``zeroing`` / ``sized`` /
-    ``aligned`` / ``string`` / ``bounded`` flags + ``defined_in`` /
-    ``declared_in`` / ``type``). The wrap agent uses this to emit the ``CBox``
-    exclusive-freed strategy ZST (one per cluster, keyed on the free) plus the
-    per-allocator constructor wrappers.
-
-      - no filter — every family.
-      - ``--name S …`` — only families whose ``free`` or one of its allocators is
-        one of ``S`` (the wrapper's common path: "hand me my target symbol's
-        cluster").
-
-    No string/byte gate — the per-allocator ``string`` flag rides along so the
-    consumer decides what is a nul-terminated string vs a raw byte buffer. Prints
-    the JSON array of families to stdout.
-    """
-    from crustify.layout import Layout
-
-    layout = Layout.discover(target)
-    alloc_path = layout.alloc_json
-    if not alloc_path.exists():
-        raise SystemExit(
-            f"error: alloc.json not found at {alloc_path}. Run "
-            f"`crustify {target} alloc` first.")
-    families = json.loads(alloc_path.read_text()).get("families", [])
-
-    want = set(names or [])
-    if want:
-        def _members(fam: dict) -> set:
-            free = fam.get("free")
-            base = {free["name"]} if free else set()
-            return base | {a["name"] for a in fam.get("allocators", [])}
-        families = [f for f in families if _members(f) & want]
-
-    print(json.dumps(families, indent=2))

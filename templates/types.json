@@ -16,25 +16,17 @@
         "ssl/statem/statem_local.h"
       ],
       "defined_in": "ssl/statem/statem_lib.c",
-      "lifetime": {
-        "allocs": [
-          "statem_secret_new"
+      "dropped_by": {
+        "exclusive": [
+          "statem_secret_free"
         ],
-        "clone": {
-          "shared": null,
-          "exclusive": [
-            "statem_secret_dup"
-          ]
-        },
-        "drop": {
-          "shared": [],
-          "exclusive": [
-            "statem_secret_free"
-          ],
-          "fields": []
-        },
-        "locking": null,
-        "conditional_drop": null
+        "shared": []
+      },
+      "cloned_by": {
+        "exclusive": [
+          "statem_secret_dup"
+        ],
+        "shared": []
       },
       "casted": {
         "to": [],
@@ -65,18 +57,28 @@
           "type": "unsigned char *",
           "ref": "pointer",
           "ptr": {
+            "scalar": false,
             "array": {
               "by_val": true
             },
             "string": false,
             "owned": {
               "exclusive": true,
-              "shared": null
+              "shared": false,
+              "dropped_by": [
+                "CRYPTO_clear_free"
+              ],
+              "cloned_by": [
+                "CRYPTO_memdup"
+              ],
+              "disposed_in": [
+                "statem_secret_free"
+              ]
             },
             "borrowed": null,
             "nullable": true,
             "mutable": true,
-            "note": "Session-secret buffer; allocated in statem_secret_new, zeroed + freed in statem_secret_free."
+            "note": "Session-secret buffer; the dtor zeroes+frees it via CRYPTO_clear_free, the clone deep-copies via CRYPTO_memdup."
           }
         },
         {
@@ -99,25 +101,19 @@
         "ssl/ssl_local.h"
       ],
       "defined_in": "ssl/ssl_sess.c",
-      "lifetime": {
-        "allocs": [
-          "SSL_SESSION_new"
+      "dropped_by": {
+        "exclusive": [],
+        "shared": [
+          "SSL_SESSION_free"
+        ]
+      },
+      "cloned_by": {
+        "exclusive": [
+          "SSL_SESSION_dup"
         ],
-        "clone": {
-          "shared": "SSL_SESSION_up_ref",
-          "exclusive": [
-            "SSL_SESSION_dup"
-          ]
-        },
-        "drop": {
-          "shared": [
-            "SSL_SESSION_free"
-          ],
-          "exclusive": [],
-          "fields": []
-        },
-        "locking": null,
-        "conditional_drop": null
+        "shared": [
+          "SSL_SESSION_up_ref"
+        ]
       },
       "casted": {
         "to": [],
@@ -145,20 +141,43 @@
           "name": "master_key_length"
         },
         {
+          "_comment": "Non-pointer field carrying a `locked_by`: a refcount int guarded by the session lock (illustrates the guarded-datum-is-often-not-a-pointer case).",
+          "name": "references",
+          "locked_by": {
+            "lock": "lock",
+            "lock_op": [
+              "CRYPTO_THREAD_write_lock"
+            ],
+            "unlock_op": [
+              "CRYPTO_THREAD_unlock"
+            ]
+          }
+        },
+        {
           "name": "peer",
           "type": "X509 *",
           "ref": "pointer",
           "ptr": {
+            "scalar": true,
             "array": null,
             "string": false,
             "owned": {
               "exclusive": false,
-              "shared": null
+              "shared": true,
+              "dropped_by": [
+                "X509_free"
+              ],
+              "cloned_by": [
+                "X509_up_ref"
+              ],
+              "disposed_in": [
+                "SSL_SESSION_free"
+              ]
             },
             "borrowed": null,
             "nullable": true,
             "mutable": null,
-            "note": "Peer cert; refcounted (X509_up_ref / X509_free). mutable=null: opaque-handle field, accessor returns a borrowed handle."
+            "note": "Peer cert; refcounted -> CArc. The session dtor down-refs via X509_free; its clone up-refs via X509_up_ref."
           }
         }
       ]
@@ -173,19 +192,13 @@
         "include/openssl/ssl.h"
       ],
       "defined_in": "include/openssl/ssl.h",
-      "lifetime": {
-        "allocs": [],
-        "clone": {
-          "shared": null,
-          "exclusive": []
-        },
-        "drop": {
-          "shared": [],
-          "exclusive": [],
-          "fields": []
-        },
-        "locking": null,
-        "conditional_drop": null
+      "dropped_by": {
+        "exclusive": [],
+        "shared": []
+      },
+      "cloned_by": {
+        "exclusive": [],
+        "shared": []
       },
       "casted": {
         "to": [],

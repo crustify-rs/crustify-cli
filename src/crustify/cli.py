@@ -226,13 +226,8 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
     p.add_argument("--strings", action="store_true",
                    help="Synthetic string clusters.")
     p.add_argument("--typegens", action="store_true",
-                   help="(syms) Type-generator macro primitives (macro.typegen) "
+                   help="(symbols) Type-generator macro primitives (macro.typegen) "
                         "— the DEFINE_*/DECLARE_* families that generate types.")
-    p.add_argument("--lifetime", action="store_true",
-                   help="(syms) Lifecycle primitives: entries carrying a "
-                        "`lifetime` block (alloc/clone/refcount/lock). Combine "
-                        "with --strings/--arrays to filter by synth. Supersedes "
-                        "`query mem` now that tags replace alloc.json.")
     p.add_argument("--name", nargs="+", action="extend", default=None, metavar="NAME",
                    help="No --name → enumerate; one → introspect; several → batch records.")
     p.add_argument("--file", nargs="+", default=None, metavar="FILE",
@@ -387,7 +382,8 @@ def main() -> None:
         "target",
         help="Repo-relative target subdirectory crustify is scoped to "
              "(e.g. ssl/statem), matching its crustify/targets/<target>/ "
-             "config.json. Use _root for a whole-repository target.",
+             "config.json. Use . for the repo root; a repo-wide analysis is "
+             "normally driven by --unscoped on a real target.",
     )
     parser.add_argument(
         "--no-console",
@@ -566,16 +562,6 @@ def main() -> None:
         help="Run the syms composer skeleton + symbol analyzer agent.",
     )
     _add_analyze_filter_flags(analyze_symbols_p)
-    # Cross-cutting discovery pass, runnable standalone (a single whole-tree
-    # agent run). Mirrors `analyze types --buffers`: it walks the syms tree
-    # and tags lifecycle primitives, taking no narrowing selection.
-    analyze_symbols_synth = analyze_symbols_p.add_mutually_exclusive_group()
-    analyze_symbols_synth.add_argument(
-        "--lifetimes", action="store_true",
-        help="Run ONLY the lifetime pass: tag lifecycle primitives "
-             "(allocator / free / clone / refcount / lock) across the whole "
-             "syms tree. Requires a composed syms tree. Skips the per-dir pass.",
-    )
 
     analyze_types_p = analyze_sub.add_parser(
         "types",
@@ -676,11 +662,10 @@ def main() -> None:
     query_p = sub.add_parser(
         "query",
         help=(
-            "Read-only oracle. `types`/`syms` enumerate (filtered) or introspect "
+            "Read-only oracle. `types`/`symbols` enumerate (filtered) or introspect "
             "one (--name); summary by default, --with-details for whole records. "
             "`files` lists the port / wrap scope file sets. "
-            "`dag` does the graph walks (closure / layer / scc). "
-            "`mem` lists the allocator clusters from alloc.json (verbatim)."
+            "`dag` does the graph walks (closure / layer / scc)."
         ),
     )
     query_sub = query_p.add_subparsers(dest="subject", required=True)
@@ -690,7 +675,8 @@ def main() -> None:
         facets=True)
     _add_query_flags(
         query_sub.add_parser(
-            "syms", help="Symbols: enumerate, or introspect one (--name)."),
+            "symbols", aliases=["syms"],
+            help="Symbols: enumerate, or introspect one (--name)."),
         facets=False)
 
     files_q = query_sub.add_parser(
@@ -760,19 +746,6 @@ def main() -> None:
         "--port-only", action="store_true", dest="port_only",
         help="Restrict the node set (slice / --loc) to port-scope entities "
              "(scope.json port closure; synthetics are never port).",
-    )
-
-    mem_q = query_sub.add_parser(
-        "mem",
-        help="Allocator clusters from alloc.json: every family returned "
-             "verbatim (family + free + each allocator's full record, incl. "
-             "the zeroing / sized / aligned / string / bounded flags). Filter "
-             "with --name; no string/byte gate. Prints JSON.",
-    )
-    mem_q.add_argument(
-        "--name", nargs="+", action="extend", default=None, metavar="NAME",
-        help="Only families whose free or an allocator is one of these "
-             "(e.g. `--name CRYPTO_zalloc` → its cluster).",
     )
 
     # -- wrap ------------------------------------------------------------
@@ -845,11 +818,11 @@ def main() -> None:
     args = parser.parse_args()
 
     # repo_root is explicit (no marker-walking); target is repo-relative.
-    from crustify.layout import ROOT_TARGET, set_repo_root
+    from crustify.layout import set_repo_root
     repo_root = Path(args.repo_root).resolve()
     set_repo_root(repo_root)
     target_rel = (args.target or "").strip("/")
-    target = repo_root if target_rel in (ROOT_TARGET, "", ".") else (repo_root / target_rel)
+    target = repo_root if target_rel in ("", ".") else (repo_root / target_rel)
     target = target.resolve()
     args._target_path = str(target)
 
@@ -1009,10 +982,6 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
     parallel_max = int(getattr(args, "parallel_max", 8))
 
     if subject == "symbols":
-        # Standalone cross-cutting discovery pass.
-        if getattr(args, "lifetimes", False):
-            analyze_mod.run_lifetime_pass(target)
-            return
         if getattr(args, "reset", False):
             analyze_mod.reset_syms(
                 target,
@@ -1059,9 +1028,9 @@ def _validate_narrowing(args: argparse.Namespace) -> None:
     --port-only / --wrap-only may combine with either --all or seed
     selectors — they're orthogonal post-emission filters.
     """
-    # Standalone cross-cutting passes (types: --buffers; symbols:
-    # --lifetimes) run over the whole tree and take no narrowing selection.
-    if getattr(args, "buffers", False) or getattr(args, "lifetimes", False):
+    # The standalone cross-cutting buffer pass (types --buffers) runs over the
+    # whole tree and takes no narrowing selection.
+    if getattr(args, "buffers", False):
         return
     want_all = bool(getattr(args, "all", False))
     seed = (
@@ -1276,17 +1245,12 @@ def _handle_query(args: argparse.Namespace, target: Path) -> None:
             port_only=bool(getattr(args, "port_only", False)),
         )
         return
-    if args.subject == "mem":
-        from crustify.query import query_mem
-        query_mem(
-            target,
-            names=getattr(args, "name", None),
-        )
-        return
     from crustify.query import query
+    # `syms` is a back-compat alias for the `symbols` subject.
+    subject = "symbols" if args.subject == "syms" else args.subject
     query(
         target,
-        subject=args.subject,
+        subject=subject,
         names=getattr(args, "name", None),
         files=getattr(args, "files", None),
         wrap_only=bool(getattr(args, "wrap_only", False)),
@@ -1295,7 +1259,6 @@ def _handle_query(args: argparse.Namespace, target: Path) -> None:
         strings=bool(getattr(args, "strings", False)),
         arrays=bool(getattr(args, "arrays", False)),
         typegens=bool(getattr(args, "typegens", False)),
-        lifetime=bool(getattr(args, "lifetime", False)),
         fields=bool(getattr(args, "fields", False)),
         ops=bool(getattr(args, "ops", False)),
         methods=bool(getattr(args, "methods", False)),

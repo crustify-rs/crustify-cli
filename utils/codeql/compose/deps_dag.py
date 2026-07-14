@@ -271,7 +271,7 @@ def _collect(analysis_root: Path):
             # type_method_syms; a synthetic cluster's is NOT (its `ops` is the
             # explicit op list, sans ctor/dtor) — so its dtor's signature types
             # (e.g. `git_pool_clear(git_pool*)`) would otherwise never fold in.
-            n.drop_syms |= set(_scope.drop_op_names(_scope.lifetime(e).get("drop")))
+            n.drop_syms |= set(_scope.drop_op_names(_scope.type_dropped_by(e)))
 
     for f in sorted(analysis_root.rglob("syms.json")):
         try:

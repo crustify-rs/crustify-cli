@@ -14,22 +14,25 @@ from crustify.layout import Layout
 _PKG_ROOT = Path(__file__).parent.parent
 
 
-def _skill_meta(path: Path) -> tuple[str, str, set[str] | None]:
-    """Parse ``name`` + ``description`` + ``roles`` from a SKILL.md YAML
-    frontmatter block.
+def _skill_meta(path: Path) -> tuple[str, str, set[str] | None, str | None]:
+    """Parse ``name`` + ``description`` + ``roles`` + optional ``bin`` from a
+    SKILL.md YAML frontmatter block.
 
     Deliberately minimal — handles the fields crustify's SKILL.md format uses
-    (scalar ``name:``, inline-list ``roles: [a, b]``, and a folded/indented
-    ``description:``, block scalar ``>-``/``>`` or inline) without taking a
-    YAML dependency. The description's wrapped/indented continuation lines are
-    collapsed to one line. ``roles`` is ``None`` when the field is absent
-    (treated as universal by the caller). Falls back to the file stem / empty
-    description / no roles if there is no frontmatter."""
+    (scalar ``name:``, inline-list ``roles: [a, b]``, a folded/indented
+    ``description:``, block scalar ``>-``/``>`` or inline, and a scalar
+    ``bin:``) without taking a YAML dependency. The description's
+    wrapped/indented continuation lines are collapsed to one line. ``roles`` is
+    ``None`` when the field is absent (treated as universal by the caller).
+    ``bin`` is the logical name of the skill's CLI tool (resolved to an absolute
+    path by the caller via the repo config's ``bins`` map), or ``None``. Falls
+    back to the file stem / empty description / no roles if there is no
+    frontmatter."""
     text = path.read_text()
     if not text.startswith("---"):
-        return path.stem, "", None
+        return path.stem, "", None, None
     fm = text.split("---", 2)[1]
-    name, desc, in_desc, roles = path.stem, [], False, None
+    name, desc, in_desc, roles, binname = path.stem, [], False, None, None
     for line in fm.splitlines():
         if in_desc:
             # A new top-level key (non-indented, contains ':') ends the block.
@@ -43,12 +46,14 @@ def _skill_meta(path: Path) -> tuple[str, str, set[str] | None]:
         elif line.startswith("roles:"):
             raw = line.split(":", 1)[1].strip().strip("[]")
             roles = {r.strip().strip("'\"") for r in raw.split(",") if r.strip()}
+        elif line.startswith("bin:"):
+            binname = line.split(":", 1)[1].strip().strip("'\"") or None
         elif line.startswith("description:"):
             rest = line.split(":", 1)[1].strip().lstrip(">|").lstrip("-").strip()
             if rest:
                 desc.append(rest)
             in_desc = True
-    return name, " ".join(" ".join(desc).split()), roles
+    return name, " ".join(" ".join(desc).split()), roles, binname
 
 # Appended to a wrap/port agent's prompt during a worktree-isolated parallel
 # wave: the agent owns committing its own work in its private worktree (the
@@ -136,8 +141,8 @@ class CrustifyAgent:
         # the pinned-main behaviour for the in-place / non-isolated path.
         self.layout = Layout(repo_root) if repo_root is not None else Layout.discover(self.target)
         self.repo_root = self.layout.repo_root
-        # Repo-relative target id (e.g. "ssl/statem", or "_root") — the value
-        # the prompt passes as crustify's second positional.
+        # Repo-relative target id (e.g. "ssl/statem", or "." for the repo
+        # root) — the value the prompt passes as crustify's second positional.
         self.target_rel = self.layout.rel_target(self.target)
         # Target-tier store: crustify/targets/<rel>/ (logs, scope, kiss, …).
         self.target_store = ArtifactStore(self.layout.target_dir(self.target))
@@ -286,15 +291,24 @@ class CrustifyAgent:
         whose frontmatter ``roles`` do not intersect this agent's roles is
         skipped (an untagged skill is universal)."""
         mine = set(self.skill_roles)
+        bins = self._repo_config().get("bins", {})
         blocks = []
         for raw in self._repo_config().get("skills", []):
             p = Path(raw)
             if not p.exists():
                 continue
-            name, desc, roles = _skill_meta(p)
+            name, desc, roles, binname = _skill_meta(p)
             if roles is not None and not (roles & mine):
                 continue  # scoped to roles this agent does not have
-            blocks.append(f"- {name} — {desc}\n  read in full: {p}")
+            block = f"- {name} — {desc}\n  read in full: {p}"
+            # A skill that declares a `bin:` also advertises that tool's
+            # absolute path (from the repo config's `bins` map) — so the agent
+            # invokes it directly rather than relying on PATH, and discovers its
+            # flags from the tool's own `--help`. Same rail as the SKILL.md path.
+            binpath = bins.get(binname) if binname else None
+            if binpath:
+                block += f"\n  binary: {binpath}"
+            blocks.append(block)
         return "\n".join(blocks) if blocks else "(no skills configured)"
 
     def _agents_md(self) -> Path:

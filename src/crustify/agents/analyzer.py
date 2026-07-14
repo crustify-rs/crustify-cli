@@ -71,37 +71,22 @@ class CrustifySymbolAnalyzer(CrustifyAgent):
     """Symbol-side analyze agent. Annotates per-stem `syms.json`
     manifests the composer has emitted in the repo-root analysis tree:
     the `macro` block on every macro entry (reads the `#define` body
-    from source — it isn't in the manifest), pointer-arg/ret semantic
-    fields on every function/callback entry, and `linked_in` resolution.
+    from source — it isn't in the manifest), and the pointer-arg/ret
+    ownership fields (incl. the `owned.{dropped_by, cloned_by}` release
+    bindings) on every function/callback entry.
 
-    Two modes, one prompt (`prompts/analyzer/symbol_analyzer.md`), both
-    signalled through the `manifests` worklist:
-
-      - PER-SYMBOL (default) — the orchestrator passes a `manifests` list,
-        each record `{symbols: [{name, file}]}` directing the agent to a
-        batch of identity tuples it resolves through `crustify query syms`.
-        No scope tag rides along: symbol analysis is a uniform judgement
-        about the C code, independent of whether the symbol is later ported
-        or wrapped. The agent does no tree walking; the composer +
-        orchestrator have already done both.
-      - LIFETIME DISCOVERY — a single cross-cutting pass whose worklist is
-        the sentinel record `{symbols: [{name: LIFETIMES_TAG, file: None}]}`.
-        Seeing that tag, the agent scouts source for every lifecycle
-        primitive (allocator / free / clone / refcount / lock), composes any
-        missing entry on demand (`analyze symbols --compose-only --name …`),
-        and tags each with a `lifetime` block. Invoked by `run_lifetime_pass`
-        / `analyze symbols --lifetimes`.
+    The orchestrator passes a `manifests` list, each record
+    `{symbols: [{name, file}]}` directing the agent to a batch of identity
+    tuples it resolves through `crustify query symbols`. No scope tag rides
+    along: symbol analysis is a uniform judgement about the C code,
+    independent of whether the symbol is later ported or wrapped. The agent
+    does no tree walking; the composer + orchestrator have already done both.
     """
 
     name = "CrustifySymbolAnalyzer"
     model = "claude-opus-4-8"
     stage = "symbol_analyzer"
     prompt_dir = "analyzer"
-
-    # Sentinel worklist tag that flips the agent into lifetime discovery
-    # mode (see the LIFETIME DISCOVERY note above). It is a reserved name,
-    # never a real C symbol, carried with `file: None`.
-    LIFETIMES_TAG = "lifetimes"
 
     # `output` left as None — per-stem syms.json manifests are emitted
     # by the composer before this agent runs, so the file's existence is
@@ -118,11 +103,10 @@ class CrustifySymbolAnalyzer(CrustifyAgent):
         stage_suffix: str | None = None,
     ) -> None:
         super().__init__(target)
-        # The manifests-list contract is the only input vehicle. Both modes
-        # ride it: a per-symbol batch, or the single `LIFETIMES_TAG` sentinel
-        # record for the discovery pass. An empty/missing list is tolerated
-        # to keep construction side-effect free for tests that just
-        # introspect `_arguments()`.
+        # The manifests-list contract is the only input vehicle: a per-symbol
+        # batch `{symbols: [{name, file}]}`. An empty/missing list is tolerated
+        # to keep construction side-effect free for tests that just introspect
+        # `_arguments()`.
         self._manifests = manifests or []
         self.stage_suffix = stage_suffix
 

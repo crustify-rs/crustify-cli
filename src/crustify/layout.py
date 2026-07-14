@@ -15,8 +15,9 @@ walking the filesystem — and its artifacts live at ``repo_root/crustify/``:
       ssl/  crypto/  …                            # vanilla C tree (no artifacts)
 
 A *target* is addressed by its repo-relative path (``ssl/statem``) — the
-CLI's second positional — and a whole-repo target uses the reserved name
-``_root``.
+CLI's second positional. The repo root itself is addressable as ``.`` (or an
+empty target); a repo-wide analysis is normally driven by ``--unscoped`` on a
+real target rather than by targeting the root.
 """
 from __future__ import annotations
 
@@ -24,7 +25,6 @@ import os
 from pathlib import Path
 
 CRUSTIFY = "crustify"
-ROOT_TARGET = "_root"  # reserved targets/ name for a whole-repository target
 
 OUT_SUFFIX_ENV = "CRUSTIFY_OUT_SUFFIX"
 
@@ -135,7 +135,7 @@ class Layout:
     def rel_target(self, target: Path) -> str:
         t = Path(target).resolve()
         if t == self.repo_root:
-            return ROOT_TARGET
+            return "."
         return t.relative_to(self.repo_root).as_posix()
 
     def target_dir(self, target: Path) -> Path:

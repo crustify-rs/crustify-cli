@@ -30,6 +30,114 @@ from kiss.core.printer import Printer
 # disable trace export so the SDK does not try to upload traces to OpenAI.
 set_tracing_disabled(True)
 
+
+# ---------------------------------------------------------------------------
+# Cost / cache-token collection (LiteLLM path only)
+# ---------------------------------------------------------------------------
+#
+# LiteLLM already COMPUTES the dollar cost (cache-aware, from its own pricing
+# table) and attaches it to each response as `_hidden_params["response_cost"]`;
+# the provider's cache-token split (`cache_read_input_tokens` /
+# `cache_creation_input_tokens`) rides on the usage. The Agents SDK's wrapped
+# `ModelResponse` drops both (it keeps only `input/output/total` + `cached`), so
+# we harvest them where they still exist: a LiteLLM success callback. This is a
+# pure fetch of LiteLLM's numbers -- no pricing math here. It fires ONLY for the
+# LiteLLM (Claude) path; the native OpenAI path never routes through LiteLLM, so
+# for it the accumulator stays empty and cost is reported as N/A.
+import threading as _threading  # noqa: E402
+import time as _time  # noqa: E402
+
+# LiteLLM dispatches success callbacks on a shared WORKER thread, so per-agent
+# attribution can't use thread-local state. crustify's default analyze runs ONE
+# agent per process (single agent over all dirs), so a module-global accumulator
+# reset at each `run()` is correct for that case. Under `--parallel` (several
+# agents in one process) the numbers interleave -- cost is then only meaningful
+# per-process, which is called out at the report site.
+_COST_LOCK = _threading.Lock()
+_COST: dict = {}
+
+
+def _cost_reset() -> None:
+    with _COST_LOCK:
+        _COST.clear()
+        _COST.update(cost=0.0, input=0, output=0,
+                     cache_read=0, cache_creation=0, calls=0,
+                     t0=_time.monotonic())
+
+
+def _cost_acc() -> dict:
+    with _COST_LOCK:
+        return dict(_COST)
+
+
+def _cost_collect(kwargs, response_obj) -> None:
+    """Harvest LiteLLM's own `response_cost` (cache-aware, from `kwargs`) plus the
+    cache-token split off the response usage. Pure fetch; no pricing math."""
+    try:
+        cost = kwargs.get("response_cost")
+        u = getattr(response_obj, "usage", None)
+        with _COST_LOCK:
+            if not _COST:
+                return
+            _COST["cost"] += float(cost or 0.0)
+            _COST["calls"] += 1
+            if u is not None:
+                _COST["input"] += int(getattr(u, "prompt_tokens", 0) or 0)
+                _COST["output"] += int(getattr(u, "completion_tokens", 0) or 0)
+                _COST["cache_read"] += int(getattr(u, "cache_read_input_tokens", 0) or 0)
+                _COST["cache_creation"] += int(getattr(u, "cache_creation_input_tokens", 0) or 0)
+    except Exception:  # pragma: no cover - never let logging break a run
+        pass
+
+
+try:
+    from litellm.integrations.custom_logger import CustomLogger as _LLLogger
+except Exception:  # pragma: no cover - litellm shape drift
+    _LLLogger = object
+
+
+class _CostCollector(_LLLogger):
+    """LiteLLM success logger. The SDK drives Claude via async `acompletion`, for
+    which LiteLLM invokes `async_log_success_event` (the sync `success_callback`
+    function form does NOT fire); the sync method covers any non-streaming path.
+    Arg names must match LiteLLM's keyword call exactly."""
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        _cost_collect(kwargs, response_obj)
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        _cost_collect(kwargs, response_obj)
+
+
+def _register_cost_collector() -> None:
+    try:
+        import litellm
+        if not any(isinstance(cb, _CostCollector) for cb in (litellm.callbacks or [])):
+            litellm.callbacks = list(litellm.callbacks or []) + [_CostCollector()]
+    except Exception:  # pragma: no cover
+        pass
+
+
+_register_cost_collector()
+
+
+async def _flush_cost_callbacks() -> None:
+    """LiteLLM schedules its async success callback as a loop task that lands
+    just AFTER each `acompletion` returns; the final call's callback races the
+    stream end. Yield until the accumulator's `calls` stops growing (stable for
+    two 0.1s ticks) so the last cost is captured, bounded to ~3s."""
+    prev, stable = -1, 0
+    for _ in range(30):
+        await asyncio.sleep(0.1)
+        cur = _cost_acc().get("calls", 0)
+        if cur and cur == prev:
+            stable += 1
+            if stable >= 2:
+                return
+        else:
+            stable = 0
+        prev = cur
+
 # Runaway guard (NOT a budget cap): the SDK defaults to 10 turns, which would
 # truncate crustify tasks mid-run, so we set it high enough never to bind in
 # practice while still stopping a stuck agent from looping forever.
@@ -294,6 +402,7 @@ class AgentsSdkBackend:
         printer: Printer | None,
     ) -> None:
         task = prompt_template.format(**arguments) if arguments else prompt_template
+        _cost_reset()  # fresh per-agent cost/cache accumulator (LiteLLM path)
         model_id = _normalize(model)
         agent = Agent(
             name=name,
@@ -307,7 +416,7 @@ class AgentsSdkBackend:
             model_settings=_model_settings(model_id),
             tools=_build_tools(work_dir),
         )
-        asyncio.run(self._drive(agent, task, printer))
+        asyncio.run(self._drive(agent, task, printer, model_id))
 
     # Raw-event types whose `.delta` carries reasoning/thinking text (OpenAI
     # emits the summary variant; Anthropic-via-LiteLLM the text variant).
@@ -316,7 +425,8 @@ class AgentsSdkBackend:
         "response.reasoning_text.delta",
     )
 
-    async def _drive(self, agent: Agent, task: str, printer: Printer | None) -> None:
+    async def _drive(self, agent: Agent, task: str, printer: Printer | None,
+                     model_id: str = "") -> None:
         self._in_thinking = False
         if printer:
             printer.print(task, type="prompt")
@@ -324,9 +434,11 @@ class AgentsSdkBackend:
         async for ev in result.stream_events():
             if printer:
                 self._handle_event(ev, printer)
+        if _is_claude(model_id):
+            await _flush_cost_callbacks()
         if printer:
             self._set_thinking(printer, False)
-            self._emit_result(result, printer)
+            self._emit_result(result, printer, model_id)
 
     def _set_thinking(self, printer: Printer, on: bool) -> None:
         """Open/close a thinking block on the printer, only on state change.
@@ -382,7 +494,7 @@ class AgentsSdkBackend:
         return total
 
     @classmethod
-    def _emit_result(cls, result: Any, printer: Printer) -> None:
+    def _emit_result(cls, result: Any, printer: Printer, model: str = "") -> None:
         total_tokens = 0
         try:
             total_tokens = cls._usage_tokens(result.context_wrapper.usage)
@@ -398,9 +510,91 @@ class AgentsSdkBackend:
                 )
             except Exception:
                 pass
+        acc = _cost_acc() or {}
+        t0 = acc.get("t0")
+        # Per-run wall-clock (reset at run() start). Accurate per-agent for the
+        # default sequential runs; under `--parallel` it interleaves like cost.
+        dur = f"  |  {_time.monotonic() - t0:.1f}s" if t0 is not None else ""
+        if acc.get("calls"):
+            # LiteLLM (Claude) path: LiteLLM's own response_cost -- exact and
+            # cache-aware (reads AND creation). Full breakdown on its own
+            # (unclipped) usage line; the result-panel subtitle is fixed-width, so
+            # it carries only the short $cost.
+            inp, out = acc["input"], acc["output"]
+            cr, cw = acc["cache_read"], acc["cache_creation"]
+            total_tokens = inp + out
+            cost = f"${acc['cost']:.4f}"
+            printer.print(
+                f"prompt {inp:,} (cache_rd {cr:,}, cache_wr {cw:,}) + "
+                f"out {out:,}  |  cost {cost}{dur}",
+                type="usage_info",
+            )
+        else:
+            # Native (OpenAI) path: no LiteLLM callback. Price the SDK usage off
+            # LiteLLM's model_cost map (rates owned by LiteLLM, not maintained
+            # here). OpenAI caching is reads-only, and cost_per_token subtracts
+            # cache_read from prompt_tokens itself, so pass the full prompt +
+            # cached count.
+            cost = cls._price_from_usage(model, result, printer, dur)
+            if cost == "N/A" and dur:
+                printer.print(f"wall-clock{dur}", type="usage_info")
         printer.print(
             str(getattr(result, "final_output", "") or ""),
             type="result",
             total_tokens=total_tokens,
-            cost="N/A",
+            cost=cost,
         )
+
+    @staticmethod
+    def _price_from_usage(model: str, result: Any, printer: Printer,
+                          dur: str = "") -> str:
+        """Cost for the native (non-LiteLLM) path, priced via LiteLLM's
+        `cost_per_token`. Prices **per request** (`usage.request_usage_entries`)
+        and sums -- NOT the aggregated usage: token-tier thresholds (e.g.
+        gpt-5.5's >272k-token 2x rate) are per-request, so pricing the summed
+        tokens would mis-apply them. Falls back to the aggregate if per-request
+        entries are unavailable. Returns a `$x.xxxx` string or 'N/A'."""
+        def _one(inp: int, out: int, cached: int):
+            import litellm
+            for cand in dict.fromkeys((model, model.rsplit("/", 1)[-1])):
+                try:
+                    pc, cc = litellm.cost_per_token(
+                        model=cand, prompt_tokens=inp, completion_tokens=out,
+                        cache_read_input_tokens=cached)
+                    return pc + cc
+                except Exception:
+                    continue
+            return None
+
+        def _toks(e):
+            inp = int(getattr(e, "input_tokens", 0) or 0)
+            out = int(getattr(e, "output_tokens", 0) or 0)
+            cached = int(getattr(getattr(e, "input_tokens_details", None),
+                                 "cached_tokens", 0) or 0)
+            return inp, out, cached
+
+        try:
+            u = result.context_wrapper.usage
+            entries = getattr(u, "request_usage_entries", None) or []
+            srcs = entries or [u]           # per-request, else the aggregate
+            t_in = t_out = t_cached = 0
+            total = 0.0
+            priced = False
+            for e in srcs:
+                inp, out, cached = _toks(e)
+                t_in += inp; t_out += out; t_cached += cached
+                c = _one(inp, out, cached)
+                if c is not None:
+                    total += c
+                    priced = True
+            if not (t_in or t_out) or not priced:
+                return "N/A"
+            cost = f"${total:.4f}"
+            printer.print(
+                f"prompt {t_in:,} (cache_rd {t_cached:,}) + out {t_out:,}"
+                f"  |  cost {cost}  ({len(srcs)} req){dur}",
+                type="usage_info",
+            )
+            return cost
+        except Exception:
+            return "N/A"

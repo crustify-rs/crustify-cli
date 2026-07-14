@@ -286,9 +286,12 @@ def _null_ptr_agent() -> dict:
     the SAME structured shape a struct field's `ptr` carries (see
     types_manifest._null_ptr_skeleton), so a pointer is described identically
     whether it sits in a struct or crosses a call boundary. `owned` nests
-    `{exclusive, shared}` (CBox vs CArc), `borrowed` nests `{lifetime}`, and
-    `array.by_ref` carries element ownership."""
+    `{exclusive, shared, dropped_by, cloned_by}` (CBox vs CArc + the release/
+    clone bindings), `borrowed` nests `{lifetime}`, and `array.by_ref` carries
+    element ownership. `scalar` and `array` co-exist (a generic allocator may
+    serve a single object AND a buffer)."""
     return {
+        "scalar": None,
         "array": None,
         "string": None,
         "owned": None,
@@ -401,6 +404,10 @@ def _base_global(row: dict) -> dict[str, Any]:
         "declared_in": sorted(_decls_list(row["decl_files"])),
         "defined_in": row["def_file"] or None,
         "type": row["type"],
+        # Agent-filled: `ptr` iff the global is itself a pointer (same ownership
+        # block as a ptr_args record); `locked_by` iff it is accessed under a lock.
+        "ptr": None,
+        "locked_by": None,
         "loc": 1,  # a global counts as 1 LoC for the port batch budget
     }
 
@@ -745,31 +752,40 @@ def compose(
     # from port code per the scope.json. Without scope.json, no
     # gate (every match is admitted).
     seed_keys: set[tuple[str, str]] = set()
+    dropped_seeds: list[str] = []
     if seed_mode:
         for c in candidates:
             if not is_seed(c["base"], filter_spec):
                 continue
-            if scope_enabled and not c["is_port"]:
-                # Wrap-scope seed: must be reachable from port code
-                # per the scope.json. We use the underlying T1 row to
-                # look up reachability.
+            # Wrap-scope seed admission gate: a non-port seed must be reachable
+            # from port code per the scope.json. `--unscoped` bypasses it (same
+            # intent as the Pass-1 enumeration drop above), so an explicitly
+            # named primitive that no port file calls is still emitted. Any seed
+            # the gate drops is logged below (never silently omitted).
+            if scope_enabled and not unscoped and not c["is_port"]:
                 name = c["base"]["name"]
                 def_file = c["base"].get("defined_in") or ""
                 kind = c["base"].get("kind") or ""
                 if kind and kind.startswith("function"):
-                    if not reach.is_function_port_reachable(name, def_file):
-                        continue
+                    reachable = reach.is_function_port_reachable(name, def_file)
                 elif kind and kind.startswith("global"):
-                    if not reach.is_global_port_reachable(name, def_file):
-                        continue
+                    reachable = reach.is_global_port_reachable(name, def_file)
                 elif kind == "callback":
-                    if not _wrap_port_reachable(reach, name, "", by_name, port_paths):
-                        continue
+                    reachable = _wrap_port_reachable(
+                        reach, name, "", by_name, port_paths)
                 else:
                     # Macros (kind=null until agent classification).
-                    if not reach.is_macro_port_reachable(name, def_file):
-                        continue
+                    reachable = reach.is_macro_port_reachable(name, def_file)
+                if not reachable:
+                    dropped_seeds.append(name)
+                    continue
             seed_keys.add(c["key"])
+    if dropped_seeds:
+        print(
+            f"syms: {len(set(dropped_seeds))} seed(s) dropped -- named but not "
+            f"port-reachable from scope.json (re-run with --unscoped to include "
+            f"them): {sorted(set(dropped_seeds))}"
+        )
 
     # Pass 3: compute closure from port seeds (seed mode + scope_enabled).
     # Closure = union of forward_syms for each port seed, minus the

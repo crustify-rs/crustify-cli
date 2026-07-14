@@ -132,24 +132,45 @@ AGENT fields -- the SAME structured ownership block a struct field's
 [`ptr`](types.md#ptr) carries, so a pointer is described identically whether it
 lives in a struct or crosses a call:
 
-- **`array`** -- `null` (single pointee) | `{by_val: true}` (buffer of inline
+- **`scalar`** -- `false`: this is never a single pointee, only `array` or `string` |
+  `true`: this may be a single pointee. May co-exist with `array`; mutually
+  exclusive with `string`.
+- **`array`** -- `null`: this may never be an array, only a single pointee or a string
+  | `{by_val: true}` (buffer of inline
   values) | `{by_ref: {owned, borrowed}}` (buffer of element pointers -- a
-  container; `owned`/`borrowed` is the ELEMENT ownership). Mutually exclusive
-  with `string`.
+  container). Under `by_ref`, `owned`/`borrowed` is the ELEMENT ownership, and
+  EACH is the same block as the top-level `owned`/`borrowed` below -- so a
+  container of owned elements carries the element's release/clone bindings.
+  May co-exist with `scalar`; mutually exclusive with `string`.
 - **`string`** -- pointee is a NUL-terminated string.
-- **`owned`** -- `null`, or `{exclusive, shared}`: ownership TRANSFERRED across
-  the call (on an arg the callee takes it, on the return the caller receives it).
-  `exclusive` = sole ownership -> `CBox`; `shared` = refcounted -> `CArc`.
+- **`owned`** -- `null`, or `{exclusive, shared, dropped_by, cloned_by}`:
+  ownership TRANSFERRED across the call (on an arg the callee takes it, on the
+  return the caller receives it). `exclusive` = sole ownership -> `CBox`;
+  `shared` = refcounted -> `CArc`.
+  - **`dropped_by`** -- the release binding: the list of routine names that may
+  free this owned pointer, or `null`. A function that frees its own arg names itself
+  (`CRYPTO_free`'s `ptr` arg -> `["CRYPTO_free"]`); a constructor's return names
+  the free the caller must use.  A list because the decision of which routine frees
+  the pointer may be decided by the caller at runtime, which signals that a Rust-native
+  representation would fork it to provide multiple `Drop` implementations that a Rust
+  caller can choose at runtime. This is the single source of "what is a destructor": a routine is a
+  `Drop` iff it is named here (exclusive owner -> `CBox::drop`; shared ->
+  `CArc::drop`/`down_ref`).
+  - **`cloned_by`** -- the mirror for `Clone`: the list of routines that produce
+  a fresh owned copy of this pointer, or `null`. Generally, any existing dup will
+  be bundled with the above drop instances to form Rust-native safe types.
+  Exclusive -> the deep-copy dup (`strdup`/`memdup` -> `CBox::clone`); shared ->
+  the `up_ref` (`CArc::clone`). 
 - **`borrowed`** -- `null`, or `{lifetime}`: the pointer is borrowed, bound to
   another entity's lifetime. Sources are `arg:<name>`, `arg:<name>->path`,
   `static`, or `other` -- the arg-oriented vocabulary (a struct field instead
-  borrows from `self` / a sibling field).
+  borrows from `self` / a sibling field). 
 - **`nullable`** -- may be NULL -> Rust `Option<...>`.
 - **`mutable`** -- null/true/false: (i) `const=true` forces `false`; (ii)
   otherwise the agent decides by body inspection -- does the callee write through
   the pointer?; (iii) `null` ONLY when undeterminable (no definition available,
   e.g. an external symbol).
-- **`note`** -- free-form.
+- **`note`** -- free-form; justify the above, highlight gaps and corner cases if any.
 
 `owned` and `borrowed` MAY both be non-null -- runtime-conditional dual ownership
 (owned on one path, borrowed on another); likewise `owned.exclusive`+`.shared`
@@ -159,9 +180,34 @@ about the C code, uniform for every symbol: it does not depend on port/wrap
 scope, nor on the Rust representation the pointer eventually gets.
 
 **Invariants** (enforced on `--update`): `array` is null | exactly one of
-`{by_val, by_ref}`; `string` XOR `array`; a borrowed pointer needs a lifetime;
+`{by_val, by_ref}`; `string` XOR (`array` | `scalar`); a borrowed pointer needs a lifetime;
 `exclusive`/`shared` only under `owned`; `const`-in-type implies `mutable != true`;
 `ptr_ret` only on a pointer-returning symbol.
+
+## ptr / locked_by (globals)
+
+A `global_*` entry has no call boundary, so it carries no `ptr_args`/`ptr_ret`.
+Two agent-filled slots take their place (both `null` in the composer skeleton):
+
+- **`ptr`** -- `null`, or the SAME ownership block as a `ptr_args` record
+  (`array`, `string`, `owned`, `borrowed`, `nullable`, `mutable`, `note`), for a
+  global that is itself a pointer -- so a global pointer is described like any
+  other. A global is `'static`, so `owned.dropped_by`/`cloned_by` are normally
+  `null` (nothing frees or clones a process-lifetime global); the useful facets
+  are `const`/`mutable`, `borrowed` (typically `{lifetime: static}`), and the
+  buffer shape. `null` for a non-pointer global (a scalar or struct value).
+- **`locked_by`** -- `null`, or `{lock, lock_op, unlock_op}`: the concurrency
+  binding on ANY global (pointer or not) accessed under a lock.
+  - **`lock`** -- name of the lock object (a global or field) that guards the slot.
+  - **`lock_op`** -- the LIST of acquire routines (e.g.
+    `["CRYPTO_THREAD_read_lock", "CRYPTO_THREAD_write_lock"]`); which ops appear
+    captures the read-vs-write discipline.
+  - **`unlock_op`** -- the LIST of release routines (e.g. `["CRYPTO_THREAD_unlock"]`).
+
+  `locked_by` sits at the entry level (a sibling of `ptr`), NOT inside `ptr`,
+  because the guarded datum is often a non-pointer (a refcount `int`, a flag).
+  The struct-field form of the same binding lives on the field record (see
+  [types.md](types.md)).
 
 ## used_by
 
@@ -186,63 +232,6 @@ signature types (parameters/return) with body-touched types from
 `t2/field_accesses.csv`; signature types come first (signature order), body-only
 types follow (first-encounter order); a signature type whose body touches no
 field carries `fields:[]` (opaque use).
-
-## lifetime
-
-Agent-filled, `null` for ordinary symbols. Present when the symbol is a
-**lifecycle primitive**: a member of the byte-level allocator surface, or of a
-refcount / lock cluster. 
-
-Exactly ONE subfield is populated, and the subfield name IS the primitive kind:
-
-- **`alloc`** -- a byte-level (de-)allocator. `{role, freed_by, synth}`:
-  - **`role`** -- `"allocator"` (produces a raw buffer) or `"free"` (the untyped
-    deallocator that releases one).
-  - **`freed_by`** -- allocator only: the LIST of `free` symbol names that release
-    this allocator's output. A list, because one buffer may be released by more
-    than one deallocator (a plain free and a clearing free). Each pairing is a
-    distinct Rust drop strategy, so `(free, synth)` -- not the allocator -- is the
-    family identity.
-  - **`synth`** -- allocator only: `"string"` (result is a NUL-terminated string
-    -> `CrustifyStr<D>`) or `"array"` (a sized byte buffer -> `CVec<T, S>`). A
-    semantic judgement, NOT readable from the signature: a `char *` return may be
-    either.
-- **`clone`** -- a byte-level duplicator (`*strdup`, `*memdup`): it allocates a
-  fresh, independent copy. `{freed_by, synth}`, same meaning as under `alloc` --
-  a duplicator allocates, so it belongs to a family. It is a separate kind because
-  its Rust slot is the `Clone` impl (`CCloned::c_clone` for a string,
-  `CLenCloned::c_clone_len` for an array), not a constructor.
-- **`refcount`** -- a raw refcount manipulation op. `{op, cluster}`:
-  - **`op`** -- `"new"` | `"up"` | `"down"` | `"get"` | `"free"` | `"assert"`.
-  - **`cluster`** -- the refcount type's name (e.g. `"PROJ_REF_COUNT"`), grouping
-    the op with its siblings. An opaque grouping id; nothing else is recorded
-    about the cluster.
-- **`lock`** -- a raw locking op. `{op, cluster}`:
-  - **`op`** -- `"new"` | `"read_lock"` | `"write_lock"` | `"unlock"` | `"free"`.
-    `read_lock` appears only for reader-writer locks; `write_lock` doubles as the
-    single `lock` for mutex / spinlock kinds.
-  - **`cluster`** -- the lock type's name (e.g. `"PROJ_RWLOCK"`).
-
-**Duplicator vs copy.** A routine that PRODUCES a buffer is a duplicator
-(`clone`). One that merely FILLS a caller-owned buffer (`memcpy`, `strncpy`) is a
-copy: it never owns, so it fills no lifecycle slot and carries `lifetime: null`.
-Its safe shim is a `CCell`-parametric `mem_copy`, not a constructor.
-
-**Untyped only (`alloc` / `clone`).** Tag an allocator, free, or duplicator only
-when the buffer it produces or releases is raw bytes or a string (`void *`,
-`char *`, `unsigned char *`, `void **`). A routine parameterised by or returning a
-named aggregate type is a TYPE constructor/destructor and belongs in that type's
-`types.json` `lifetime` block, never here. This restriction does NOT apply to
-`refcount` / `lock` ops, which necessarily take their cluster's own type.
-
-**Tag the callable, never the macro.** Rust FFI cannot call macros, so a macro
-that aliases an allocator (`OPENSSL_malloc` -> `CRYPTO_malloc`, i.e.
-`macro.alias = true`) carries `lifetime: null`; the underlying function carries
-the block.
-
-**Derived, not authored.** Allocator families and the synthetic `string` /
-`array` cluster entries are composed by grouping allocators on `(freed_by,
-synth)`. This block records the per-symbol facts; nothing stores the groups.
 
 ## provenance
 

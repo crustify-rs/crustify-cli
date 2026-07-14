@@ -35,12 +35,11 @@ composer.
 
 Use `crustify-oracle` to fetch the list of lifecycle primitive kinds that you need to
 identify for your types. Understand their meaning and learn the suggested 
-heuristics for identifying them. Use the oracle to fetch the identified byte-level
-allocators of the project.
+heuristics for identifying them.
 
-Leverage the type's record to fetch the lifetime candidates from the list of
-routines that touch the type in the codebase, and analyze their signatures and
-bodies semantically in the code to classify them appropriately.
+Using the oracle, fetch the list of routines that touch your type, and analyze
+their signatures and bodies semantically to identify those that implement the
+type's lifecycle.
 
 Classification rules:
 
@@ -59,7 +58,7 @@ Classification rules:
   4. **Inspect the body semantically**, do not assume the lifetime role of a function
       based on signature alone. Type attribution however is signature dominated.
 
-### Per-field pointer ownership analysis
+### Analyze per-field pointer ownership
 
 Use the `crustify-oracle` skill to fetch the list of properties you need to infer
 for each pointer field of your job's types. 

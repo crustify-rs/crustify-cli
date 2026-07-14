@@ -93,7 +93,13 @@
           "string": false,
           "owned": {
             "exclusive": false,
-            "shared": true
+            "shared": true,
+            "dropped_by": [
+              "SSL_CTX_free"
+            ],
+            "cloned_by": [
+              "SSL_CTX_up_ref"
+            ]
           },
           "borrowed": null,
           "nullable": false,
@@ -109,14 +115,17 @@
         "string": false,
         "owned": {
           "exclusive": true,
-          "shared": false
+          "shared": false,
+          "dropped_by": [
+            "SSL_free"
+          ],
+          "cloned_by": null
         },
         "borrowed": null,
         "nullable": true,
         "mutable": null,
         "note": "fresh SSL, caller owns -> CBox"
-      },
-      "lifetime": null
+      }
     },
     {
       "name": "PACKET_remaining",
@@ -199,8 +208,7 @@
         "include/openssl/safestack.h"
       ],
       "defined_in": "include/openssl/safestack.h",
-      "type": null,
-      "lifetime": null
+      "type": null
     },
     {
       "_comment": [
@@ -219,8 +227,7 @@
         "ssl/packet_local.h"
       ],
       "defined_in": "ssl/packet_local.h",
-      "type": null,
-      "lifetime": null
+      "type": null
     },
     {
       "name": "tls11downgrade",
@@ -229,7 +236,21 @@
         "ssl/ssl_local.h"
       ],
       "defined_in": "ssl/s3_lib.c",
-      "type": "const unsigned char tls11downgrade[8]"
+      "type": "const unsigned char tls11downgrade[8]",
+      "ptr": {
+        "array": {
+          "by_val": true
+        },
+        "string": false,
+        "owned": null,
+        "borrowed": {
+          "lifetime": "static"
+        },
+        "nullable": false,
+        "mutable": false,
+        "note": "'static const byte pattern; read-only, unguarded"
+      },
+      "locked_by": null
     },
     {
       "name": "SSL_verify_cb",
@@ -310,21 +331,16 @@
         "string": false,
         "owned": {
           "exclusive": true,
-          "shared": false
+          "shared": false,
+          "dropped_by": [
+            "CRYPTO_free"
+          ],
+          "cloned_by": null
         },
         "borrowed": null,
         "nullable": true,
         "mutable": null,
         "note": "raw region, caller owns -> CBox / CVec"
-      },
-      "lifetime": {
-        "alloc": {
-          "role": "allocator",
-          "freed_by": [
-            "CRYPTO_free"
-          ],
-          "synth": "array"
-        }
       }
     },
     {
@@ -346,7 +362,11 @@
           "string": false,
           "owned": {
             "exclusive": true,
-            "shared": false
+            "shared": false,
+            "dropped_by": [
+              "CRYPTO_free"
+            ],
+            "cloned_by": null
           },
           "borrowed": null,
           "nullable": true,
@@ -368,12 +388,7 @@
           "note": null
         }
       ],
-      "ptr_ret": null,
-      "lifetime": {
-        "alloc": {
-          "role": "free"
-        }
-      }
+      "ptr_ret": null
     },
     {
       "name": "CRYPTO_strdup",
@@ -421,20 +436,16 @@
         "string": true,
         "owned": {
           "exclusive": true,
-          "shared": false
+          "shared": false,
+          "dropped_by": [
+            "CRYPTO_free"
+          ],
+          "cloned_by": null
         },
         "borrowed": null,
         "nullable": true,
         "mutable": null,
         "note": "fresh string, caller owns"
-      },
-      "lifetime": {
-        "clone": {
-          "freed_by": [
-            "CRYPTO_free"
-          ],
-          "synth": "string"
-        }
       }
     },
     {
@@ -475,13 +486,7 @@
           "note": null
         }
       ],
-      "ptr_ret": null,
-      "lifetime": {
-        "refcount": {
-          "op": "up",
-          "cluster": "CRYPTO_REF_COUNT"
-        }
-      }
+      "ptr_ret": null
     },
     {
       "name": "CRYPTO_THREAD_write_lock",
@@ -507,19 +512,13 @@
           "note": null
         }
       ],
-      "ptr_ret": null,
-      "lifetime": {
-        "lock": {
-          "op": "write_lock",
-          "cluster": "CRYPTO_RWLOCK"
-        }
-      }
+      "ptr_ret": null
     },
     {
       "_comment": [
         "Aliases `CRYPTO_malloc(n, __FILE__, __LINE__)`. Rust calls the target, so",
-        "the macro needs no shim -- and it carries `lifetime: null`: the allocator",
-        "block lives on `CRYPTO_malloc`, the callable."
+        "the macro needs no shim (`macro.alias = true`), and it has no ptr records:",
+        "the ownership/release bindings live on `CRYPTO_malloc`, the callable."
       ],
       "name": "OPENSSL_malloc",
       "kind": "macro",
@@ -534,8 +533,7 @@
       "defined_in": "include/openssl/crypto.h",
       "type": null,
       "ptr_args": [],
-      "ptr_ret": null,
-      "lifetime": null
+      "ptr_ret": null
     }
   ]
 }

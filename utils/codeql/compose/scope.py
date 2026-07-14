@@ -365,26 +365,41 @@ def locking_op_names(locking) -> list[str]:
     return out
 
 
-def clone_op_names(lc) -> list[str]:
-    """Clone-role fn names (refcount share + deep dups) from a lifecycle dict,
-    schema-tolerant. New schema: ``lc['clone'] = {shared: <fn>|null, exclusive:
-    [<fn>...]}`` -- ``shared`` is the refcount-bump (`up_ref`, -> CRefCloned /
-    CArc Clone), ``exclusive`` the deep-copy list (-> CCloned / CBox Clone).
-    Legacy: separate ``lc['up_ref']`` (scalar) + ``lc['clones']`` (list). This is
-    the single clone-extraction primitive the dag / scope / consistency / schedule
-    stages share."""
-    clone = lc.get("clone")
-    if isinstance(clone, dict):
-        out: list[str] = []
-        if clone.get("shared"):
-            out.append(clone["shared"])
-        out += clone.get("exclusive") or []
-        return out
-    out = []
-    if lc.get("up_ref"):
-        out.append(lc["up_ref"])
-    out += lc.get("clones") or []
-    return out
+def clone_op_names(cloned_by) -> list[str]:
+    """Clone-role fn names (deep dups + refcount up_refs) from a `cloned_by` dict,
+    schema-tolerant. New schema: top-level ``cloned_by = {exclusive: [...],
+    shared: [...]}`` (both LISTs). Legacy lifetime ``clone`` = ``{shared: <fn>|
+    null, exclusive: [...]}`` (shared scalar) and the older flat ``up_ref``
+    (scalar) + ``clones`` (list) are tolerated. This is the single
+    clone-extraction primitive the dag / scope / consistency / schedule stages
+    share; callers pass ``type_cloned_by(entry)``."""
+    if not isinstance(cloned_by, dict):
+        return []
+    out: list[str] = []
+    for role in ("exclusive", "shared"):
+        v = cloned_by.get(role)
+        if v:
+            out += (v if isinstance(v, list) else [v])
+    if cloned_by.get("up_ref"):
+        out.append(cloned_by["up_ref"])
+    out += cloned_by.get("clones") or []
+    seen: set[str] = set()
+    return [x for x in out if not (x in seen or seen.add(x))]
+
+
+def type_dropped_by(entry: dict) -> dict:
+    """The type's ``{exclusive, shared}`` destructor dict: TOP-LEVEL ``dropped_by``
+    (struct records), falling back to a cluster's ``lifetime.drop`` (clusters keep
+    the nested block until the cluster pass is retired)."""
+    d = entry.get("dropped_by")
+    return d if d is not None else (lifetime(entry).get("drop") or {})
+
+
+def type_cloned_by(entry: dict) -> dict:
+    """The type's ``{exclusive, shared}`` clone dict: TOP-LEVEL ``cloned_by``
+    (struct records), falling back to a cluster's ``lifetime.clone``."""
+    c = entry.get("cloned_by")
+    return c if c is not None else (lifetime(entry).get("clone") or {})
 
 
 def lifetime(rec: dict) -> dict:
@@ -412,14 +427,14 @@ def type_method_syms(entry: dict) -> list[str]:
     deduped, lifecycle-first.
 
     For a concrete type (struct/union/enum) this is DERIVED, not stored: its
-    **lifecycle** (ctors ∪ dtor.{shared,exclusive,fields} ∪ up_ref ∪ clones ∪
-    locking.{acquire,release}). In-place initializers (`*_init`, stack/embedded
-    ctors that don't byte-allocate) live in `ctors`. Field accessors are NOT
-    part of the surface —
-    the wrapper derives per-field accessors from the field layout directly, so a
-    C field-accessor function is an ordinary free function here. There is no
-    `ops` list on a concrete type — the deps DAG and the consistency gate call
-    this to recover the lifecycle set.
+    **lifecycle** (drop.{shared,exclusive,fields} ∪ clone.{shared,exclusive}).
+    (`allocs` and type-level `locking` were retired in Phase 2 -- allocators
+    derive from constructor bindings, and lock ops now live on per-field
+    `locked_by`, referenced via the normal call graph rather than bundled here.)
+    Field accessors are NOT part of the surface -- the wrapper derives per-field
+    accessors from the field layout directly, so a C field-accessor function is an
+    ordinary free function here. There is no `ops` list on a concrete type -- the
+    deps DAG and the consistency gate call this to recover the lifecycle set.
 
     For the fieldless synthetic clusters (kind ``string``/``array``) the method
     surface is their explicit ``ops`` list (realloc/cleanse have no field
@@ -427,11 +442,8 @@ def type_method_syms(entry: dict) -> list[str]:
     """
     if entry.get("kind") in SYNTHETIC_KINDS:
         return list(entry.get("ops") or [])
-    lc = lifetime(entry)
-    out: list[str] = alloc_fns(lc)
-    out += drop_op_names(lc.get("drop"))
-    out += clone_op_names(lc)
-    out += locking_op_names(lc.get("locking"))
+    out: list[str] = list(drop_op_names(type_dropped_by(entry)))
+    out += clone_op_names(type_cloned_by(entry))
     seen: set[str] = set()
     return [x for x in out if not (x in seen or seen.add(x))]
 

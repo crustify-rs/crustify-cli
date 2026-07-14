@@ -1,5 +1,6 @@
 ---
 name: crustify-oracle
+bin: crustify
 roles: [translator, orchestrator, analyzer]
 description: >-
   The crustify analysis oracle for C symbols and types. Query a record /
@@ -26,7 +27,8 @@ plus the idioms `--help` can't tell you.
 > Invocation shape: `crustify <repo_root> <target> <command> ...`. Global flags
 > (`--model`, `--parallel`) go **before** `<repo_root>`; a stage's own flags
 > (e.g. `--parallel-max`) go **after** the subcommand. Use the target that owns
-> a `scope.json` (e.g. `src/libgit2`), not `_root`, for scope-aware commands.
+> a `scope.json` (e.g. `src/libgit2`) for scope-aware commands; add `--unscoped`
+for a repo-wide, scope-blind pass.
 
 ## `query types` -- type records, type-analyzer discover + submit, buffer clusters
 
@@ -42,17 +44,21 @@ plus the idioms `--help` can't tell you.
 | **submit** type findings (WRITE) | `query types --name <tag> --file <file> --update <file>` (or `--update -`) |
 | **create** a synthetic string/array cluster (WRITE) | `query types --create <cluster.json>` |
 
-## `query syms` -- symbol records, symbol-analyzer discover + submit
+## `query symbols` -- symbol records, symbol-analyzer discover + submit
+
+(`syms` is a back-compat alias for `symbols`.)
 
 | you need | invocation |
 |----------|------------|
-| a symbol's record (signature, pointer analysis, type/sym deps) | `query syms --name <name> --with-details` |
-| a lifecycle candidate's signature / body location | `query syms --name <fn> --with-details` |
-| the **type-generator** primitives (`DEFINE_*` / `DECLARE_*` macro families, `macro.typegen`) | `query syms --typegens` |
-| the **lifecycle** primitives -- allocator / `free` / `clone` / refcount / lock, one full record each | `query syms --lifetime` |
-| just the string- / array-buffer allocators + duplicators | `query syms --lifetime --strings` / `--arrays` |
-| one primitive's `lifetime` block | `query syms --lifetime --name <sym>` |
-| **submit** symbol findings (WRITE) | `query syms --name <name> --file <file> --update <file>` |
+| a symbol's record (signature, pointer analysis, type/sym deps) | `query symbols --name <name> --with-details` |
+| the **type-generator** primitives (`DEFINE_*` / `DECLARE_*` macro families, `macro.typegen`) | `query symbols --typegens` |
+| **submit** symbol findings (WRITE) | `query symbols --name <name> --file <file> --update <file>` |
+
+Lifecycle roles are NOT enumerated -- a routine is a `Drop`/`Clone` iff it is
+named in some pointer's `owned.dropped_by` / `owned.cloned_by` binding, which the
+symbol analyzer fills where observable (a function that frees its own arg; a
+constructor's return). There is no separate primitive catalogue or `--lifetime`
+view; the roles are derived from the bindings.
 
 ## `query dag` -- dependency closure
 

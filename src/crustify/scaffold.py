@@ -241,9 +241,8 @@ def _entries_for_path(doc, layout, target, file, dir) -> list[dict]:
 
 def _path_filter(layout, target, sel: str) -> str:
     import posixpath
-    from crustify.layout import ROOT_TARGET
     rel = layout.rel_target(target)
-    base = "" if rel == ROOT_TARGET else rel
+    base = "" if rel in ("", ".") else rel
     return posixpath.normpath(posixpath.join(base, sel)).lstrip("/")
 
 

@@ -8,9 +8,7 @@ submit your findings through `crustify-oracle`.
 ## Inputs
 
 - `{manifests}`: `{{tag, file}}` pairs that you need to process; `tag` is the symbol's
-  name; `file` is its defining file, which disambiguates a tag defined in >1 TU. A
-  single reserved `lifetimes` tag (with an empty `file`) signals a lifetime
-  discovery pass instead of a per-symbol worklist.
+  name; `file` is its defining file, which disambiguates a tag defined in >1 TU.
 
 - `{repo_root}`: top level repo that the targeted port-scope elements belong to.
 
@@ -35,35 +33,19 @@ Use `crustify-oracle` to fetch the analysis schema and learn its structure.
 Identify which fields are yours to fill and which are owned by the deterministic
 composer.
 
-### Lifetime primitives discovery mode
+### Process globals
 
-If your workset contains the keyword `lifetimes` you must first scout the
-codebase to identify the project-wide, raw lifetime primitives learned from the
-`crustify-oracle` schema. These are the routines used by the codebase for
-memory (de-)allocation, memory cloning, refcount manipulation, and locking
-synchronization.
+For all `global` items in your workset, fill out its record with the following properties:
 
-Additionally, you must also identify those lifetime primitives dedicated to
-strings and arrays, which are synthetic types in C with no formal specification,
-but are defined in Rust. These usually invoke the byte-level routines for memory
-(de-)allocation/cloning identified by the previous step. Generally, arrays are
-defined as sequences of bytes / scalars / typed elements that are bound by a
-length, both when accessing it and when freeing it. Similarly, strings are meant
-as NUL-terminated sequences of characters, whose processing and lifetime logic
-relies on it being NUL-terminated.
-
-Do not narrow your filter to only port- or wrap-scope primitives;
-your scope targets the whole codebase.
-
-Once you've identified them, use `crustify-oracle` to check if their entries
-already exist in the on-disk database. If they don't, use the appropriate
-crustify command to create their entries via the deterministic composer (DO NOT
-invoke yourself recursively). Afterwards, proceed with analyzing them based on the
-following sections as you would for regular symbols.
+  - locking: reason and identify the locking logic allowing the global to be accessed
+  concurrently  
+  
+  - pointer ownership: if the global is a pointer the infer its ownership/mutability
+  like for pointer args and returns (see below).
 
 ### Process macros
 
-If any of your workset items is a macro then inspect its expansion at its source
+If any of your workset item is a macro then inspect its expansion at its source
 and reason whether it expands to a symbol or constant. A downstream bindgen
 pass will rely on this analysis to determine whether we need emit to a shim to
 make the macro callable in Rust-native code, or whether bindgen already emits
@@ -89,16 +71,19 @@ semantics, and if it splits into >1 cluster, each cluster becomes a distinct
 Rust wrapper. Learn the findings schema from `crustify-oracle` and submit the
 dominant cluster as the primary record and its forked variants.
 
-### Pointer-arg and pointer-return ownership analysis
+### Analyze pointer-arg and pointer-return ownership
 
 Use the `crustify-oracle` skill to fetch the list of properties you need to infer
 for each pointer-arg and -return of the functions and callbacks in your workset.
 
-Leverage each item's record to fetch its callers, and analyze their bodies
-semantically to understand how they pass arguments and process returns. Also
-analyze how args and the return are processed inside the item itself. This will
-grant you a complete view of the item's footprint for a complete analysis of
-its arg and ret ownership/use.
+Fetch each item's callers from its record and analyze semantically both its own
+body as well as its call sites to understand how arguments and returns are
+passed and processed.  This will grant you a complete view of the item's
+footprint for a complete analysis of its arg and ret ownership/use.
+
+Additionally, identify the releasers/cloners of each pointer that is
+owned/moved, which will allow downstream consumers to map them to the smart
+pointer that implements the appropriate drop.
 
 This analysis drives wrapper generation when we generate safe wrappers over
 wrap-scope functions and callbacks that take/return wrapped types and references

@@ -126,6 +126,10 @@ def _null_ptr_skeleton() -> dict[str, Any]:
     """Agent-fillable pointer-ownership block, emitted with null/false
     placeholders by the composer."""
     return {
+        # scalar: single-object capability (-> COwn/CBox). Co-exists with `array`
+        # (a generic allocator may serve BOTH a singleton and a buffer); a pointer
+        # must be at least one of {scalar, array, string}.
+        "scalar": None,
         # array: null (single pointee) | {by_val: true} (buffer of inline values)
         # | {by_ref: {owned, borrowed}} (buffer of element pointers -- a
         # container; owned/borrowed = ELEMENT ownership, vs the buffer ownership
@@ -443,28 +447,18 @@ def _wrap_port_reachable(
 # ------------------------------------------------------------------ skeletons
 
 def _lifecycle_skeleton() -> dict[str, Any]:
-    # No `ops` list: a concrete type's method surface is DERIVED (lifecycle
-    # only) via scope.type_method_syms. Only the synthetic string/array clusters
-    # (agent-created) carry an explicit `ops`.
-    # All lifecycle slots nest under `lifetime` (read via scope.lifetime).
-    # Split destructor, each role a LIST (a role may hold several distinct
-    # destructors of the same kind, e.g. a container's shallow free plus its
-    # deep element-owning free):
-    #   `exclusive` = plain `*_free`(s) releasing a solely-owned heap header
-    #     + fields (-> CBox);
-    #   `shared`    = a refcount-decrementing free (the dual-ownership /
-    #     refcounted teardown, pairs with `up_ref`; -> CArc);
-    #   `fields`    = a `*_dispose`/`*_cleanup` releasing owned fields only,
-    #     by-value header, POD-style (-> CVal).
-    # See docs/schemas/types.md (drop).
+    # No `ops` list: a concrete type's method surface is DERIVED (lifecycle only)
+    # via scope.type_method_syms. `dropped_by`/`cloned_by` are TOP-LEVEL type
+    # fields (no `lifetime` wrapper), each `{exclusive, shared}` of fn lists:
+    #   dropped_by.exclusive = plain `*_free`(s) (solely-owned heap header +
+    #     fields -> CBox); dropped_by.shared = refcount-decrementing free
+    #     (pairs with cloned_by.shared up_ref -> CArc).
+    #   cloned_by.exclusive = deep-copy `dup`(s); cloned_by.shared = up_ref(s).
+    # The old `drop.fields` dispose role is now per-field (`owned.disposed_in`).
+    # See docs/schemas/types.md (dropped_by / cloned_by).
     return {
-        "lifetime": {
-            "allocs": [],
-            "clone": {"shared": None, "exclusive": []},
-            "drop": {"shared": [], "exclusive": [], "fields": []},
-            "locking": None,
-            "conditional_drop": None,
-        }
+        "dropped_by": {"exclusive": [], "shared": []},
+        "cloned_by": {"exclusive": [], "shared": []},
     }
 
 
@@ -702,7 +696,11 @@ def compose(
         for c in candidates:
             if not is_seed(c["entry"], filter_spec, name_key="name"):
                 continue
-            if scope_enabled and not c["is_port"]:
+            # Wrap-scope seed admission gate: a non-port seed must be reachable
+            # from port code per the scope.json. `--unscoped` bypasses it (same
+            # intent as the filter-mode branch below), so an explicitly named
+            # type that no port file reaches is still emitted.
+            if scope_enabled and not filter_spec.unscoped and not c["is_port"]:
                 if not _wrap_port_reachable(reach, c["name"], c["def_file"], by_name, port_paths):
                     continue
             seed_keys.add(c["key"])
@@ -733,7 +731,10 @@ def compose(
         emit_keys = seed_keys | closure_keys
     else:
         for c in candidates:
-            if not scope_enabled:
+            # `--unscoped` emits every candidate, skipping the out-of-scope
+            # reachability drop (repo-wide inventory). scope.json still
+            # classifies port/wrap for the entries that qualify.
+            if not scope_enabled or filter_spec.unscoped:
                 emit_keys.add(c["key"])
             elif c["is_port"]:
                 emit_keys.add(c["key"])
@@ -803,8 +804,9 @@ _COMMENT = (
     "(touchers that hold the type opaquely — forwarders, ctors, "
     "wrappers). Wrap types restrict both to the in-scope universe "
     "(port-defined ∪ port-reachable); port types keep the full "
-    "footprint. The agent populates `ops` from both, then fills the "
-    "`lifetime` block (allocs/dtor/up_ref/clones/locking/conditional_drop). "
+    "footprint. The agent fills each pointer field's `ptr` ownership block "
+    "(incl. owned.dropped_by/cloned_by) and any guarded field's `locked_by`, "
+    "plus the type-level `lifetime` block (clone/drop). "
     "`casted` {to,from} is the composer-filled raw struct<->struct cast graph "
     "(see _comment_casted) — instance<->engine erasure, base->derived "
     "downcasts and ASN1 punning all coexist there, unclassified. Synthetic "

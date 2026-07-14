@@ -585,26 +585,6 @@ def analyze_types(
         run_buffer_pass(target)
 
 
-def run_lifetime_pass(target: Path) -> None:
-    """Single cross-cutting pass that tags lifecycle primitives. The symbol
-    analyzer, run in `selection="lifetimes"` mode, discovers each allocator /
-    free / clone / refcount / lock primitive from source and writes a
-    `lifetime` block onto that symbol's entry.
-
-    No pre-compose and no gate: the primitive's deterministic base record is
-    composed ON DEMAND by the agent itself (`analyze symbols --compose-only
-    --name <prim>`) right before it tags it, so the pass needs no prior tree
-    state. Discovery mode is signalled by the sentinel `LIFETIMES_TAG`
-    worklist record. See prompts/analyzer/symbol_analyzer.md (lifetime mode).
-    """
-    tag = CrustifySymbolAnalyzer.LIFETIMES_TAG
-    CrustifySymbolAnalyzer(
-        target,
-        manifests=[{"symbols": [{"name": tag, "file": None}]}],
-        stage_suffix="lifetimes",
-    ).run()
-
-
 def run_buffer_pass(target: Path) -> None:
     """Single cross-cutting pass that creates `string` / `array`
     allocator-cluster entries. Gated on alloc.json (the allocator
