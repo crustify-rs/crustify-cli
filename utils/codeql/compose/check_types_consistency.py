@@ -22,10 +22,10 @@ Modes:
 Checks run by the GATE:
 
   - op-uniqueness      a non-lifecycle op belongs to at most one type.
-  - ptr-invariants     per pointer field: exclusive/shared only when owned;
+  - ptr-invariants     per pointer field: owned and/or borrowed, never neither;
                        borrowed => lifetime set; string XOR array; const =>
-                       mutable != true. (owned+borrowed and exclusive+shared
-                       MAY co-occur -- runtime-conditional dual ownership.)
+                       mutable != true. (owned+borrowed MAY co-occur --
+                       runtime-conditional dual ownership.)
 
 Lifecycle ops — the union of every entry's `ctors`, `dtor`, `up_ref`,
 `clone`, `locking.{acquire,release}` — are EXEMPT from op-uniqueness in
@@ -96,10 +96,10 @@ def lifetime_set(by_type) -> set[str]:
     out: set[str] = set()
     for entries in by_type.values():
         for entry, _ in entries:
-            # Top-level `dropped_by`/`cloned_by` = {exclusive, shared} fn lists
-            # (bridge falls back to a cluster's lifetime.{drop,clone}). allocs +
-            # type-level locking retired in Phase 2 -- their fns reach the set via
-            # the call graph.
+            # Top-level `dropped_by` (a flat fn list) + `cloned_by`
+            # ({deep, upref} fn lists); the readers fall back to a synthetic
+            # buffer cluster's lifetime.{drop,clone} block. A type's allocators
+            # and locking fns reach the set via the call graph.
             out |= set(scope.drop_op_names(scope.type_dropped_by(entry)))
             out |= set(scope.clone_op_names(scope.type_cloned_by(entry)))
     return out
@@ -196,6 +196,7 @@ def check_ptr_invariants(by_type) -> list[Finding]:
                 owned = ptr.get("owned")
                 borrowed = ptr.get("borrowed")
                 string = ptr.get("string")
+                scalar = ptr.get("scalar")
                 array = ptr.get("array")
                 mutable = ptr.get("mutable")
                 const = "const" in (fld.get("type") or "")
@@ -206,23 +207,34 @@ def check_ptr_invariants(by_type) -> list[Finding]:
                         f"field '{fname}': {msg}",
                     ))
 
-                # Ownership dependencies are now STRUCTURAL: exclusive/shared nest
-                # under `owned`, lifetime under `borrowed`, element-ownership under
-                # `array.by_ref`. `owned` and `borrowed` may BOTH be non-null
-                # (runtime-conditional dual ownership). Only shape validity, the
-                # string/array mutex, borrowed-requires-lifetime, and const/mutable
-                # remain.
-                if array is not None:
-                    if not isinstance(array, dict):
-                        bad("array must be null or {by_val|by_ref}")
-                    elif len([k for k in ("by_val", "by_ref") if array.get(k)]) != 1:
-                        bad("array needs exactly one of by_val / by_ref")
+                # Ownership dependencies are STRUCTURAL: lifetime nests under
+                # `borrowed`, element-ownership under `array.by_ref`. `owned` and
+                # `borrowed` may BOTH be set (runtime-conditional dual ownership).
+                # Only shape validity, the string/array mutex,
+                # borrowed-requires-lifetime, and const/mutable remain.
+                # `scalar` and `array` share one by_val/by_ref grammar (scalar =
+                # ONE pointee, e.g. a `T**` out-param via scalar.by_ref; array = a
+                # buffer). Validate both the same way.
+                for slot, sname in ((scalar, "scalar"), (array, "array")):
+                    if slot is None:
+                        continue
+                    if not isinstance(slot, dict):
+                        bad(f"{sname} must be null or {{by_val|by_ref}}")
+                    elif len([k for k in ("by_val", "by_ref") if slot.get(k)]) != 1:
+                        bad(f"{sname} needs exactly one of by_val / by_ref")
                 if string and array is not None:
                     bad("string and array both set (must be XOR)")
+                if string and scalar is not None:
+                    bad("string and scalar both set (a string is not a scalar)")
                 if isinstance(borrowed, dict) and not borrowed.get("lifetime"):
                     bad("borrowed set but lifetime unset")
-                if owned is not None and not isinstance(owned, dict):
-                    bad("owned must be null or {exclusive, shared}")
+                if owned is not None and not isinstance(owned, bool):
+                    bad("owned must be a boolean")
+                # A FILLED pointer (has a shape) is owned and/or borrowed, never
+                # neither. Guard on shape so unfilled skeletons don't trip it.
+                has_shape = scalar is not None or array is not None or bool(string)
+                if has_shape and not (owned is True or isinstance(borrowed, dict)):
+                    bad("a pointer must be owned and/or borrowed, never neither")
                 if const and mutable is True:
                     bad("const in type but mutable == true")
     return out

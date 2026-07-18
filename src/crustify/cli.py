@@ -200,27 +200,22 @@ def _add_subject_scope_flags(
 def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
     """Flags for `query types`/`query syms` — the read-only oracle, resolved
     from the manifest (dag-free). With no `--name` they enumerate (filtered by
-    scope / synthetic kind / `--file`); with `--name T` they
-    introspect one entry (several names → several records). `--with-details`
-    swaps the summary for the whole record; on a type, `--fields`/`--ops` print
-    its windowable lists (`facets`). The .rs module of an entry is found via
+    scope / synthetic kind / `--file`) as a name list; with `--name T` they
+    introspect one entry — always the WHOLE record (several names → several
+    records). On a type, `--fields`/`--ops` print its windowable lists
+    (`facets`). The .rs module of an entry is found via
     `crustify <target> scaffold --name <X>`, not here."""
     sc = p.add_mutually_exclusive_group()
     sc.add_argument("--wrap-only", action="store_true", dest="wrap_only",
                     help="Narrow to wrap scope: enumeration → wrap-scope entries; "
-                         "--ops/--methods → wrap-scope functions; --fields/--accessors "
+                         "--ops/--methods → wrap-scope functions; --fields/--field-touchers "
                          "→ fields touched by wrap-scope code. (Facets are complete "
                          "by default.)")
     sc.add_argument("--port-only", action="store_true", dest="port_only",
                     help="Narrow to port scope: enumeration → port-scope entries; "
-                         "--ops/--methods → port-scope functions; --fields/--accessors "
+                         "--ops/--methods → port-scope functions; --fields/--field-touchers "
                          "→ fields touched by port-scope code. (Facets are complete "
                          "by default.)")
-    sc.add_argument("--scope-only", action="store_true", dest="scope_only",
-                    help="With --fields/--accessors: narrow to fields touched by "
-                         "ANY in-scope code (port ∪ wrap) — the in-scope field set "
-                         "the two -only flags can't union (they're exclusive). "
-                         "Toucher footprint stays complete.")
     p.add_argument("--arrays", action="store_true",
                    help="Synthetic array clusters.")
     p.add_argument("--strings", action="store_true",
@@ -233,9 +228,6 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
     p.add_argument("--file", nargs="+", default=None, metavar="FILE",
                    dest="files",
                    help="Restrict/disambiguate by defining file.")
-    p.add_argument("--with-details", action="store_true", dest="with_details",
-                   help="Whole record(s) instead of the summary; with --fields, "
-                        "add the per-field ptr analysis.")
     facet = p.add_mutually_exclusive_group()
     facet.add_argument("--manifest", action="store_true",
                        help="Introspect: print the types.json/syms.json that homes this entry.")
@@ -259,20 +251,21 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
                             "(synthetic string/array-cluster fields excluded).")
     if facets:
         facet.add_argument("--fields", action="store_true",
-                           help="Introspect a type: ALL declared field names "
-                                "(--port-only/--wrap-only narrow to that scope's "
-                                "touched fields); '[]' if none; --with-details adds "
-                                "the per-field structural + ptr detail.")
+                           help="Introspect a type: ALL declared fields with their "
+                                "per-field structural + ptr detail (--port-only/"
+                                "--wrap-only narrow to that scope's touched fields); "
+                                "'[]' if none.")
         facet.add_argument("--ops", action="store_true",
                            help="Introspect a type: its method surface "
                                 "(lifecycle ops), lifecycle-first.")
         facet.add_argument("--methods", action="store_true",
-                           help="Introspect a type: the COMPLETE candidate pool for "
-                                "lifecycle/accessor discovery — the opaque_in ∪ "
-                                "non_opaque_in footprint functions (includes "
-                                "out-of-scope lifecycle); --port-only/--wrap-only "
-                                "intersect with that scope's functions; '[]' if none.")
-        facet.add_argument("--accessors", action="store_true",
+                           help="Introspect a type: its COMPLETE footprint — the "
+                                "opaque_in ∪ non_opaque_in functions (every function "
+                                "tree-wide that touches the type, incl. out-of-scope); "
+                                "--port-only/--wrap-only intersect with that scope's "
+                                "functions; '[]' if none.")
+        facet.add_argument("--field-touchers", action="store_true",
+                           dest="field_touchers",
                            help="Introspect a type: {field: [touchers]} — ALL "
                                 "declared fields by default (--port-only/--wrap-only "
                                 "narrow the FIELDS to that scope's touched subset); "
@@ -285,6 +278,45 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
                                 "under a lock. The agent never edits types.json.")
         p.add_argument("--range", default=None, metavar="A:B", dest="rng",
                        help="Window the --fields/--ops/--methods list to [A:B).")
+    else:
+        # Symbols-only REVERSE lifecycle lookup, parameterized by a TYPE (no
+        # --name). Feeds the type analyzer: which symbols realize TYPE's Drop /
+        # dispose / Clone, read off the arg-level lifetime flags.
+        facet.add_argument(
+            "--lifetime-for", default=None, metavar="SPEC", dest="lifetime_for",
+            help="Reverse lifecycle lookup (READ: flags that already exist): "
+                 "every symbol with an ARG matching SPEC whose ptr carries a "
+                 "lifetime flag (is_dropped/is_disposed/is_cloned), grouped into "
+                 "the type's dropped_by / fields_disposed_by / cloned_by. SPEC is "
+                 "a struct tag / typedef, or the keyword `void` (raw byte-level, "
+                 "untyped) or `string` (NUL-terminated; the char family or the "
+                 "analyzer's own ptr.string verdict). Lifetime flags are arg-only, "
+                 "so returns are not scanned. No --name needed.")
+        facet.add_argument(
+            "--taking", default=None, metavar="SPEC", dest="taking",
+            help="CANDIDATE discovery (the inverse of --lifetime-for, which reads "
+                 "flags that already exist): every symbol with an ARG matching "
+                 "SPEC (tag / typedef / `void` / `string`). Pair with --calling "
+                 "to keep only those that reach a lifecycle primitive. No --name "
+                 "needed.")
+        p.add_argument(
+            "--calling", default=None, metavar="FN[,FN...]", dest="calling",
+            help="Narrow --taking to symbols that reach one of these routines "
+                 "within --hops call hops (via the composer's depends_on.syms). "
+                 "A dropper/cloner must ultimately reach a raw primitive -- but "
+                 "the top-level one often does so through a helper, so >1 hop is "
+                 "the norm (e.g. ASN1_STRING_free -> "
+                 "ossl_asn1_string_free_internal -> CRYPTO_free is 2 hops).")
+        p.add_argument(
+            "--hops", type=int, default=1, metavar="N", dest="hops",
+            help="Call-hop depth for --calling (default 1). NOT capped -- every "
+                 "function transitively reaches malloc/free, so depth is a "
+                 "precision/recall trade the caller owns.")
+        p.add_argument(
+            "--array", action="store_true", dest="array",
+            help="With --lifetime-for/--taking: keep only args whose ptr carries "
+                 "an `array` shape (a buffer, not a lone pointee). Only "
+                 "meaningful on an analyzed record.")
 
 
 def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
@@ -562,6 +594,20 @@ def main() -> None:
         help="Run the syms composer skeleton + symbol analyzer agent.",
     )
     _add_analyze_filter_flags(analyze_symbols_p)
+    analyze_symbols_p.add_argument(
+        "--lifetime-for", default=None, metavar="SPEC", dest="lifetime_for",
+        help="LIFETIME-DISCOVERY mode: hand one agent the job of identifying "
+             "SPEC's lifecycle primitives. There is no composed worklist -- the "
+             "agent discovers candidates itself (`query symbols --taking SPEC "
+             "--calling ... --hops N`), triages them to the routines that really "
+             "drop/dispose/clone SPEC, and submits their arg-level lifetime "
+             "flags; `query symbols --lifetime-for SPEC` then reverse-derives the "
+             "type's roles. SPEC is a struct tag / typedef (its types.json entry "
+             "is composed first), or the keyword `void` (raw byte-level) / "
+             "`string` (NUL-terminated) -- the untyped tiers, which have no entry. "
+             "Run the tiers in order: void -> string -> <tag>. Compose the symbol "
+             "tree first (--all --unscoped --compose-only): scope gates emission, "
+             "so an unemitted primitive is unfindable.")
 
     analyze_types_p = analyze_sub.add_parser(
         "types",
@@ -662,8 +708,8 @@ def main() -> None:
     query_p = sub.add_parser(
         "query",
         help=(
-            "Read-only oracle. `types`/`symbols` enumerate (filtered) or introspect "
-            "one (--name); summary by default, --with-details for whole records. "
+            "Read-only oracle. `types`/`symbols` enumerate (filtered, as a name "
+            "list) or introspect one (--name) as the whole record. "
             "`files` lists the port / wrap scope file sets. "
             "`dag` does the graph walks (closure / layer / scc)."
         ),
@@ -982,6 +1028,13 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
     parallel_max = int(getattr(args, "parallel_max", 8))
 
     if subject == "symbols":
+        lifetime_for = getattr(args, "lifetime_for", None)
+        if lifetime_for:
+            analyze_mod.analyze_lifetime_for(
+                target, lifetime_for,
+                compose_only=getattr(args, "compose_only", False),
+            )
+            return
         if getattr(args, "reset", False):
             analyze_mod.reset_syms(
                 target,
@@ -1031,6 +1084,11 @@ def _validate_narrowing(args: argparse.Namespace) -> None:
     # The standalone cross-cutting buffer pass (types --buffers) runs over the
     # whole tree and takes no narrowing selection.
     if getattr(args, "buffers", False):
+        return
+    # `symbols --lifetime-for SPEC` IS its own selector: the SPEC names the
+    # discovery target and the agent finds the worklist itself, so the seed
+    # flags don't apply.
+    if getattr(args, "lifetime_for", None):
         return
     want_all = bool(getattr(args, "all", False))
     seed = (
@@ -1255,21 +1313,24 @@ def _handle_query(args: argparse.Namespace, target: Path) -> None:
         files=getattr(args, "files", None),
         wrap_only=bool(getattr(args, "wrap_only", False)),
         port_only=bool(getattr(args, "port_only", False)),
-        scope_only=bool(getattr(args, "scope_only", False)),
         strings=bool(getattr(args, "strings", False)),
         arrays=bool(getattr(args, "arrays", False)),
         typegens=bool(getattr(args, "typegens", False)),
         fields=bool(getattr(args, "fields", False)),
         ops=bool(getattr(args, "ops", False)),
         methods=bool(getattr(args, "methods", False)),
-        accessors=bool(getattr(args, "accessors", False)),
+        field_touchers=bool(getattr(args, "field_touchers", False)),
         update=getattr(args, "update", None),
         update_help=bool(getattr(args, "update_help", False)),
         schema=bool(getattr(args, "schema", False)),
         create=getattr(args, "create", None),
         manifest=bool(getattr(args, "manifest", False)),
         rng=getattr(args, "rng", None),
-        with_details=bool(getattr(args, "with_details", False)),
+        lifetime_for=getattr(args, "lifetime_for", None),
+        taking=getattr(args, "taking", None),
+        calling=getattr(args, "calling", None),
+        hops=int(getattr(args, "hops", 1) or 1),
+        array=bool(getattr(args, "array", False)),
     )
 
 

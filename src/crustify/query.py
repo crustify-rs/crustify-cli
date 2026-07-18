@@ -43,14 +43,13 @@ def query(
     files: list[str] | None = None,
     wrap_only: bool = False,
     port_only: bool = False,
-    scope_only: bool = False,
     strings: bool = False,
     arrays: bool = False,
     typegens: bool = False,
     fields: bool = False,
     ops: bool = False,
     methods: bool = False,
-    accessors: bool = False,
+    field_touchers: bool = False,
     update: str | None = None,
     update_help: bool = False,
     schema: bool = False,
@@ -58,7 +57,11 @@ def query(
     rs: bool = False,
     manifest: bool = False,
     rng: str | None = None,
-    with_details: bool = False,
+    lifetime_for: str | None = None,
+    taking: str | None = None,
+    calling: str | None = None,
+    hops: int = 1,
+    array: bool = False,
 ) -> None:
     """Read-only oracle over types / symbols, resolved from the composer
     manifest (dag-free; graph walks live in ``query dag``).
@@ -84,6 +87,18 @@ def query(
     if schema:
         print(_schema(kind))
         return
+    # --lifetime-for: REVERSE lifecycle lookup, parameterized by a TYPE (no
+    # --name). Symbols-only; scans arg-level lifetime flags.
+    if lifetime_for is not None:
+        if subject != "symbols":
+            raise SystemExit("query: --lifetime-for applies to symbols only.")
+        _lifetime_for(target, lifetime_for, array_only=array)
+        return
+    if taking is not None:
+        if subject != "symbols":
+            raise SystemExit("query: --taking applies to symbols only.")
+        _taking(target, taking, calling, hops, array)
+        return
     name_list = list(names or [])
     # --create homes a WHOLE synthetic cluster (its name is IN the entry), so it
     # takes no --name and bypasses resolution.
@@ -94,9 +109,9 @@ def query(
         from crustify.layout import Layout
         _create_type(Layout.discover(target), target, create)
         return
-    type_facets = fields or ops or methods or accessors
+    type_facets = fields or ops or methods or field_touchers
     if type_facets and kind != "type":
-        raise SystemExit("query symbols: --fields/--ops/--methods/--accessors apply to types only.")
+        raise SystemExit("query symbols: --fields/--ops/--methods/--field-touchers apply to types only.")
     if typegens and kind != "symbol":
         raise SystemExit("query types: --typegens applies to symbols only (macros with macro.typegen).")
     if (type_facets or manifest or update is not None) and len(name_list) != 1:
@@ -104,48 +119,237 @@ def query(
             f"query {subject}: facets / --manifest / --update need exactly one --name.")
     if name_list:
         _introspect(target, kind=kind, names=name_list, files=files,
-                    fields=fields, ops=ops, methods=methods, accessors=accessors,
+                    fields=fields, ops=ops, methods=methods, field_touchers=field_touchers,
                     update=update, manifest=manifest,
-                    rng=rng, wrap_only=wrap_only, port_only=port_only,
-                    scope_only=scope_only, with_details=with_details)
+                    rng=rng, wrap_only=wrap_only, port_only=port_only)
     else:
         _enumerate(target, kind=kind, files=files,
                    wrap_only=wrap_only, port_only=port_only,
-                   strings=strings, arrays=arrays, typegens=typegens,
-                   with_details=with_details)
+                   strings=strings, arrays=arrays, typegens=typegens)
 
 
-def _summarize(entry: dict | None, kind: str) -> dict | None:
-    """The light view: identity + lifecycle + name-only lists, dropping the
-    heavy per-element analysis (per-field ``ptr`` blocks / footprints for types,
-    per-arg ownership + ret for symbols). ``--with-details`` returns the whole
-    record instead."""
-    if not entry:
-        return entry
-    if kind == "type":
-        from compose import scope
-        keep = ("type", "typedef", "kind", "declared_in", "defined_in", "casted")
-        s = {k: entry[k] for k in keep if k in entry}
-        s["dropped_by"] = scope.type_dropped_by(entry)
-        s["cloned_by"] = scope.type_cloned_by(entry)
-        s["fields"] = [f.get("name") for f in entry.get("fields") or []]
-        # Method surface: lifecycle ops for a concrete type; the explicit `ops`
-        # list for a synthetic cluster. (Field accessors are not part of it —
-        # the wrapper derives them from the field layout.)
-        s["ops"] = scope.type_method_syms(entry)
-        return s
-    # the symbol's signature lives in `type` (some manifests use `signature`).
-    # `macro` is a small agent-facet block (not the heavy per-arg ptr analysis),
-    # so it rides the light view. The lifecycle role of a symbol is now derived
-    # from the ptr `owned.{dropped_by,cloned_by}` bindings, not a stored block.
-    keep = ("name", "kind", "defined_in", "declared_in",
-            "type", "signature", "macro")
-    return {k: entry[k] for k in keep if k in entry}
+# A type SPEC is a struct tag / typedef, or one of two keywords naming the
+# untyped lifecycle tiers the type manifest models as synthetic clusters:
+#   `void`   -- raw, byte-level objects (the untyped tier; CRYPTO_free/memdup).
+#   `string` -- NUL-terminated strings (CRYPTO_strdup); matched by the char
+#               family OR the analyzer's own `ptr.string` verdict.
+_SPEC_KEYWORDS = ("void", "string")
+_CHAR_TOKENS = {"char", "uint8_t", "int8_t", "u8"}
+
+
+def _arg_matches_spec(a: dict, spec: str, aliases: set, *,
+                      structural_string: bool = True) -> bool:
+    """Does one `ptr_args` record's type match the spec (tag / `void` / `string`)?
+
+    `string` has two matchers, and which one is right depends on the caller:
+      - the analyzer's own `ptr.string` VERDICT -- exact, but only on an
+        analyzed record. This is all `--lifetime-for` (a post-analysis read)
+        should trust.
+      - the char FAMILY (`structural_string`) -- a structural guess for
+        `--taking`, which discovers candidates that are not analyzed yet. It is
+        deliberately loose: a `unsigned char *` byte buffer (e.g. a PMS) is NOT
+        a NUL-terminated string, so this over-matches by design and the agent
+        (or `ptr.string`) settles it.
+    """
+    import re as _re
+    toks = set(_re.findall(r"[A-Za-z_]\w*", a.get("type") or ""))
+    if spec == "void":
+        return "void" in toks
+    if spec == "string":
+        if (a.get("ptr") or {}).get("string"):
+            return True
+        return structural_string and bool(toks & _CHAR_TOKENS)
+    return bool(aliases & toks)
+
+
+def _arg_is_array(a: dict) -> bool:
+    """`--array`: the arg's ptr carries an `array` shape (buffer, not a lone
+    pointee). Only meaningful on an analyzed record."""
+    return (a.get("ptr") or {}).get("array") is not None
+
+
+def _callee_index(layout) -> dict:
+    """name -> set(callee names), from the composer's `depends_on.syms`. Since
+    scope gates emission and not content, this is codebase-wide for every
+    emitted record."""
+    idx: dict = {}
+    for f in layout.analysis.rglob("syms.json"):
+        try:
+            doc = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        for s in doc.get("symbols", []):
+            cs = {d.get("name") for d in (s.get("depends_on") or {}).get("syms") or []}
+            if cs:
+                idx.setdefault(s.get("name"), set()).update(cs)
+    return idx
+
+
+def _reaches(start: str, targets: set, idx: dict, hops: int) -> set:
+    """Which of `targets` are reachable from `start` within `hops` call hops.
+    Hops are NOT capped by the tool -- a caller asking for depth is trusted."""
+    if hops < 1:
+        return set()
+    hit: set = set()
+    seen = {start}
+    frontier = {start}
+    for _ in range(hops):
+        nxt: set = set()
+        for fn in frontier:
+            for c in idx.get(fn, ()):  # noqa: SIM118
+                hit |= {c} & targets
+                if c not in seen:
+                    seen.add(c)
+                    nxt.add(c)
+        if not nxt:
+            break
+        frontier = nxt
+    return hit
+
+
+def _type_aliases(layout, type_name: str) -> set:
+    """All spellings of a type (struct tag + typedef(s)) so an arg's ``type``
+    string can be matched whichever alias the composer recorded."""
+    for f in layout.analysis.rglob("types.json"):
+        try:
+            doc = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        for t in doc.get("types", []):
+            td = t.get("typedef")
+            tds = td if isinstance(td, list) else ([td] if td else [])
+            aliases = {t.get("name"), *tds} - {None}
+            if type_name in aliases:
+                return aliases
+    return {type_name}
+
+
+_LIFETIME_FIELD = {"is_dropped": "dropped_by",
+                   "is_disposed": "fields_disposed_by",
+                   "is_cloned": "cloned_by"}
+
+
+def _taking(target: Path, spec: str, calling: str | None,
+            hops: int, array_only: bool) -> None:
+    """CANDIDATE discovery for lifetime-primitive identification (the inverse of
+    `--lifetime-for`, which reads flags that already exist).
+
+    Every symbol with an ARG matching `spec` -- a type tag/typedef, or the
+    `void` / `string` keyword. `--calling` narrows to those that reach one of
+    the named routines within `--hops` call hops (a dropper/cloner must
+    ultimately reach a raw primitive; the top-level one often does so via a
+    helper, so hops > 1 is the norm). `--array` keeps only args whose ptr
+    carries an `array` shape. Prints JSON."""
+    from crustify.layout import Layout
+
+    layout = Layout.discover(target)
+    aliases = (_type_aliases(layout, spec) if spec not in _SPEC_KEYWORDS
+               else {spec})
+    want = {c.strip() for c in (calling or "").split(",") if c.strip()}
+    idx = _callee_index(layout) if want else {}
+    rows = []
+    for f in sorted(layout.analysis.rglob("syms.json")):
+        try:
+            doc = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        for s in doc.get("symbols", []):
+            hits = [a for a in s.get("ptr_args") or []
+                    if _arg_matches_spec(a, spec, aliases)
+                    and (not array_only or _arg_is_array(a))]
+            if not hits:
+                continue
+            reached = sorted(_reaches(s.get("name"), want, idx, hops)) if want else []
+            if want and not reached:
+                continue
+            rows.append({
+                "symbol": s.get("name"),
+                "defined_in": s.get("defined_in"),
+                "args": [{"position": a.get("position"), "name": a.get("name"),
+                          "type": a.get("type"), "depth": a.get("depth")}
+                         for a in hits],
+                **({"reaches": reached} if want else {}),
+            })
+    rows.sort(key=lambda r: (r["symbol"], r["defined_in"] or ""))
+    print(json.dumps({
+        "taking": spec,
+        "matched_aliases": sorted(aliases),
+        "calling": sorted(want) or None,
+        "hops": hops if want else None,
+        "array_only": array_only,
+        "count": len(rows),
+        "candidates": rows,
+    }, indent=2))
+
+
+def _lifetime_for(target: Path, type_name: str, array_only: bool = False) -> None:
+    """Reverse lifecycle lookup for a type: every symbol with an ARG of that type
+    whose ptr carries a lifetime flag, grouped into the type's dropped_by /
+    fields_disposed_by / cloned_by candidates (from is_dropped / is_disposed /
+    is_cloned). These are the Drop / dispose / Clone routines the type analyzer
+    records. Lifetime flags are arg-only, so returns are not scanned. Prints JSON
+    ``{type, matched_aliases, dropped_by:[{symbol,arg,arg_name,arg_type,role,
+    defined_in}], fields_disposed_by:[...], cloned_by:[...]}``."""
+    import re as _re
+    from crustify.layout import Layout
+
+    layout = Layout.discover(target)
+    aliases = (_type_aliases(layout, type_name)
+               if type_name not in _SPEC_KEYWORDS else {type_name})
+    result = {"type": type_name, "matched_aliases": sorted(aliases),
+              "array_only": array_only,
+              "dropped_by": [], "fields_disposed_by": [], "cloned_by": []}
+    seen = set()
+    for f in sorted(layout.analysis.rglob("syms.json")):
+        try:
+            doc = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        for s in doc.get("symbols", []):
+            for a in s.get("ptr_args") or []:
+                if not _arg_matches_spec(a, type_name, aliases,
+                                         structural_string=False):
+                    continue
+                if array_only and not _arg_is_array(a):
+                    continue
+                lf = (a.get("ptr") or {}).get("lifetime")
+                if not isinstance(lf, dict):
+                    continue
+                for flag, field in _LIFETIME_FIELD.items():
+                    v = lf.get(flag)
+                    # `is_cloned` carries its {deep, upref} modes; is_dropped /
+                    # is_disposed are bare bools.
+                    if flag == "is_cloned":
+                        if not (isinstance(v, dict)
+                                and (v.get("deep") or v.get("upref"))):
+                            continue
+                        modes = [m for m in ("deep", "upref") if v.get(m)]
+                    else:
+                        if v is not True:
+                            continue
+                        modes = None
+                    key = (field, s.get("name"), s.get("defined_in"), a.get("position"))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    row = {
+                        "symbol": s.get("name"),
+                        "arg": a.get("position"),
+                        "arg_name": a.get("name"),
+                        "arg_type": a.get("type"),
+                        "defined_in": s.get("defined_in"),
+                    }
+                    if modes is not None:
+                        row["mode"] = modes
+                    result[field].append(row)
+    for field in ("dropped_by", "fields_disposed_by", "cloned_by"):
+        result[field].sort(key=lambda r: (r["symbol"], r["arg"]))
+    print(json.dumps(result, indent=2))
 
 
 def _enumerate(
     target: Path, *, kind: str, files, wrap_only, port_only,
-    strings, arrays, typegens=False, with_details=False,
+    strings, arrays, typegens=False,
 ) -> None:
     """List the (filtered) type/symbol entries straight from the manifest — one
     ``name<TAB>defined_in<TAB>declared_in`` line each (the placement provenance),
@@ -216,10 +420,7 @@ def _enumerate(
 
     rows.sort(key=lambda e: (e.get(tagkey) or "", e.get("defined_in") or ""))
 
-    if with_details:
-        print(json.dumps(rows, indent=2))
-        return
-    # Plain output: one TSV line per (name, kind, defined_in, declared_in) — the
+    # One TSV line per (name, kind, defined_in, declared_in) — the
     # provenance the scaffolder places on, plus the `kind` it buckets by
     # (function_* → functions, macro_* → macros, global_* → globals; a type's
     # struct/enum/callback/string/array all → types). `defined_in` is
@@ -250,17 +451,17 @@ def _window(seq: list, rng: str | None) -> list:
 
 def _introspect(
     target: Path, *, kind: str, names, files, fields, ops, manifest, rng,
-    wrap_only, port_only, with_details, methods=False, accessors=False,
-    update=None, scope_only=False,
+    wrap_only, port_only, methods=False, field_touchers=False,
+    update=None,
 ) -> None:
     """One named entity's record (summary / whole), or — for a single type —
-    its windowable ``--fields`` / ``--ops`` / ``--methods`` / ``--accessors``
+    its windowable ``--fields`` / ``--ops`` / ``--methods`` / ``--field-touchers``
     lists, the ``--manifest`` types.json that homes it, or a ``--update``
     findings ingest. (The entry's ``.rs`` module is found via ``scaffold
     --name``.)"""
     from crustify import _schedule as S
 
-    if fields or ops or methods or accessors or manifest or update is not None:
+    if fields or ops or methods or field_touchers or manifest or update is not None:
         layout, node, by_key = _resolve(target, kind=kind, name=names[0], files=files)
         if manifest:
             p = _manifest_path(layout.analysis, kind, node.id, node.defined_in)
@@ -276,13 +477,12 @@ def _introspect(
                 _update_sym(layout, target, node.id, node.defined_in, update)
             return
         if methods:
-            # The candidate pool for lifecycle + accessor discovery: the
-            # type's COMPLETE opaque_in ∪ non_opaque_in footprint. Returned
-            # whole by default (lifecycle routines often live OUTSIDE the
-            # target's scope — e.g. SSL_free in ssl_lib.c for an ssl/statem
-            # target). --port-only / --wrap-only intersect with that scope's
-            # functions (scope.json membership). Schema-agnostic — the agent
-            # never opens the manifest.
+            # The type's COMPLETE footprint: opaque_in ∪ non_opaque_in — every
+            # function tree-wide that touches the type (as a handle or a field).
+            # Returned whole by default (the footprint spans the whole codebase,
+            # not just the target's scope). --port-only / --wrap-only intersect
+            # with that scope's functions (scope.json membership). Schema-agnostic
+            # — the agent never opens the manifest.
             entry = _load_type_entry(layout.analysis, node.id, node.defined_in) or {}
             pool = {s for grp in ("opaque_in", "non_opaque_in")
                     for syms in (entry.get(grp) or {}).values() for s in syms}
@@ -294,40 +494,32 @@ def _introspect(
                     kinds=("functions", "globals", "macros"))}
                 pool &= keep
             win = _window(sorted(pool), rng)
-            print(json.dumps(win, indent=2) if with_details
-                  else ("\n".join(win) if win else "[]"))
+            print("\n".join(win) if win else "[]")
             return
-        if accessors:
+        if field_touchers:
             # {field: [touchers]} — the type's fields (ALL declared by default;
             # --port-only/--wrap-only narrow to fields touched by that scope's
             # code) mapped to the COMPLETE, UNfiltered set of functions that
             # touch each field (raw t2/field_accesses.csv). The toucher set is
             # never scope-filtered: a field touched in-scope via raw `obj->field`
             # while its real accessor is out of scope still surfaces here.
-            _accessors(layout, target, node.id, node.defined_in,
-                       wrap_only=wrap_only, port_only=port_only,
-                       scope_only=scope_only)
+            _field_touchers(layout, target, node.id, node.defined_in,
+                       wrap_only=wrap_only, port_only=port_only)
             return
         meta = S.load_type_meta(layout.analysis)
         flds, lifecycle = meta.get(node.id, ([], set()))
         if fields:
             entry = _load_type_entry(layout.analysis, node.id, node.defined_in)
             objs = (entry.get("fields") if entry else None) or [{"name": f} for f in flds]
-            # ALL declared fields by default; --port-only/--wrap-only/--scope-only
-            # narrow to fields touched by that scope's code (raw field_accesses ∩
-            # scope.json membership). --scope-only = port ∪ wrap, but a PORT-scope
-            # type keeps ALL fields (native reimplementation — see _field_keep_set).
+            # ALL declared fields by default; --port-only/--wrap-only narrow to
+            # fields touched by that scope's code (raw field_accesses ∩ scope.json
+            # membership).
             keep = _field_keep_set(layout, target, node.id, node.defined_in,
-                                   wrap_only=wrap_only, port_only=port_only,
-                                   scope_only=scope_only)
+                                   wrap_only=wrap_only, port_only=port_only)
             if keep is not None:
                 objs = [o for o in objs if o.get("name") in keep]
             win = _window(objs, rng)
-            if with_details:
-                print(json.dumps(win, indent=2))
-            else:
-                names = [o.get("name", "") for o in win if o.get("name")]
-                print("\n".join(names) if names else "[]")
+            print(json.dumps(win, indent=2))
             return
         # --ops: names only, lifecycle-first, scope-filterable via scope.json
         # membership (same oracle as enumeration / wrap / port).
@@ -338,36 +530,26 @@ def _introspect(
             op_pred = (_sc.in_scope_pred(sj, "wrap" if wrap_only else "port")
                        if sj.exists() else (lambda _n: False))
         win = _window(S.ordered_ops(node, by_key, lifecycle, op_pred), rng)
-        if with_details:
-            # name + the TU/header that defines each op — the scaffolder reads
-            # this to find a type's *implementing TU* (the `.c` among its ops'
-            # defined_in). No `.c` here ⇒ fully header-implemented.
-            print(json.dumps(
-                [{"id": o.id, "defined_in": o.defined_in, "kind": o.subkind}
-                 for o in win], indent=2))
-        else:
-            print("\n".join(o.id for o in win))
+        print("\n".join(o.id for o in win))
         return
 
-    # record(s): summary by default, whole record with --with-details.  # noqa: E501
-    return _records(target, kind, names, files, with_details)
+    # record(s): always the whole record.
+    return _records(target, kind, names, files)
 
 
 def _scope_touched_fields(layout, target, tag: str, defined_in: str | None,
                           which: str) -> set:
     """Field names of `tag` touched by some function in scope `which`
-    (port|wrap|scope) — raw ``t2/field_accesses`` ∩ scope.json membership.
-    ``scope`` is the union (port ∪ wrap) — fields any in-scope code touches.
-    Empty if no scope.json. Drives the --port-only/--wrap-only/--scope-only
-    narrowing for --fields and --accessors."""
+    (port|wrap) — raw ``t2/field_accesses`` ∩ scope.json membership.
+    Empty if no scope.json. Drives the --port-only/--wrap-only narrowing for
+    --fields and --field-touchers."""
     import csv as _csv
     from compose import scope as _sc
     sj = layout.scope(target)
     if not sj.exists():
         return set()
-    whichs = ("port", "wrap") if which == "scope" else (which,)
-    funcs = {k[0] for w in whichs for k in _sc.scope_membership(
-        sj, w, kinds=("functions", "globals", "macros"))}
+    funcs = {k[0] for k in _sc.scope_membership(
+        sj, which, kinds=("functions", "globals", "macros"))}
     out: set = set()
     fac = layout.t2 / "field_accesses.csv"
     if fac.exists():
@@ -383,47 +565,26 @@ def _scope_touched_fields(layout, target, tag: str, defined_in: str | None,
     return out
 
 
-def _is_port_scope_type(layout, target, tag: str, defined_in: str | None) -> bool:
-    """True iff `tag` is a PORT-scope type in scope.json (reimplemented
-    natively, so its whole layout is in scope). False if no scope.json."""
-    from compose import scope as _sc
-    sj = layout.scope(target)
-    if not sj.exists():
-        return False
-    return _sc.origin_key(tag, defined_in or None, None) in _sc.scope_membership(
-        sj, "port", kinds=("types",))
-
-
 def _field_keep_set(layout, target, tag: str, defined_in: str | None, *,
-                    wrap_only: bool, port_only: bool, scope_only: bool) -> set | None:
+                    wrap_only: bool, port_only: bool) -> set | None:
     """Field-name keep-set for the -only narrowing, or None = keep ALL fields.
-
-      - --wrap-only / --port-only → fields touched by that scope's code.
-      - --scope-only → fields touched by ANY in-scope code (port ∪ wrap) for a
-        WRAP-scope type; ALL fields for a PORT-scope type — a port type is
-        reimplemented natively, so every field is in scope, touched or not.
-    """
-    if not (wrap_only or port_only or scope_only):
+    --port-only / --wrap-only → fields touched by that scope's code."""
+    if not (wrap_only or port_only):
         return None
-    if scope_only and _is_port_scope_type(layout, target, tag, defined_in):
-        return None
-    which = "wrap" if wrap_only else "port" if port_only else "scope"
+    which = "wrap" if wrap_only else "port"
     return _scope_touched_fields(layout, target, tag, defined_in, which)
 
 
-def _accessors(layout, target, tag: str, defined_in: str | None, *,
-               wrap_only: bool = False, port_only: bool = False,
-               scope_only: bool = False) -> None:
+def _field_touchers(layout, target, tag: str, defined_in: str | None, *,
+               wrap_only: bool = False, port_only: bool = False) -> None:
     """``{field: [touchers]}`` for the type's fields.
 
-    ALL declared fields by default; --port-only/--wrap-only/--scope-only narrow
-    the FIELD set to the ones touched by that scope's code (--scope-only =
-    port ∪ wrap; a port-scope type keeps all fields — see _field_keep_set).
-    Each field's toucher set is the COMPLETE, UNfiltered set of functions that
-    access it — read straight from the raw ``t2/field_accesses`` edge, NOT the
-    port-scope ``depends_on`` inversion. So an accessor that is itself out of
-    scope (while the field is touched in-scope via raw ``obj->field``) still
-    surfaces as a candidate."""
+    ALL declared fields by default; --port-only/--wrap-only narrow the FIELD set
+    to the ones touched by that scope's code. Each field's toucher set is the
+    COMPLETE, UNfiltered set of functions that access it — read straight from the
+    raw ``t2/field_accesses`` edge, NOT the port-scope ``depends_on`` inversion.
+    So a toucher that is itself out of scope (while the field is touched in-scope
+    via raw ``obj->field``) still surfaces as a candidate."""
     import csv as _csv
     from collections import defaultdict
 
@@ -445,8 +606,7 @@ def _accessors(layout, target, tag: str, defined_in: str | None, *,
                     complete[fld].add(fn)
 
     keep = _field_keep_set(layout, target, tag, defined_in,
-                           wrap_only=wrap_only, port_only=port_only,
-                           scope_only=scope_only)
+                           wrap_only=wrap_only, port_only=port_only)
     scoped = set(declared) if keep is None else {f for f in declared if f in keep}
 
     out = {f: sorted(complete.get(f, set())) for f in sorted(scoped)}
@@ -455,13 +615,21 @@ def _accessors(layout, target, tag: str, defined_in: str | None, *,
 
 # ----------------------------------------------------------- --update ingest
 
-# Phase 2 reshape: `allocs`/`locking`/`conditional_drop` retired; the
-# `lifetime.{drop,clone}` wrapper unwrapped into TOP-LEVEL type bindings
-# `dropped_by`/`cloned_by`, each `{exclusive, shared}` of fn lists. The old
-# `drop.fields` dispose role is now per-field (`owned.disposed_in`).
+# TOP-LEVEL type bindings. `dropped_by` is a flat LIST of this type's
+# destructors. `cloned_by` splits into `deep` (duplicators that produce a fresh
+# allocation) and `upref` (refcount bumps) -- the split the wrapper needs to pick
+# `Clone` (the upref for a refcounted type, the deep duplicator otherwise) from
+# the plain methods. `fields_disposed_by` is a flat LIST of this type's own
+# methods that dispose its fields (call the fields' destructors), NOT the leaf
+# frees. Sibling of dropped_by/cloned_by, not per-field.
 _TYPE_LIFECYCLE_KEYS = ("dropped_by", "cloned_by")
-_FINDINGS_TOP = set(_TYPE_LIFECYCLE_KEYS) | {"fields", "_comment_agent"}
-_FIELD_AGENT_KEYS = {"ptr", "locked_by"}
+_FINDINGS_TOP = set(_TYPE_LIFECYCLE_KEYS) | {
+    "fields", "fields_disposed_by", "_comment_agent"}
+# `refcount` marks the ONE field that stores the type's reference count (the
+# datum an up_ref bumps and a down-ref decrements). It is what makes the type
+# `CArc`-shaped rather than `CBox`-shaped, and it names the field a generated
+# shim reads when the type carries a refcount but exposes no up_ref function.
+_FIELD_AGENT_KEYS = {"ptr", "locked_by", "refcount"}
 
 # --create ingest (buffer pass): a whole synthetic string/array cluster entry.
 # A cluster records the CVec strategy family: its identity, the byte-level
@@ -486,12 +654,21 @@ _CREATE_TOP = {
 # Symbol findings (functions / callbacks / macros) — the agent-fillable surface.
 _SYM_FINDINGS_TOP = {"macro", "ptr_args", "ptr_ret", "forks", "ptr", "locked_by"}
 # Same structured ownership block as a struct field's `ptr` (see types.md#ptr):
-# `owned` nests {exclusive, shared}, `borrowed` nests {lifetime}, `array` is
+# `owned` is a bool, `borrowed` nests {lifetime}, `array` is
 # null|{by_val}|{by_ref:{owned,borrowed}}. A pointer at a call boundary and a
-# pointer in a struct extract identical properties, so args and returns share it.
-_PTR_ARG_AGENT_KEYS = {"scalar", "array", "string", "owned", "borrowed",
+# pointer in a struct extract identical properties, so returns/fields share the
+# base set; only ptr_args ADDITIONALLY carry the arg-only `lifetime` block (the
+# method's action on the arg: is_dropped/is_disposed/is_cloned).
+_PTR_RET_AGENT_KEYS = {"scalar", "array", "string", "owned", "borrowed",
                        "nullable", "mutable", "note"}
-_PTR_RET_AGENT_KEYS = _PTR_ARG_AGENT_KEYS
+_PTR_ARG_AGENT_KEYS = _PTR_RET_AGENT_KEYS | {"lifetime"}
+# The arg-only lifetime block: which lifecycle-primitive role THIS method plays
+# on THIS arg. `is_dropped` (bool) = frees the arg's storage; `is_disposed`
+# (bool) = frees the arg's fields; `is_cloned` = null | {deep, upref} -- `deep`
+# copies it into a fresh allocation, `upref` bumps its refcount. The two clone
+# modes co-exist on a body that branches between them, and on an untyped `void *`
+# whose concrete element decides at runtime.
+_LIFETIME_KEYS = {"is_dropped", "is_disposed", "is_cloned"}
 _FORK_KEYS = {"ptr_args", "ptr_ret", "callsites"}
 # The concurrency binding on a GLOBAL (or, in types.json, a struct field): the
 # lock object guarding the slot plus its acquire/release op lists. It sits at the
@@ -559,157 +736,68 @@ def _findings_schema(kind: str) -> dict:
     runtime instead of hard-coding it. The top-level key sets are the validator's
     own (``_FINDINGS_TOP`` / ``_SYM_FINDINGS_TOP``), so this never drifts from
     what ``--update`` actually accepts."""
+    # Raw submission SHAPE only -- field MEANING + enforced invariants live in the
+    # schema doc (`query <kind> --schema` = docs/schemas/{types,syms}.md), which is
+    # fed to the agent. `_valid_top_keys` is the drift guard (validator constants).
     if kind == "type":
         return {
             "_subject": "type",
-            "_doc": ("Submit ONLY the top-level bindings / fields you are filling. "
-                     "Merge is partial, idempotent, and lock-serialized; "
-                     "unmentioned slots/fields are left untouched. Unknown "
-                     "top-level keys are hard-rejected. `dropped_by`/`cloned_by` "
-                     "are TOP-LEVEL type fields (no `lifetime` wrapper)."),
-            "dropped_by": {
-                "exclusive": ["<exclusive destructor fn -> CBox::drop>"],
-                "shared": ["<refcount-decrementing destructor fn -> CArc::drop>"],
-            },
-            "cloned_by": {
-                "exclusive": ["<deep-copy / dup fn -> CBox::clone>"],
-                "shared": ["<refcount-bump / up_ref fn -> CArc::clone>"],
-            },
+            "_see": "query types --schema for field meaning + enforced invariants",
+            "dropped_by": ["<fn>"],
+            "cloned_by": {"deep": ["<fn>"], "upref": ["<fn>"]},
+            "fields_disposed_by": ["<this type's own method(s) that dispose its "
+                                   "fields>"],
             "fields": {
                 "<field_name>": {
+                    "refcount": "bool   (this field stores the type's refcount)",
                     "ptr": {
-                        "scalar": ("bool: true = MAY be a single object "
-                                   "(-> COwn/CBox); false = never a single object, "
-                                   "only array/string. Co-exists with array; XOR string"),
-                        "array": ("null | {by_val: true} | {by_ref: {owned: <owned "
-                                  "block>|null, borrowed: {lifetime}|null}} -- by_ref "
-                                  "owned/borrowed is ELEMENT ownership, each the same "
-                                  "block as this record's owned/borrowed"),
+                        "scalar": ("null | {by_val: true} | {by_ref: {owned: "
+                                   "<owned>|null, borrowed: {lifetime}|null}}"),
+                        "array": ("null | {by_val: true} | "
+                                  "{by_ref: {owned: <owned>|null, "
+                                  "borrowed: {lifetime}|null}}"),
                         "string": "bool",
-                        "owned": ("null | {exclusive: bool, shared: bool, "
-                                  "dropped_by: [<free fns>]|null, "
-                                  "cloned_by: [<dup/up_ref fns>]|null, "
-                                  "disposed_in: [<this type's methods that free "
-                                  "this field>]|null}"),
+                        "owned": "bool",
                         "borrowed": "null | {lifetime: <source>}",
-                        "nullable": "bool", "mutable": "bool", "note": "<str>",
+                        "nullable": "bool", "mutable": "bool | null", "note": "<str>",
                     },
-                    "locked_by": {
-                        "lock": "<field/global storing the guarding lock>",
-                        "lock_op": ["<acquire fn>", "..."],
-                        "unlock_op": ["<release fn>", "..."],
-                    },
+                    "locked_by": ("null | {lock: <name>, lock_op: [<fn>], "
+                                  "unlock_op: [<fn>]}"),
                 }
             },
-            "_comment_agent": "<your rationale (optional free text)>",
-            "_rules": [
-                "dropped_by / cloned_by: TOP-LEVEL {exclusive, shared}, each a LIST; "
-                "a single C function must not appear in both roles of dropped_by "
-                "(roles disjoint). A parameterized free (one taking an element-free "
-                "callback, e.g. OPENSSL_sk_pop_free) is STILL a destructor.",
-                "every named op must be a real function, not a macro "
-                "(record the underlying function it expands to).",
-                "field.ptr: `owned` = null | {exclusive, shared, dropped_by, "
-                "cloned_by, disposed_in} -- dropped_by/cloned_by are the LISTs "
-                "naming how this field is freed / cloned (the freeing agent); "
-                "`disposed_in` is the LIST of THIS type's methods whose body calls "
-                "the field's dropped_by (the call site it happens in). "
-                "`array` = null | {by_val:true} | {by_ref:{owned,borrowed}}, where "
-                "by_ref owned/borrowed is ELEMENT ownership -- each the same block "
-                "as the top-level owned/borrowed. SHAPE: `scalar` (single-object) "
-                "co-exists with `array`; `string` is exclusive with BOTH scalar "
-                "and array; a pointer is at least one of {scalar, array, string}. "
-                "owned + borrowed MAY both be non-null; likewise owned.exclusive + "
-                "owned.shared and by_ref.owned + by_ref.borrowed. Enforced: string "
-                "XOR array; string XOR scalar; a borrowed pointer needs a "
-                "lifetime; a const pointee implies mutable != true.",
-                "field.locked_by: null | {lock, lock_op, unlock_op} on the GUARDED "
-                "field (pointer or not) -- lock names the lock field/global; "
-                "lock_op/unlock_op are lists of real acquire/release functions.",
-            ],
+            "_comment_agent": "<optional>",
             "_valid_top_keys": sorted(_FINDINGS_TOP),
         }
     return {
         "_subject": "symbol",
-        "_doc": ("Submit ONLY the facets you are filling. Merge is partial and "
-                 "idempotent. Unknown top-level keys are hard-rejected. `kind` is "
-                 "composer-fixed and is never submitted; `macro` is for MACROS "
-                 "only — functions / globals / callbacks must omit it."),
-        "macro": {
-            "alias": "<bool: expands to existing symbol(s)/type(s)>",
-            "const": "<bool: expands to a compile-time constant>",
-            "typegen": "<bool: declares new types and/or their ops>",
-        },
-        "_ptr_note": ("`ptr_args` records and `ptr_ret` carry the SAME ownership "
-                      "block — identical to a struct field's `ptr` (see "
-                      "`query types --schema`, ## ptr). `owned` gives CBox vs "
-                      "CArc; `borrowed.lifetime` sources are arg-oriented "
-                      "(`arg:<name>`, `arg:<name>->path`, `static`, `other`)."),
+        "_see": "query syms --schema for facet meaning + enforced invariants",
+        "macro": {"alias": "bool", "const": "bool", "typegen": "bool"},
         "ptr_args": {
             "<position:int>": {
-                "scalar": ("bool: true = MAY be a single pointee (-> COwn/CBox); "
-                           "false = never a single object, only array/string. "
-                           "CO-EXISTS with `array` (a generic void* allocator "
-                           "serves both -> scalar:true + array:{by_val}, wrap "
-                           "forks COwn + CVec); XOR `string`. calloc/*_array = "
-                           "scalar:false; a typed single object (SSL*) = "
-                           "scalar:true, array:null"),
-                "array": ("null | {by_val: true} | {by_ref: {owned: <owned "
-                          "block>|null, borrowed: {lifetime: <source>}|null}} "
-                          "(by_ref = pointer array/container; its owned/borrowed "
-                          "is ELEMENT ownership, EACH the same block as this "
-                          "record's owned/borrowed — e.g. a raw X509** array -> "
-                          "by_ref.owned.dropped_by = [\"X509_free\"])"),
-                "string": "bool",
-                "owned": ("null | {exclusive: bool, shared: bool, "
-                          "dropped_by: [<free names>]|null, cloned_by: [<dup/up_ref names>]|null}"),
-                "borrowed": "null | {lifetime: <source>}",
-                "nullable": "bool", "mutable": "bool", "note": "<str>",
+                "ptr": {
+                    "scalar": ("null | {by_val: true} | {by_ref: {owned: <owned>|"
+                               "null, borrowed: {lifetime}|null}}"),
+                    "array": ("null | {by_val: true} | {by_ref: {owned: <owned>|"
+                              "null, borrowed: {lifetime}|null}}"),
+                    "string": "bool",
+                    "owned": "bool",
+                    "borrowed": "null | {lifetime: <source>}",
+                    "lifetime": ("null | {is_dropped: bool, is_disposed: bool, "
+                                 "is_cloned: {deep: bool, upref: bool}|null}   "
+                                 "(ARG-ONLY: this method's role on this arg)"),
+                    "nullable": "bool", "mutable": "bool | null", "note": "<str>",
+                }
             }
         },
-        "ptr_ret": "<same block as one ptr_args record> | null",
-        "_global_note": ("`ptr` and `locked_by` are GLOBALS ONLY (functions use "
-                         "ptr_args/ptr_ret; macros use neither). `ptr` is the "
-                         "ownership block of a global that is itself a pointer — a "
-                         "'static global normally leaves owned.dropped_by/"
-                         "cloned_by null; null for a non-pointer global. "
-                         "`locked_by` is the lock discipline guarding the global."),
-        "ptr": "<same block as one ptr_args record> | null   (globals only)",
-        "locked_by": {
-            "lock": "<name of the guarding lock global/field>",
-            "lock_op": ["<acquire fn>", "..."],
-            "unlock_op": ["<release fn>", "..."],
-        },
+        "ptr_ret": "{ptr: <same block as ptr_args[pos].ptr, WITHOUT lifetime>} | null",
+        "ptr": ("<same block as ptr_args[pos].ptr, WITHOUT lifetime> | null   "
+                "(globals only)"),
+        "locked_by": ("null | {lock: <name>, lock_op: [<fn>], unlock_op: [<fn>]}"
+                      "   (globals only)"),
         "forks": [{
-            "ptr_args": "<as ptr_args above>",
-            "ptr_ret": "<as ptr_ret above>",
+            "ptr_args": "<as ptr_args>", "ptr_ret": "<as ptr_ret>",
             "callsites": ["<callsite id>"],
         }],
-        "_rules": [
-            "macro: macros only; all three flags required, each a bool. They are "
-            "independent (a macro may be none of them — that is the shape that "
-            "needs a C shim, since bindgen binds a const, an alias' target, and "
-            "a typegen's expansion).",
-            "ptr_ret only on a pointer-returning symbol.",
-            "ptr block (ptr_args/ptr_ret and the global `ptr`): array = null | "
-            "{by_val:true} | {by_ref:{owned,borrowed}}, where by_ref is a "
-            "container and its owned/borrowed is ELEMENT ownership — each the "
-            "SAME block as the top-level owned/borrowed (so by_ref.owned carries "
-            "dropped_by/cloned_by). SHAPE: `scalar` (single-object) co-exists "
-            "with `array` (buffer) — a generic void* allocator is scalar+array, "
-            "the wrap stage forks one owner per shape (scalar->COwn, "
-            "array->CVec); `string` is exclusive with BOTH scalar and array; a "
-            "pointer should be at least one of {scalar, array, string}. string "
-            "XOR array; a const pointee implies mutable != true; "
-            "a borrowed pointer needs a lifetime; exclusive/shared only under "
-            "owned. owned + borrowed MAY both be non-null (runtime-conditional "
-            "dual ownership); likewise owned.exclusive + owned.shared and "
-            "by_ref.owned + by_ref.borrowed.",
-            "ptr / locked_by: GLOBALS only. `ptr` is the global-pointer ownership "
-            "block (null for a non-pointer global); `locked_by` is null | {lock, "
-            "lock_op, unlock_op} with lock_op/unlock_op lists of real functions.",
-            "forks: callbacks only; each callsite claimed by exactly one entry.",
-        ],
         "_valid_top_keys": sorted(_SYM_FINDINGS_TOP),
     }
 _MACRO_FLAGS = frozenset({"alias", "const", "typegen"})
@@ -717,58 +805,101 @@ _MACRO_FLAGS = frozenset({"alias", "const", "typegen"})
 def _apply_ptr_agent(entry: dict, ptr_args_f: dict | None,
                      ptr_ret_f: dict | None) -> None:
     """Apply agent ptr findings (`ptr_args` keyed by position, `ptr_ret`) onto an
-    entry's structural ptr blocks, in place. Only the agent-owned keys are
-    copied; the composer's position/name/type/const/depth are left intact."""
+    entry's structural records, in place. The agent-owned ownership block nests
+    under each record's `ptr` key (isolated from the composer's position/name/
+    type/const/depth), so it is replaced WHOLESALE -- like a struct field's ptr."""
     by_pos = {str(a.get("position")): a for a in entry.get("ptr_args") or []}
-    for pos, blk in (ptr_args_f or {}).items():
+    for pos, rec in (ptr_args_f or {}).items():
         arg = by_pos.get(str(pos))
-        if arg is not None:
-            for k in _PTR_ARG_AGENT_KEYS:
-                if k in blk:
-                    arg[k] = blk[k]
-    if ptr_ret_f is not None and entry.get("ptr_ret") is not None:
-        for k in _PTR_RET_AGENT_KEYS:
-            if k in ptr_ret_f:
-                entry["ptr_ret"][k] = ptr_ret_f[k]
+        if arg is not None and isinstance(rec, dict) and "ptr" in rec:
+            arg["ptr"] = rec["ptr"]
+    if (ptr_ret_f is not None and isinstance(ptr_ret_f, dict)
+            and "ptr" in ptr_ret_f and entry.get("ptr_ret") is not None):
+        entry["ptr_ret"]["ptr"] = ptr_ret_f["ptr"]
+
+
+def _shape_slot_errors(label: str, slot, name: str) -> list[str]:
+    """Validate a by_val/by_ref cardinality slot -- `scalar` (ONE pointee) or
+    `array` (a buffer). Both share one grammar: `null` | `{by_val: true}` (inline
+    value(s)) | `{by_ref: {owned, borrowed}}` (pointer(s) to element(s), whose
+    ownership nests). So a single-pointee `T**` is `scalar.by_ref` and a buffer of
+    element pointers is `array.by_ref`."""
+    e: list[str] = []
+    if slot is None:
+        return e
+    if not isinstance(slot, dict):
+        return [f"{label}: {name} must be null or {{by_val|by_ref}}"]
+    kinds = [k for k in ("by_val", "by_ref") if slot.get(k)]
+    if len(kinds) != 1:
+        e.append(f"{label}: {name} needs exactly one of by_val / by_ref")
+    elif "by_ref" in kinds and not isinstance(slot["by_ref"], dict):
+        e.append(f"{label}: {name}.by_ref must be {{owned, borrowed}}")
+    return e
+
+
+def _shape_by_ref_element_errors(label: str, slot, name: str) -> list[str]:
+    """A by_ref ELEMENT (the inner pointee of a `scalar`/`array` by_ref) obeys the
+    same owned-and/or-borrowed-never-neither invariant as any pointer."""
+    if not (isinstance(slot, dict) and isinstance(slot.get("by_ref"), dict)):
+        return []
+    eo = slot["by_ref"].get("owned")
+    eb = slot["by_ref"].get("borrowed")
+    if not (eo is True or isinstance(eb, dict)):
+        return [f"{label}: {name}.by_ref element must be owned and/or borrowed, "
+                "never neither"]
+    return []
 
 
 def _ptr_invariant_errors(field: str, ptr: dict, field_type: str) -> list[str]:
     """Hard-reject the IMPOSSIBLE / inconsistent shapes in one field's `ptr`
-    block. Most old ownership *dependencies* are now STRUCTURAL (unrepresentable
-    otherwise): `exclusive`/`shared` nest under `owned`, `lifetime` under
-    `borrowed`, element-ownership under `array.by_ref` — so only shape validity,
-    the string/array mutex, borrowed-requires-lifetime, and const/mutable remain.
+    block. Ownership *dependencies* are STRUCTURAL (unrepresentable otherwise):
+    `lifetime` nests under `borrowed`, element-ownership under `array.by_ref` —
+    so only shape validity, the string/array mutex, borrowed-requires-lifetime,
+    and const/mutable remain.
 
-    Dual ownership is allowed: `owned` and `borrowed` may BOTH be non-null
-    (runtime-conditional), likewise `owned.exclusive`+`owned.shared` and
-    `array.by_ref.owned`+`.borrowed`."""
+    Dual ownership is allowed: `owned` and `borrowed` may BOTH be set
+    (runtime-conditional), likewise `array.by_ref.owned`+`.borrowed`."""
     e: list[str] = []
+    flabel = f"field {field!r}"
+    scalar = ptr.get("scalar")
     array = ptr.get("array")
-    if array is not None:
-        if not isinstance(array, dict):
-            e.append(f"field {field!r}: array must be null or {{by_val|by_ref}}")
-        else:
-            kinds = [k for k in ("by_val", "by_ref") if array.get(k)]
-            if len(kinds) != 1:
-                e.append(f"field {field!r}: array needs exactly one of by_val / by_ref")
-            elif "by_ref" in kinds and not isinstance(array["by_ref"], dict):
-                e.append(f"field {field!r}: array.by_ref must be {{owned, borrowed}}")
+    # `scalar` and `array` share one by_val/by_ref cardinality grammar (see
+    # _shape_slot_errors): scalar points at ONE pointee, array at a buffer.
+    e += _shape_slot_errors(flabel, scalar, "scalar")
+    e += _shape_slot_errors(flabel, array, "array")
     if ptr.get("string") and array is not None:
-        e.append(f"field {field!r}: string and array both set (must be XOR)")
-    if ptr.get("scalar") is not None and not isinstance(ptr.get("scalar"), bool):
-        e.append(f"field {field!r}: scalar must be a boolean")
-    if ptr.get("string") and ptr.get("scalar"):
-        e.append(f"field {field!r}: string and scalar both set (a string is not a scalar)")
+        e.append(f"{flabel}: string and array both set (must be XOR)")
+    if ptr.get("string") and scalar is not None:
+        e.append(f"{flabel}: string and scalar both set (a string is not a scalar)")
+    # `string` is the one remaining explicit-bool discriminant (scalar/array are
+    # now shape objects) -- reject a null left where false was meant.
+    if not isinstance(ptr.get("string"), bool):
+        e.append(f"{flabel}: string must be an explicit boolean (true/false, not null)")
+    # Floor: a pointer is at least one of scalar / array / string.
+    if not (scalar is not None or array is not None or ptr.get("string")):
+        e.append(f"{flabel}: a pointer must set at least one of "
+                 "scalar / array / string (none are set)")
     borrowed = ptr.get("borrowed")
     if isinstance(borrowed, dict) and not borrowed.get("lifetime"):
         e.append(f"field {field!r}: borrowed set but lifetime unset")
+    if "lifetime" in ptr:
+        e.append(f"field {field!r}: `lifetime` (is_dropped/is_disposed/is_cloned) "
+                 "is an ARG-only block -- a struct field's lifecycle derives from "
+                 "its field-type's record, not from the field")
     owned = ptr.get("owned")
-    if owned is not None and not isinstance(owned, dict):
-        e.append(f"field {field!r}: owned must be null or {{exclusive, shared}}")
-    if isinstance(owned, dict) and owned.get("disposed_in") is not None and not (
-            isinstance(owned["disposed_in"], list)
-            and all(isinstance(x, str) for x in owned["disposed_in"])):
-        e.append(f"field {field!r}: owned.disposed_in must be a list of method names")
+    # `owned` is the ownership FACT -- reject a null left where false was meant.
+    if not isinstance(owned, bool):
+        e.append(f"field {field!r}: owned must be an explicit boolean "
+                 "(true/false, not null)")
+    # A pointer is owned and/or borrowed, NEVER neither: a non-owned reference is
+    # a borrow with a lifetime (its own arg's, when call-scoped). `owned:false` +
+    # `borrowed:null` is invalid.
+    if not (owned is True or isinstance(borrowed, dict)):
+        e.append(f"field {field!r}: a pointer must be owned and/or borrowed, "
+                 "never neither (a non-owned reference is a borrow with a lifetime)")
+    # Same invariant on any by_ref ELEMENT pointer (scalar.by_ref or array.by_ref).
+    e += _shape_by_ref_element_errors(flabel, scalar, "scalar")
+    e += _shape_by_ref_element_errors(flabel, array, "array")
     if "const" in (field_type or "") and ptr.get("mutable") is True:
         e.append(f"field {field!r}: const in type but mutable == true")
     return e
@@ -888,37 +1019,42 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
                               f"record the underlying function it expands to, "
                               f"or omit it (§2.3)")
 
-        # Top-level type bindings: `dropped_by`/`cloned_by` = {exclusive, shared},
-        # each a LIST of function names.
+        # Top-level type bindings: `cloned_by` = {deep, upref}, each a LIST of
+        # function names; `dropped_by` = a flat LIST.
         cl = f.get("cloned_by") or {}
         if isinstance(cl, dict):
-            bad = set(cl) - {"exclusive", "shared"}
+            bad = set(cl) - {"deep", "upref"}
             if bad:
                 errors.append(f"cloned_by unknown key(s) {sorted(bad)} "
-                              "(use exclusive / shared)")
-            for role in ("exclusive", "shared"):
-                for fn in cl.get(role) or []:
+                              "(use deep / upref)")
+            # A body that branches between duplicating and ref-bumping fills BOTH
+            # modes, so they are NOT required to be disjoint -- only that each
+            # name is real.
+            for mode in ("deep", "upref"):
+                for fn in cl.get(mode) or []:
                     if fn:
-                        check_fn(fn, f"cloned_by.{role}")
-        dr = f.get("dropped_by") or {}
-        if isinstance(dr, dict):
-            bad = set(dr) - {"exclusive", "shared"}
-            if bad:
-                errors.append(f"dropped_by unknown key(s) {sorted(bad)} "
-                              "(use exclusive / shared)")
-            # No single C function may fill both roles (roles stay disjoint).
-            seen_drop: dict[str, str] = {}
-            for role in ("exclusive", "shared"):
-                for name in dr.get(role) or []:
-                    if not name:
-                        continue
-                    if name in seen_drop and seen_drop[name] != role:
-                        errors.append(f"dropped_by.{seen_drop[name]} and "
-                                      f"dropped_by.{role} name the same function "
-                                      f"{name!r} (roles must be disjoint)")
-                    else:
-                        seen_drop[name] = role
-                        check_fn(name, f"dropped_by.{role}")
+                        check_fn(fn, f"cloned_by.{mode}")
+        elif cl:
+            errors.append("cloned_by must be {deep: [<fn>], upref: [<fn>]}")
+        dr = f.get("dropped_by")
+        if isinstance(dr, list):
+            for name in dr:
+                if name:
+                    check_fn(name, "dropped_by")
+        elif dr:
+            errors.append("dropped_by must be a flat list of function names")
+
+        # `fields_disposed_by`: TOP-LEVEL flat LIST of this type's own methods that
+        # dispose its fields (call the fields' destructors), or []. Not per-field.
+        fdb = f.get("fields_disposed_by")
+        if fdb is not None:
+            if not (isinstance(fdb, list) and all(isinstance(x, str) for x in fdb)):
+                errors.append("fields_disposed_by must be a list of this type's "
+                              "own method names (the field disposers)")
+            else:
+                for fn in fdb:
+                    if fn:
+                        check_fn(fn, "fields_disposed_by")
 
         # Per-field checks.
         for fname, fa in (f.get("fields") or {}).items():
@@ -934,6 +1070,8 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
             if fa.get("locked_by") is not None:
                 errors += _locked_by_errors(
                     f"field {fname!r} locked_by", fa["locked_by"])
+            if "refcount" in fa and not isinstance(fa["refcount"], bool):
+                errors.append(f"field {fname!r}: refcount must be a boolean")
 
         if errors:
             raise SystemExit(
@@ -946,6 +1084,8 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
             if k in f:
                 entry[k] = f[k]
                 entry.pop("lifetime", None)  # drop any legacy nested block
+        if "fields_disposed_by" in f:
+            entry["fields_disposed_by"] = f["fields_disposed_by"]
         if "_comment_agent" in f:
             entry["_comment_agent"] = f["_comment_agent"]
         for fname, fa in (f.get("fields") or {}).items():
@@ -958,45 +1098,145 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
     print(f"updated {tag} in {path}")
 
 
+def _borrow_arg_ref_errors(label: str, borrowed, valid_args) -> list[str]:
+    """If a borrowed lifetime names an arg (`arg:<name>`, optionally with a
+    `->path` suffix), that `<name>` must be a real arg of the symbol, referenced
+    BY NAME. `valid_args` is the set of the symbol's pointer-arg names (a
+    non-pointer arg has no storage to borrow; the composer names every arg, real
+    or synthetic `arg<pos>`, so a name always exists). The positional form
+    `arg:<idx>` is rejected -- names are the one canonical spelling. Pass `None`
+    to skip (caller lacks arg context, e.g. standalone template checks)."""
+    if valid_args is None or not isinstance(borrowed, dict):
+        return []
+    lt = borrowed.get("lifetime")
+    if not isinstance(lt, str) or not lt.startswith("arg:"):
+        return []
+    ident = lt[len("arg:"):].split("->", 1)[0].strip()
+    if ident in valid_args:
+        return []
+    if ident.isdigit():
+        return [f"{label}: borrowed lifetime {lt!r} uses a positional index; "
+                f"reference the arg BY NAME (one of {sorted(valid_args)})"]
+    return [f"{label}: borrowed lifetime {lt!r} names {ident!r}, not a valid "
+            f"arg of this symbol (expected one of {sorted(valid_args)})"]
+
+
 def _sym_ptr_invariant_errors(label: str, blk: dict, const: bool,
-                              is_ret: bool) -> list[str]:
-    """Hard-reject the IMPOSSIBLE shapes in one symbol `ptr_args[*]` / `ptr_ret`
-    block. These are the SAME structural invariants a struct field's `ptr`
-    obeys (see check_types_consistency): `array` is null|{by_val}|{by_ref};
-    string⊕array; borrowed⟹lifetime; owned is null|{exclusive,shared};
-    const⟹mutable≠true.
+                              is_ret: bool, allow_lifetime: bool = False,
+                              arg_names=None) -> list[str]:
+    """Hard-reject the IMPOSSIBLE shapes in one symbol `ptr_args[*].ptr` /
+    `ptr_ret.ptr` (or a global `ptr`) block. These are the SAME structural
+    invariants a struct field's `ptr` obeys (see check_types_consistency):
+    `scalar`/`array` are null|{by_val}|{by_ref} (scalar = one pointee, array = a
+    buffer); string⊕(scalar|array); string explicit + the {scalar,array,string}
+    floor; borrowed⟹lifetime; owned is an explicit bool; const⟹mutable≠true.
 
     `owned`+`borrowed` is NOT rejected: an arg or return may be BOTH to mean
     runtime-conditional dual ownership (owned on one path, borrowed on another);
-    likewise owned.exclusive+shared and array.by_ref.owned+borrowed. (`is_ret`
-    is retained for call-site symmetry; the invariants are uniform across args
-    and returns.)"""
+    likewise scalar/array.by_ref.owned+borrowed. (`is_ret` is retained for
+    call-site symmetry; the invariants are uniform across args and returns.)"""
     e: list[str] = []
+    # `scalar` and `array` share one by_val/by_ref cardinality grammar (see
+    # _shape_slot_errors): scalar points at ONE pointee, array at a buffer. A
+    # submitted block replaces the prior WHOLESALE, so it must be complete --
+    # `string` is an explicit bool and a pointer sets at least one of
+    # {scalar, array, string} (the floor, enforceable per-submission).
+    scalar = blk.get("scalar")
     array = blk.get("array")
-    if array is not None:
-        if not isinstance(array, dict):
-            e.append(f"{label}: array must be null or {{by_val|by_ref}}")
-        elif len([k for k in ("by_val", "by_ref") if array.get(k)]) != 1:
-            e.append(f"{label}: array needs exactly one of by_val / by_ref")
+    e += _shape_slot_errors(label, scalar, "scalar")
+    e += _shape_slot_errors(label, array, "array")
     if blk.get("string") and array is not None:
         e.append(f"{label}: string and array both set (must be XOR)")
-    # `scalar` (single-object capability) co-exists with `array` (a generic
-    # allocator serves both a singleton and a buffer) but is mutually exclusive
-    # with `string` (a NUL-string is not a scalar object). The "at least one of
-    # {scalar,array,string}" floor is a property of the MERGED record, not
-    # enforceable on a partial submission.
-    if blk.get("scalar") is not None and not isinstance(blk.get("scalar"), bool):
-        e.append(f"{label}: scalar must be a boolean")
-    if blk.get("string") and blk.get("scalar"):
+    if blk.get("string") and scalar is not None:
         e.append(f"{label}: string and scalar both set (a string is not a scalar)")
+    if not isinstance(blk.get("string"), bool):
+        e.append(f"{label}: string must be an explicit boolean (true/false, not null)")
+    if not (scalar is not None or array is not None or blk.get("string")):
+        e.append(f"{label}: a pointer must set at least one of "
+                 "scalar / array / string (none are set)")
     borrowed = blk.get("borrowed")
     if isinstance(borrowed, dict) and not borrowed.get("lifetime"):
         e.append(f"{label}: borrowed set but lifetime unset")
+    e.extend(_borrow_arg_ref_errors(label, borrowed, arg_names))
     owned = blk.get("owned")
-    if owned is not None and not isinstance(owned, dict):
-        e.append(f"{label}: owned must be null or {{exclusive, shared}}")
+    # `owned` is the ownership FACT -- reject a null left where false was meant.
+    if not isinstance(owned, bool):
+        e.append(f"{label}: owned must be an explicit boolean (true/false, not null)")
+    # A pointer is owned and/or borrowed, NEVER neither: a non-owned reference is
+    # a borrow with a lifetime (the arg's own name, e.g. `arg:file`, when call-scoped).
+    if not (owned is True or isinstance(borrowed, dict)):
+        e.append(f"{label}: a pointer must be owned and/or borrowed, never neither "
+                 "(a non-owned reference is a borrow with a lifetime)")
+    # Same owned∨borrowed invariant + arg-ref check on any by_ref ELEMENT
+    # (scalar.by_ref -- a `T**` -- or array.by_ref -- a container).
+    for slot, sname in ((scalar, "scalar"), (array, "array")):
+        e += _shape_by_ref_element_errors(label, slot, sname)
+        if isinstance(slot, dict) and isinstance(slot.get("by_ref"), dict):
+            e.extend(_borrow_arg_ref_errors(
+                f"{label} {sname}.by_ref element", slot["by_ref"].get("borrowed"),
+                arg_names))
     if const and blk.get("mutable") is True:
         e.append(f"{label}: const pointee but mutable == true")
+    # `lifetime` (is_dropped/is_disposed/is_cloned) is ARG-only.
+    if "lifetime" in blk:
+        if allow_lifetime:
+            e.extend(_lifetime_errors(label, blk))
+        else:
+            e.append(f"{label}: `lifetime` is a ptr_args-only block (not on "
+                     "ptr_ret or a global ptr)")
+    return e
+
+
+def _lifetime_errors(label: str, blk: dict) -> list[str]:
+    """Validate the ARG-ONLY `lifetime` block on a `ptr_args[*].ptr`: the
+    lifecycle-primitive role THIS method plays on THIS arg. `is_dropped` (frees
+    the arg's storage) and `is_disposed` (frees the arg's fields) are bools;
+    `is_cloned` is null | {deep, upref} -- `deep` copies the arg into a fresh
+    allocation, `upref` bumps its refcount. Both clone modes may be set at once:
+    a body that branches between them, or an untyped `void *` whose concrete
+    element decides at runtime.
+
+    Interaction rules with the arg's ownership:
+      - `is_dropped`  => the arg is `owned` (you free the storage of what you own).
+      - `is_cloned`   => the arg is `borrowed` (it reads the source to copy it).
+      - `is_disposed` => EITHER (a full dtor owns it; a `*_cleanup` borrows it).
+    """
+    e: list[str] = []
+    lf = blk.get("lifetime")
+    if lf is None:
+        return e
+    if not isinstance(lf, dict):
+        e.append(f"{label}: lifetime must be null or "
+                 "{is_dropped, is_disposed, is_cloned}")
+        return e
+    bad = set(lf) - _LIFETIME_KEYS
+    if bad:
+        e.append(f"{label}: lifetime unknown key(s) {sorted(bad)}")
+    for k in ("is_dropped", "is_disposed"):
+        v = lf.get(k)
+        if v is not None and not isinstance(v, bool):
+            e.append(f"{label}: lifetime.{k} must be a boolean")
+    cloned = lf.get("is_cloned")
+    if cloned is not None:
+        if not isinstance(cloned, dict) or (set(cloned) - {"deep", "upref"}):
+            e.append(f"{label}: lifetime.is_cloned must be null or {{deep, upref}}")
+            cloned = None
+        else:
+            # A submitted `is_cloned` replaces the prior wholesale, so both modes
+            # must be stated -- reject a null left where false was meant.
+            for mode in ("deep", "upref"):
+                if not isinstance(cloned.get(mode), bool):
+                    e.append(f"{label}: lifetime.is_cloned.{mode} must be an "
+                             "explicit boolean")
+    owned = blk.get("owned")
+    borrowed = blk.get("borrowed")
+    if lf.get("is_dropped") is True and owned is not True:
+        e.append(f"{label}: lifetime.is_dropped requires the arg to be owned "
+                 "(you free the storage of what you own)")
+    if (isinstance(cloned, dict) and (cloned.get("deep") or cloned.get("upref"))
+            and not isinstance(borrowed, dict)):
+        e.append(f"{label}: lifetime.is_cloned requires the arg to be borrowed "
+                 "(it reads the source to copy it)")
     return e
 
 
@@ -1123,12 +1363,12 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
             elif not isinstance(gptr, dict):
                 errors.append("ptr: must be an object")
             else:
-                bad = set(gptr) - _PTR_ARG_AGENT_KEYS
+                bad = set(gptr) - _PTR_RET_AGENT_KEYS
                 if bad:
                     errors.append(f"ptr: unknown key(s) {sorted(bad)}")
                 errors.extend(_sym_ptr_invariant_errors(
                     "ptr", gptr, "const" in (entry.get("type") or ""),
-                    is_ret=False))
+                    is_ret=False, arg_names=set()))
         if "locked_by" in f and f["locked_by"] is not None:
             if not is_global:
                 errors.append(
@@ -1139,13 +1379,18 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
 
         arg_by_pos = {str(a.get("position")): a
                       for a in entry.get("ptr_args") or []}
+        # Valid `arg:<ref>` lifetime targets: each pointer arg's NAME (names are
+        # the one canonical spelling; the positional `arg:<idx>` form is rejected).
+        # A borrowed lifetime that names an arg (on an arg OR the return) must
+        # land on one of these.
+        valid_args = {a.get("name") for a in arg_by_pos.values() if a.get("name")}
         pr = f.get("ptr_ret")
 
         # Validates one ownership contract — the primary's (`where=""`) or a
         # fork's. Both shapes are identical, so forks reuse it verbatim.
         def _check_ptr(args_f, ret_f, where):
-            for pos, blk in (args_f or {}).items():
-                if not isinstance(blk, dict):
+            for pos, rec in (args_f or {}).items():
+                if not isinstance(rec, dict):
                     errors.append(f"{where}ptr_args[{pos}]: must be an object")
                     continue
                 if str(pos) not in arg_by_pos:
@@ -1153,25 +1398,47 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                         f"{where}ptr_args: no pointer arg at position {pos} "
                         f"in {name!r}")
                     continue
-                bad = set(blk) - _PTR_ARG_AGENT_KEYS
+                bad = set(rec) - {"ptr"}
                 if bad:
                     errors.append(
-                        f"{where}ptr_args[{pos}]: unknown key(s) {sorted(bad)}")
+                        f"{where}ptr_args[{pos}]: unknown key(s) {sorted(bad)} "
+                        "(the ownership block nests under `ptr`)")
+                blk = rec.get("ptr")
+                if blk is None:
+                    continue
+                if not isinstance(blk, dict):
+                    errors.append(f"{where}ptr_args[{pos}].ptr: must be an object")
+                    continue
+                bad2 = set(blk) - _PTR_ARG_AGENT_KEYS
+                if bad2:
+                    errors.append(
+                        f"{where}ptr_args[{pos}].ptr: unknown key(s) {sorted(bad2)}")
                 errors.extend(_sym_ptr_invariant_errors(
-                    f"{where}ptr_args[{pos}]", blk,
-                    bool(arg_by_pos[str(pos)].get("const")), is_ret=False))
+                    f"{where}ptr_args[{pos}].ptr", blk,
+                    bool(arg_by_pos[str(pos)].get("const")), is_ret=False,
+                    allow_lifetime=True, arg_names=valid_args))
             if ret_f is not None:
                 if not isinstance(ret_f, dict):
                     errors.append(f"{where}ptr_ret: must be an object")
                 elif entry.get("ptr_ret") is None:
                     errors.append(f"{where}ptr_ret: {name!r} has no pointer return")
                 else:
-                    bad = set(ret_f) - _PTR_RET_AGENT_KEYS
+                    bad = set(ret_f) - {"ptr"}
                     if bad:
-                        errors.append(f"{where}ptr_ret: unknown key(s) {sorted(bad)}")
-                    errors.extend(_sym_ptr_invariant_errors(
-                        f"{where}ptr_ret", ret_f,
-                        bool(entry["ptr_ret"].get("const")), is_ret=True))
+                        errors.append(f"{where}ptr_ret: unknown key(s) {sorted(bad)} "
+                                      "(the ownership block nests under `ptr`)")
+                    blk = ret_f.get("ptr")
+                    if isinstance(blk, dict):
+                        bad2 = set(blk) - _PTR_RET_AGENT_KEYS
+                        if bad2:
+                            errors.append(
+                                f"{where}ptr_ret.ptr: unknown key(s) {sorted(bad2)}")
+                        errors.extend(_sym_ptr_invariant_errors(
+                            f"{where}ptr_ret.ptr", blk,
+                            bool(entry["ptr_ret"].get("const")), is_ret=True,
+                            arg_names=valid_args))
+                    elif blk is not None:
+                        errors.append(f"{where}ptr_ret.ptr: must be an object")
 
         _check_ptr(f.get("ptr_args"), pr, "")
 
@@ -1230,14 +1497,12 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
         if "macro" in f:
             entry["macro"] = {k: f["macro"][k] for k in sorted(_MACRO_FLAGS)}
         _apply_ptr_agent(entry, f.get("ptr_args"), pr)
-        # Globals: partial-merge the singular `ptr` (per key, like ptr_args);
-        # `locked_by` is one cohesive block, replaced wholesale (null clears it).
+        # Globals: the singular `ptr` IS the ownership block (no composer keys
+        # mixed in -- name/type/const live at the entry level), so it is replaced
+        # wholesale, like an arg/ret record's nested `ptr`. `locked_by` is one
+        # cohesive block, likewise replaced wholesale (null clears it).
         if gptr is not None:
-            cur = entry.get("ptr") or {}
-            for k in _PTR_ARG_AGENT_KEYS:
-                if k in gptr:
-                    cur[k] = gptr[k]
-            entry["ptr"] = cur
+            entry["ptr"] = gptr
         if "locked_by" in f:
             entry["locked_by"] = f["locked_by"]
 
@@ -1438,8 +1703,8 @@ def _create_type(layout, target, src: str) -> None:
     print(f"created {kind} cluster {tag} in {path}")
 
 
-def _records(target, kind, names, files, with_details) -> None:
-    # record(s): summary by default, whole record with --with-details.
+def _records(target, kind, names, files) -> None:
+    # record(s): always the whole record.
     load = _load_type_entry if kind == "type" else _load_sym_entry
     recs: list = []
     for nm in names:
@@ -1447,7 +1712,7 @@ def _records(target, kind, names, files, with_details) -> None:
         entry = load(layout.analysis, node.id, node.defined_in)
         if entry is None:
             raise SystemExit(f"query {kind}: no manifest entry for {nm!r}.")
-        recs.append(entry if with_details else _summarize(entry, kind))
+        recs.append(entry)
     print(json.dumps(recs[0] if len(recs) == 1 else recs, indent=2))
 
 

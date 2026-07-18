@@ -5,17 +5,26 @@ gets a `syms.json` listing every symbol (function, macro, global, or
 callback — a function-pointer typedef) defined or declared in the
 stem-grouped file(s) of that dir.
 
-Two entry shapes:
+**Scope gates EMISSION, never CONTENT.** Which records are emitted (and
+how they're tagged / post-filtered by `--port-only` / `--wrap-only`) is a
+scope decision; every record that IS emitted carries its full
+codebase-wide composition. This mirrors the type manifest, whose
+`opaque_in` / `non_opaque_in` footprints are COMPLETE for port AND wrap.
 
-  - **Base** (always emitted): name, kind, declared_in, defined_in,
-    type, ptr_args, ptr_ret.
-  - **Port-scope additions** (added when the entry's stem-group
-    contains at least one port-scope file per `scope.json`): macros
-    add `used_by` (call sites); functions add `used_by` (call + ref
-    reach) and `depends_on` (flat `syms` list with `{name,
-    defined_in, declared_in}` records + `[{type, fields: []}]` types
-    list). Macro `body` is never emitted — the agent reads the
-    expansion from source.
+One entry shape:
+
+  - **Base**: name, kind, declared_in, defined_in, type, ptr_args,
+    ptr_ret.
+  - **Plus, for every emitted record**: macros add `used_by` (call
+    sites); functions add `used_by` (call + ref reach) and
+    `depends_on` (flat `syms` list with `{name, defined_in,
+    declared_in}` records + `[{type, fields: []}]` types list);
+    globals add `used_by` (accessors). Macro `body` is never emitted —
+    the agent reads the expansion from source.
+
+The reach relations are scope-agnostic raw lookups and the
+field-access index is repo-wide, so full composition costs a few dict
+hits per record; the total stays bounded by what scope admits.
 
 A **callback** is signature-shaped and fully built by the composer
 regardless of scope (CodeQL identifies it deterministically — a
@@ -281,16 +290,21 @@ def _compose_dep_syms(
     return out
 
 
-def _null_ptr_agent() -> dict:
-    """Agent-fillable ownership block for a `ptr_args[*]` / `ptr_ret` record --
-    the SAME structured shape a struct field's `ptr` carries (see
-    types_manifest._null_ptr_skeleton), so a pointer is described identically
-    whether it sits in a struct or crosses a call boundary. `owned` nests
-    `{exclusive, shared, dropped_by, cloned_by}` (CBox vs CArc + the release/
-    clone bindings), `borrowed` nests `{lifetime}`, and `array.by_ref` carries
-    element ownership. `scalar` and `array` co-exist (a generic allocator may
-    serve a single object AND a buffer)."""
-    return {
+def _null_ptr_agent(for_arg: bool = False) -> dict:
+    """Agent-fillable ownership block that nests under a `ptr_args[*]` / `ptr_ret`
+    record's `ptr` key -- the SAME structured sub-object a struct field's `ptr`
+    carries (see types_manifest._null_ptr_skeleton), so a pointer is described
+    identically whether it sits in a struct or crosses a call boundary, and the
+    composer's structural keys (position/name/type/const/depth) stay OUTSIDE it.
+    `owned` is a bool, `borrowed` nests `{lifetime}`, and `array.by_ref` carries
+    element ownership.
+
+    `for_arg` adds the ARG-ONLY `lifetime` block ({is_dropped, is_disposed,
+    is_cloned}) -- the lifecycle-primitive role THIS method plays on THIS arg,
+    from which each type's Drop/Clone is reverse-derived. Returns/fields never
+    carry it (a return is produced, not acted on; a field derives from its
+    field-type's record)."""
+    blk = {
         "scalar": None,
         "array": None,
         "string": None,
@@ -300,12 +314,16 @@ def _null_ptr_agent() -> dict:
         "mutable": None,
         "note": None,
     }
+    if for_arg:
+        blk["lifetime"] = {
+            "is_dropped": None, "is_disposed": None, "is_cloned": None}
+    return blk
 
 
 def _compose_ptr_args(reach: Reach, fn_name: str, fn_def_file: str) -> list[dict]:
     out: list[dict] = []
     for arg in reach.ptr_args_of(fn_name, fn_def_file):
-        out.append({**arg, **_null_ptr_agent()})
+        out.append({**arg, "ptr": _null_ptr_agent(for_arg=True)})
     return out
 
 
@@ -313,37 +331,10 @@ def _compose_ptr_ret(reach: Reach, fn_name: str, fn_def_file: str) -> dict | Non
     ret = reach.ptr_ret_of(fn_name, fn_def_file)
     if ret is None:
         return None
-    return {**ret, **_null_ptr_agent()}
+    return {**ret, "ptr": _null_ptr_agent()}
 
 
 # ------------------------------------------------------------------ per-kind composers
-
-def _wrap_additions_function(
-    row: dict,
-    reach: Reach,
-    by_name: dict[str, dict],
-) -> dict[str, Any]:
-    """Signature-only ``depends_on`` for a wrap-scope function.
-
-    Wrap symbols are FFI-imported, not translated, so there is no body to
-    analyze — but their *signature* still references types the dag must order
-    on: structs, the typegen instance/engine handles, and callback typedefs
-    (whose identity ``signature_type_uses`` preserves, unlike the ``(routine)``
-    collapse in ``ptr_args``). We emit the same ``depends_on`` shape as port
-    (so the dag / queries read one uniform field) but built from the signature
-    ALONE: ``field_access_index=None`` ⇒ no body-access ``fields`` and no
-    body-only types; ``syms: []`` ⇒ no callees (a signature has none).
-    ``ptr_args``/``ptr_ret`` are retained (the ownership annotations
-    ``depends_on.types`` does not carry) — additive, exactly as for port."""
-    return {
-        "depends_on": {
-            "syms": [],
-            "types": _compose_dep_types(
-                reach, row["name"], row["def_file"], by_name,
-                field_access_index=None,
-            ),
-        },
-    }
 
 
 def _base_function(row: dict, reach: Reach) -> dict[str, Any]:
@@ -477,10 +468,10 @@ def _base_callback(
 
     ptr_args = _compose_ptr_args(reach, name, decl_file)
     for a in ptr_args:
-        a["mutable"] = False if a["const"] else None
+        a["ptr"]["mutable"] = False if a["const"] else None
     ret = _compose_ptr_ret(reach, name, decl_file)
     if ret is not None:
-        ret["mutable"] = False if ret["const"] else None
+        ret["ptr"]["mutable"] = False if ret["const"] else None
 
     # call = invokers (indirect-call sites — the contract-bearing set); ref =
     # the remaining signature declarers that only forward/store the pointer.
@@ -650,21 +641,22 @@ def compose(
             ):
                 continue
         base = _base_function(r, reach)
-        port_add = (
-            _port_additions_function(
-                r, reach, by_name, sym_index, field_access_index,
-            )
-            if is_port else None
+        # Scope gates EMISSION only: every record we DO emit is composed
+        # codebase-wide, mirroring the type footprints (COMPLETE for port AND
+        # wrap). The reach relations are scope-agnostic raw lookups
+        # ("scope-split is the caller's responsibility") and the field-access
+        # index is already repo-wide, so this is a few dict hits per record and
+        # the cost stays bounded by what we emit.
+        port_add = _port_additions_function(
+            r, reach, by_name, sym_index, field_access_index,
         )
-        wrap_add = (
-            _wrap_additions_function(r, reach, by_name) if not is_port else None
-        )
+        # `forward` drives the one-hop closure -- that IS emission, so it stays
+        # gated on port scope.
         fwd = _forward_syms_of(r["name"], r["def_file"], reach) if is_port else None
         target_file = r["def_file"] or _first_decl(r["decl_files"])
         candidates.append({
             "base": base,
             "port_add": port_add,
-            "wrap_add": wrap_add,
             "is_port": is_port,
             "forward": fwd,
             "key": (base["name"], base.get("defined_in") or ""),
@@ -681,7 +673,7 @@ def compose(
             ):
                 continue
         base = _base_global(r)
-        port_add = _port_additions_global(r, reach) if is_port else None
+        port_add = _port_additions_global(r, reach)   # content: codebase-wide
         fwd = set() if is_port else None
         target_file = r["def_file"] or _first_decl(r["decl_files"])
         candidates.append({
@@ -706,7 +698,7 @@ def compose(
             if not reach.is_macro_port_reachable(r["name"], r["def_file"]):
                 continue
         base = _base_macro(r)
-        port_add = _port_additions_macro(r, reach) if is_port else None
+        port_add = _port_additions_macro(r, reach)    # content: codebase-wide
         fwd = set() if is_port else None
         target_file = r["def_file"]
         candidates.append({
@@ -832,11 +824,12 @@ def compose(
             continue
 
         entry = dict(c["base"])
-        if emit_port_shape and c["port_add"] is not None:
+        # No port/wrap shape fork: an emitted record always carries its
+        # codebase-wide composition. `emit_port_shape` below survives only as
+        # the SCOPE classification -- it drives the --port-only/--wrap-only
+        # post-filters and the dir_scope tag, never the content.
+        if c["port_add"] is not None:
             entry.update(c["port_add"])
-        elif not emit_port_shape and c.get("wrap_add") is not None:
-            # Wrap-shaped function: signature-only `depends_on` (no body).
-            entry.update(c["wrap_add"])
         rel_dir = manifest_dir_for(c["target_file"])
         if rel_dir is None:
             continue

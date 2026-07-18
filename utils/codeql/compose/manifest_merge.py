@@ -339,26 +339,55 @@ def merge_manifest_file(
     existing file. Parent directories are created if missing.
 
     Returns ``(existing_count, added_count, updated_count, total_count)``.
+
+    The read-merge-write is serialized against concurrent writers — other
+    composer runs AND the oracle's ``--update``/``--create`` path — by the same
+    discipline as ``query._locked_update``: an exclusive ``flock`` on the
+    manifest's PARENT DIRECTORY fd (a stable inode ``os.replace`` never moves),
+    with the existing file (re-)read only AFTER the lock is taken and the merge
+    committed by an atomic temp-file ``os.replace``. Without this a process-level
+    fan-out that lands two writers on one stem dir would lose updates or read a
+    torn file (bare ``write_text`` is neither locked nor atomic).
     """
-    if path.exists():
-        existing_doc = json.loads(path.read_text())
-        existing_entries: list[Entry] = list(existing_doc.get(entries_key, []))
-    else:
-        existing_doc = {}
-        existing_entries = []
-
-    pre_existing = len(existing_entries)
-    new_entries = list(new_manifest.get(entries_key, []))
-    merged, added, updated = merge_entries(existing_entries, new_entries, key=key)
-
-    out: dict[str, Any] = {}
-    for ck in comment_keys:
-        if ck in new_manifest:
-            out[ck] = new_manifest[ck]
-        elif ck in existing_doc:
-            out[ck] = existing_doc[ck]
-    out[entries_key] = merged
+    import fcntl
+    import os
+    import tempfile
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(out, indent=2) + "\n")
+    dirfd = os.open(str(path.parent), os.O_RDONLY)
+    try:
+        fcntl.flock(dirfd, fcntl.LOCK_EX)
+        # Read INSIDE the lock so we merge against the latest committed content.
+        if path.exists():
+            existing_doc = json.loads(path.read_text())
+            existing_entries: list[Entry] = list(existing_doc.get(entries_key, []))
+        else:
+            existing_doc = {}
+            existing_entries = []
+
+        pre_existing = len(existing_entries)
+        new_entries = list(new_manifest.get(entries_key, []))
+        merged, added, updated = merge_entries(existing_entries, new_entries, key=key)
+
+        out: dict[str, Any] = {}
+        for ck in comment_keys:
+            if ck in new_manifest:
+                out[ck] = new_manifest[ck]
+            elif ck in existing_doc:
+                out[ck] = existing_doc[ck]
+        out[entries_key] = merged
+
+        blob = json.dumps(out, indent=2) + "\n"
+        tmp = tempfile.NamedTemporaryFile(
+            "w", dir=str(path.parent), delete=False)
+        try:
+            tmp.write(blob)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        finally:
+            tmp.close()
+        os.replace(tmp.name, path)
+    finally:
+        fcntl.flock(dirfd, fcntl.LOCK_UN)
+        os.close(dirfd)
     return pre_existing, added, updated, len(merged)

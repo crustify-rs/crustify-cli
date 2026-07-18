@@ -29,24 +29,76 @@ signal; the body is the procedure.
 
 ### Learn the analysis schema
 
-Use `crustify-oracle` to fetch the analysis schema and learn its structure.
+Use `crustify-oracle` to fetch the symbols analysis schema and learn its structure.
 Identify which fields are yours to fill and which are owned by the deterministic
 composer.
 
+### Disocver drop/clone lifetime primitives
+
+If your target set contains a `lifetime-for:<tag>` then you must first identify
+the lifetime candidates for `tag` that release / clone its storage.  Unless
+otherwise stated, we are only interested in storage (i.e. heap allocation)
+droppers/freers, field disposers (for user-defined types taken by-value, i.e.
+embedded or on stack), and their cloners/duplicators. These will then be used
+to implement `Drop` and `Clone` on its future Rust newtypes, allowing references
+to this type to be owned / moved in Rust-native code.
+
+Generally, we record a function as a lifetime primitive only if it has more than 
+one caller / referencer / consumer, or if it publicly exposed; if it only lives to
+serve as an internal routine called by a routine that itself is a lifetime primitive,
+then we can skip recording it. Query `crustify-oracle` to obtain callers / referencers.
+
+Your search space for the discovery mode is codebase-wide, unscoped.
+  
+If `tag` is:
+
+  - The special keyword `void`, then look for lifetime primitives for raw,
+  byte-level, untyped objects (`void *`). Look first for primitives from the
+  standard library (`free`, `munmap`, `mmap`, `calloc`, `malloc`, `realloc`,
+  `memcpy`, `memmove`, `strdup`, `strndup`, etc.). Then fetch the list of
+  project-defined lifetime primitives by querying `curstify-oracle` for methods
+  calling the standard ones identified in the previous step. Continue looking up
+  a few more hops up the callgraph to identify lifetime primitives that are
+  specialized.  Filter to those taking `void` as argument to narrow the search
+  space. Look for lifetime primitives that process both scalars and arrays. 
+  
+  - The special keyword `string`, then look for lifetime primitives for
+  NUL-terminated strings. You can fetch the list of lifetime candidates by
+  querying `curstify-oracle` for methods taking a `char *`/ `unsigned char *` /
+  `u8 *`/`uint8_t *`/ etc. as an argument AND filtering for those calling one of
+  the raw/void lifetime primitives identified by a previous run. Continue
+  looking up a few more hops up the callgraph to identify more specialized
+  primitives. 
+  
+  - A `<type-tag>`, then look for lifetime primitives that for the given type
+  tag.  You can fetch the list of lifetime candidates by querying
+  `curstify-oracle` for methods taking `<type-tag> *` as an argument AND filter
+  for those that invoke one of the raw/void lifetime primitives identified in a
+  previous run. Explore a few additional hops up the call graph to identify the
+  real, top-level dropper(s)/field disposer(s) and cloner(s) of the type, which
+  might call helpers that in turn call the raw/void lifetime primitives. If a
+  type is a POD disposed through a field disposer of an embedding parent,
+  process the parent disposer. Look for lifetime primitives that process both
+  scalars and arrays. Submit your findings for the symbols schema, not for the
+  types schema. 
+   
+  After identifying your target set, proceed with and analyze them as described
+  in the next sections.
+  
 ### Process globals
 
 For all `global` items in your workset, fill out its record with the following properties:
 
-  - locking: reason and identify the locking logic allowing the global to be accessed
+  - locking: reason and identify the locks and primitives that allow the global to be accessed
   concurrently  
   
-  - pointer ownership: if the global is a pointer the infer its ownership/mutability
-  like for pointer args and returns (see below).
+  - pointer ownership: if the global stores a pointer then conduct its pointer analysis 
+  according to the guidelines below and its schema.
 
 ### Process macros
 
 If any of your workset item is a macro then inspect its expansion at its source
-and reason whether it expands to a symbol or constant. A downstream bindgen
+and reason whether it aliases a symbol or a constant. A downstream bindgen
 pass will rely on this analysis to determine whether we need emit to a shim to
 make the macro callable in Rust-native code, or whether bindgen already emits
 a binding (for constants) or whether the macro aliases symbols that have a binding,
@@ -61,10 +113,10 @@ If any of your workset items is a callback (i.e. a function-pointer typedef),
 fill its pointer ownership record exactly as for a function (the ownership
 contract of the pointee at the indirect-call boundary).
 
-A callback has no body of its own, so derive its ownership from its caller list
-using `crustify-oracle`, giving you the list of functions that actually invoke it
-through the pointer. Read those invokers' bodies to reason about its signature
-analysis.
+A callback has no body of its own, so derive its ownership from its list of
+codebase-wide callers/references using `crustify-oracle`, giving you the list of
+functions that actually invoke/reference it through the pointer. Read those
+invokers' bodies to reason about its signature analysis.
 
 **When invokers disagree, FORK the callback.** Cluster callers by ownership
 semantics, and if it splits into >1 cluster, each cluster becomes a distinct
@@ -76,14 +128,11 @@ dominant cluster as the primary record and its forked variants.
 Use the `crustify-oracle` skill to fetch the list of properties you need to infer
 for each pointer-arg and -return of the functions and callbacks in your workset.
 
-Fetch each item's callers from its record and analyze semantically both its own
-body as well as its call sites to understand how arguments and returns are
-passed and processed.  This will grant you a complete view of the item's
-footprint for a complete analysis of its arg and ret ownership/use.
-
-Additionally, identify the releasers/cloners of each pointer that is
-owned/moved, which will allow downstream consumers to map them to the smart
-pointer that implements the appropriate drop.
+Fetch each item's codebase-wide callers/references from its record and analyze
+semantically both its own body as well as its call sites to understand how
+arguments and returns are passed and processed. This will grant you a complete
+view of the item's footprint for a complete analysis of its arg and ret
+ownership/use.
 
 This analysis drives wrapper generation when we generate safe wrappers over
 wrap-scope functions and callbacks that take/return wrapped types and references

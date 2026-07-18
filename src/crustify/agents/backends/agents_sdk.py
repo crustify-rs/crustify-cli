@@ -272,7 +272,7 @@ def _model_settings(model_name: str) -> ModelSettings:
         )
     return ModelSettings(
         # OpenAI exposes a reasoning *summary*, never raw reasoning tokens.
-        reasoning=Reasoning(effort="medium", summary="auto"),
+        reasoning=Reasoning(effort="high", summary="auto"),
         include_usage=True,
     )
 

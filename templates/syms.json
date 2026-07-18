@@ -20,13 +20,23 @@
           "type": "SSL_CONNECTION",
           "const": false,
           "depth": 1,
-          "array": null,
-          "string": false,
-          "owned": null,
-          "borrowed": null,
-          "nullable": false,
-          "mutable": null,
-          "note": null
+          "ptr": {
+            "scalar": {"by_val": true},
+            "array": null,
+            "string": false,
+            "owned": null,
+            "borrowed": {
+              "lifetime": "arg:s"
+            },
+            "nullable": false,
+            "mutable": null,
+            "note": null,
+            "lifetime": {
+              "is_dropped": null,
+              "is_disposed": null,
+              "is_cloned": null
+            }
+          }
         }
       ],
       "ptr_ret": null,
@@ -89,42 +99,43 @@
           "type": "SSL_CTX",
           "const": false,
           "depth": 1,
-          "array": null,
-          "string": false,
-          "owned": {
-            "exclusive": false,
-            "shared": true,
-            "dropped_by": [
-              "SSL_CTX_free"
-            ],
-            "cloned_by": [
-              "SSL_CTX_up_ref"
-            ]
-          },
-          "borrowed": null,
-          "nullable": false,
-          "mutable": null,
-          "note": "SSL_new bumps the SSL_CTX refcount and retains a shared ref -> CArc"
+          "ptr": {
+            "scalar": {"by_val": true},
+            "array": null,
+            "string": false,
+            "owned": {
+              "exclusive": false,
+              "shared": true
+            },
+            "borrowed": null,
+            "nullable": false,
+            "mutable": null,
+            "note": "SSL_new bumps the SSL_CTX refcount and retains a shared ref -> CArc",
+            "lifetime": {
+              "is_dropped": null,
+              "is_disposed": null,
+              "is_cloned": null
+            }
+          }
         }
       ],
       "ptr_ret": {
         "type": "SSL",
         "const": false,
         "depth": 1,
-        "array": null,
-        "string": false,
-        "owned": {
-          "exclusive": true,
-          "shared": false,
-          "dropped_by": [
-            "SSL_free"
-          ],
-          "cloned_by": null
-        },
-        "borrowed": null,
-        "nullable": true,
-        "mutable": null,
-        "note": "fresh SSL, caller owns -> CBox"
+        "ptr": {
+          "scalar": {"by_val": true},
+          "array": null,
+          "string": false,
+          "owned": {
+            "exclusive": true,
+            "shared": false
+          },
+          "borrowed": null,
+          "nullable": true,
+          "mutable": null,
+          "note": "fresh SSL, caller owns -> CBox"
+        }
       }
     },
     {
@@ -142,13 +153,23 @@
           "type": "PACKET",
           "const": true,
           "depth": 1,
-          "array": null,
-          "string": false,
-          "owned": null,
-          "borrowed": null,
-          "nullable": false,
-          "mutable": false,
-          "note": null
+          "ptr": {
+            "scalar": {"by_val": true},
+            "array": null,
+            "string": false,
+            "owned": null,
+            "borrowed": {
+              "lifetime": "arg:pkt"
+            },
+            "nullable": false,
+            "mutable": false,
+            "note": null,
+            "lifetime": {
+              "is_dropped": null,
+              "is_disposed": null,
+              "is_cloned": null
+            }
+          }
         }
       ],
       "ptr_ret": null
@@ -238,6 +259,7 @@
       "defined_in": "ssl/s3_lib.c",
       "type": "const unsigned char tls11downgrade[8]",
       "ptr": {
+        "scalar": {"by_val": true},
         "array": {
           "by_val": true
         },
@@ -267,13 +289,23 @@
           "type": "X509_STORE_CTX",
           "const": false,
           "depth": 1,
-          "array": null,
-          "string": false,
-          "owned": null,
-          "borrowed": null,
-          "nullable": false,
-          "mutable": null,
-          "note": null
+          "ptr": {
+            "scalar": {"by_val": true},
+            "array": null,
+            "string": false,
+            "owned": null,
+            "borrowed": {
+              "lifetime": "arg:x509_ctx"
+            },
+            "nullable": false,
+            "mutable": null,
+            "note": null,
+            "lifetime": {
+              "is_dropped": null,
+              "is_disposed": null,
+              "is_cloned": null
+            }
+          }
         }
       ],
       "ptr_ret": null,
@@ -314,33 +346,42 @@
           "type": "char",
           "const": true,
           "depth": 1,
-          "array": null,
-          "string": true,
-          "owned": null,
-          "borrowed": null,
-          "nullable": false,
-          "mutable": null,
-          "note": null
+          "ptr": {
+            "scalar": null,
+            "array": null,
+            "string": true,
+            "owned": null,
+            "borrowed": {
+              "lifetime": "arg:file"
+            },
+            "nullable": false,
+            "mutable": null,
+            "note": null,
+            "lifetime": {
+              "is_dropped": null,
+              "is_disposed": null,
+              "is_cloned": null
+            }
+          }
         }
       ],
       "ptr_ret": {
         "type": "void",
         "const": false,
         "depth": 1,
-        "array": null,
-        "string": false,
-        "owned": {
-          "exclusive": true,
-          "shared": false,
-          "dropped_by": [
-            "CRYPTO_free"
-          ],
-          "cloned_by": null
-        },
-        "borrowed": null,
-        "nullable": true,
-        "mutable": null,
-        "note": "raw region, caller owns -> CBox / CVec"
+        "ptr": {
+          "scalar": {"by_val": true},
+          "array": null,
+          "string": false,
+          "owned": {
+            "exclusive": true,
+            "shared": false
+          },
+          "borrowed": null,
+          "nullable": true,
+          "mutable": null,
+          "note": "raw region, caller owns -> CBox / CVec"
+        }
       }
     },
     {
@@ -358,20 +399,27 @@
           "type": "void",
           "const": false,
           "depth": 1,
-          "array": null,
-          "string": false,
-          "owned": {
-            "exclusive": true,
-            "shared": false,
-            "dropped_by": [
-              "CRYPTO_free"
-            ],
-            "cloned_by": null
-          },
-          "borrowed": null,
-          "nullable": true,
-          "mutable": null,
-          "note": "consumed and freed (free(NULL) is a no-op)"
+          "ptr": {
+            "scalar": {"by_val": true},
+            "array": null,
+            "string": false,
+            "owned": {
+              "exclusive": true,
+              "shared": false
+            },
+            "borrowed": null,
+            "nullable": true,
+            "mutable": null,
+            "note": "consumed and freed (free(NULL) is a no-op)",
+            "lifetime": {
+              "is_dropped": {
+                "exclusive": true,
+                "shared": false
+              },
+              "is_disposed": null,
+              "is_cloned": null
+            }
+          }
         },
         {
           "position": 1,
@@ -379,13 +427,23 @@
           "type": "char",
           "const": true,
           "depth": 1,
-          "array": null,
-          "string": true,
-          "owned": null,
-          "borrowed": null,
-          "nullable": false,
-          "mutable": null,
-          "note": null
+          "ptr": {
+            "scalar": null,
+            "array": null,
+            "string": true,
+            "owned": null,
+            "borrowed": {
+              "lifetime": "arg:file"
+            },
+            "nullable": false,
+            "mutable": null,
+            "note": null,
+            "lifetime": {
+              "is_dropped": null,
+              "is_disposed": null,
+              "is_cloned": null
+            }
+          }
         }
       ],
       "ptr_ret": null
@@ -405,13 +463,26 @@
           "type": "char",
           "const": true,
           "depth": 1,
-          "array": null,
-          "string": true,
-          "owned": null,
-          "borrowed": null,
-          "nullable": false,
-          "mutable": null,
-          "note": null
+          "ptr": {
+            "scalar": null,
+            "array": null,
+            "string": true,
+            "owned": null,
+            "borrowed": {
+              "lifetime": "arg:str"
+            },
+            "nullable": false,
+            "mutable": null,
+            "note": null,
+            "lifetime": {
+              "is_dropped": null,
+              "is_disposed": null,
+              "is_cloned": {
+                "exclusive": true,
+                "shared": false
+              }
+            }
+          }
         },
         {
           "position": 1,
@@ -419,33 +490,42 @@
           "type": "char",
           "const": true,
           "depth": 1,
-          "array": null,
-          "string": true,
-          "owned": null,
-          "borrowed": null,
-          "nullable": false,
-          "mutable": null,
-          "note": null
+          "ptr": {
+            "scalar": null,
+            "array": null,
+            "string": true,
+            "owned": null,
+            "borrowed": {
+              "lifetime": "arg:file"
+            },
+            "nullable": false,
+            "mutable": null,
+            "note": null,
+            "lifetime": {
+              "is_dropped": null,
+              "is_disposed": null,
+              "is_cloned": null
+            }
+          }
         }
       ],
       "ptr_ret": {
         "type": "char",
         "const": false,
         "depth": 1,
-        "array": null,
-        "string": true,
-        "owned": {
-          "exclusive": true,
-          "shared": false,
-          "dropped_by": [
-            "CRYPTO_free"
-          ],
-          "cloned_by": null
-        },
-        "borrowed": null,
-        "nullable": true,
-        "mutable": null,
-        "note": "fresh string, caller owns"
+        "ptr": {
+          "scalar": null,
+          "array": null,
+          "string": true,
+          "owned": {
+            "exclusive": true,
+            "shared": false
+          },
+          "borrowed": null,
+          "nullable": true,
+          "mutable": null,
+          "note": "fresh string, caller owns"
+        }
       }
     },
     {
@@ -463,13 +543,23 @@
           "type": "CRYPTO_REF_COUNT",
           "const": false,
           "depth": 1,
-          "array": null,
-          "string": false,
-          "owned": null,
-          "borrowed": null,
-          "nullable": false,
-          "mutable": true,
-          "note": null
+          "ptr": {
+            "scalar": {"by_val": true},
+            "array": null,
+            "string": false,
+            "owned": null,
+            "borrowed": {
+              "lifetime": "arg:refcnt"
+            },
+            "nullable": false,
+            "mutable": true,
+            "note": null,
+            "lifetime": {
+              "is_dropped": null,
+              "is_disposed": null,
+              "is_cloned": null
+            }
+          }
         },
         {
           "position": 1,
@@ -477,13 +567,23 @@
           "type": "int",
           "const": false,
           "depth": 1,
-          "array": null,
-          "string": false,
-          "owned": null,
-          "borrowed": null,
-          "nullable": false,
-          "mutable": true,
-          "note": null
+          "ptr": {
+            "scalar": {"by_val": true},
+            "array": null,
+            "string": false,
+            "owned": null,
+            "borrowed": {
+              "lifetime": "arg:ret"
+            },
+            "nullable": false,
+            "mutable": true,
+            "note": null,
+            "lifetime": {
+              "is_dropped": null,
+              "is_disposed": null,
+              "is_cloned": null
+            }
+          }
         }
       ],
       "ptr_ret": null
@@ -503,13 +603,23 @@
           "type": "CRYPTO_RWLOCK",
           "const": false,
           "depth": 1,
-          "array": null,
-          "string": false,
-          "owned": null,
-          "borrowed": null,
-          "nullable": false,
-          "mutable": true,
-          "note": null
+          "ptr": {
+            "scalar": {"by_val": true},
+            "array": null,
+            "string": false,
+            "owned": null,
+            "borrowed": {
+              "lifetime": "arg:lock"
+            },
+            "nullable": false,
+            "mutable": true,
+            "note": null,
+            "lifetime": {
+              "is_dropped": null,
+              "is_disposed": null,
+              "is_cloned": null
+            }
+          }
         }
       ],
       "ptr_ret": null

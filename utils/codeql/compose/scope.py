@@ -302,40 +302,44 @@ def scope_membership(
 SYNTHETIC_KINDS = ("string", "array")  # buffer-pass clusters
 
 
-# Destructor role keys across schema versions. The dual-ownership split is
-# `shared` (refcount-decrementing free, pairs with up_ref -> CArc) and
-# `exclusive` (sole-owner plain free -> CBox); `fields` is the by-value POD
-# disposer (*_dispose / *_cleanup -> CVal). `storage` is the pre-split legacy
-# single free, tolerated until the on-disk types.json schemas are migrated.
-_DROP_ROLE_KEYS = ("shared", "exclusive", "fields", "storage")
+# Destructor role keys of a synthetic buffer cluster's `drop` block: `shared`
+# (refcount-decrementing free, pairs with up_ref -> CArc), `exclusive`
+# (sole-owner plain free -> CBox), `fields` (the by-value POD disposer,
+# *_dispose / *_cleanup -> CVal). A struct's `dropped_by` carries no roles.
+_DROP_ROLE_KEYS = ("shared", "exclusive", "fields")
 
 
 def drop_op_names(d) -> list[str]:
-    """Destructor op function names from a `drop` value, schema-tolerant.
+    """Destructor op function names from a struct's ``dropped_by`` or a
+    cluster's ``drop``.
 
-    New schema: ``{shared, exclusive, fields}``, each role a LIST of function
-    names (a role may hold several distinct destructors of the same kind, e.g.
-    a container's shallow free plus its deep element-owning free). Tolerated for
-    migration: a scalar string per role, the legacy ``{storage, fields}``, and a
-    bare top-level string. Returns the non-null names in role order, deduped —
-    so a type's `*_free` / `*_dispose` folds into its lifecycle regardless of
-    which schema version produced the record. This is the single
-    drop-extraction primitive the dag / scope / consistency stages share, so the
-    multi-drop split lands uniformly.
+    A struct's ``dropped_by`` is a flat LIST of that type's destructors. A
+    cluster's ``drop`` is a ``{shared, exclusive, fields}`` block, each role a
+    LIST (a role may hold several distinct destructors of the same kind, e.g. a
+    container's shallow free plus its deep element-owning free); a scalar string
+    per role is accepted. Returns the non-null names, deduped — so a type's
+    `*_free` / `*_dispose` folds into its lifecycle either way. This is the
+    single drop-extraction primitive the dag / scope / consistency stages share,
+    so the multi-drop split lands uniformly.
     """
+    seen: set[str] = set()
+    out: list[str] = []
+    names: list = []
     if isinstance(d, dict):
-        seen: set[str] = set()
-        out: list[str] = []
         for k in _DROP_ROLE_KEYS:
             v = d.get(k)
             if v is None:
                 continue
-            for name in (v if isinstance(v, list) else [v]):
-                if name and name not in seen:
-                    seen.add(name)
-                    out.append(name)
-        return out
-    return [d] if d else []
+            names.extend(v if isinstance(v, list) else [v])
+    elif isinstance(d, list):
+        names = d
+    else:
+        return [d] if d else []
+    for name in names:
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
 
 
 def entry_tag(e: dict):
@@ -366,38 +370,37 @@ def locking_op_names(locking) -> list[str]:
 
 
 def clone_op_names(cloned_by) -> list[str]:
-    """Clone-role fn names (deep dups + refcount up_refs) from a `cloned_by` dict,
-    schema-tolerant. New schema: top-level ``cloned_by = {exclusive: [...],
-    shared: [...]}`` (both LISTs). Legacy lifetime ``clone`` = ``{shared: <fn>|
-    null, exclusive: [...]}`` (shared scalar) and the older flat ``up_ref``
-    (scalar) + ``clones`` (list) are tolerated. This is the single
-    clone-extraction primitive the dag / scope / consistency / schedule stages
-    share; callers pass ``type_cloned_by(entry)``."""
+    """Clone fn names from a `cloned_by` block.
+
+    A struct's ``cloned_by = {deep: [...], upref: [...]}`` — `deep` duplicators
+    produce a fresh allocation, `upref`s bump the refcount; a fn that branches
+    between the two appears in both, so the modes are unioned and deduped. A
+    synthetic buffer cluster's ``clone`` block carries ``{shared, exclusive}``,
+    either role a scalar or a LIST. This is the single clone-extraction
+    primitive the dag / scope / consistency / schedule stages share; callers pass
+    ``type_cloned_by(entry)``."""
     if not isinstance(cloned_by, dict):
         return []
     out: list[str] = []
-    for role in ("exclusive", "shared"):
+    for role in ("deep", "upref", "exclusive", "shared"):
         v = cloned_by.get(role)
         if v:
             out += (v if isinstance(v, list) else [v])
-    if cloned_by.get("up_ref"):
-        out.append(cloned_by["up_ref"])
-    out += cloned_by.get("clones") or []
     seen: set[str] = set()
     return [x for x in out if not (x in seen or seen.add(x))]
 
 
-def type_dropped_by(entry: dict) -> dict:
-    """The type's ``{exclusive, shared}`` destructor dict: TOP-LEVEL ``dropped_by``
-    (struct records), falling back to a cluster's ``lifetime.drop`` (clusters keep
-    the nested block until the cluster pass is retired)."""
+def type_dropped_by(entry: dict):
+    """The type's destructors: TOP-LEVEL ``dropped_by`` — a flat LIST on a struct
+    record — falling back to a synthetic buffer cluster's ``lifetime.drop`` role
+    block. Pass the result to :func:`drop_op_names`, which reads either shape."""
     d = entry.get("dropped_by")
     return d if d is not None else (lifetime(entry).get("drop") or {})
 
 
 def type_cloned_by(entry: dict) -> dict:
-    """The type's ``{exclusive, shared}`` clone dict: TOP-LEVEL ``cloned_by``
-    (struct records), falling back to a cluster's ``lifetime.clone``."""
+    """The type's ``{deep, upref}`` clone block: TOP-LEVEL ``cloned_by`` (struct
+    records), falling back to a synthetic buffer cluster's ``lifetime.clone``."""
     c = entry.get("cloned_by")
     return c if c is not None else (lifetime(entry).get("clone") or {})
 

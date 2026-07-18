@@ -34,12 +34,12 @@ for a repo-wide, scope-blind pass.
 
 | you need | invocation |
 |----------|------------|
-| a type's record | `query types --name <tag> --with-details` |
+| a type's record | `query types --name <tag>` |
 | the field/role **schema** definitions | `query types --schema` |
-| the declared **fields** to analyze (+ each pointer's `ptr` block); `--range A:B` windows a batch of them | `query types --name <tag> --file <file> --fields [--range A:B] --with-details` |
-| the lifecycle **candidate pool** (complete footprint fns) | `query types --name <tag> --file <file> --methods` |
-| who **touches** each in-scope field (accessor fns) | `query types --name <tag> --file <file> --accessors --scope-only` |
-| the synthetic **array** / **string** clusters | `query types --arrays --with-details` / `--strings --with-details` |
+| the declared **fields** to analyze (+ each pointer's `ptr` block); `--range A:B` windows a batch of them | `query types --name <tag> --file <file> --fields [--range A:B]` |
+| the lifecycle **candidate pool** (complete footprint) | `query types --name <tag> --file <file> --methods` |
+| which fn **touches** each field (complete footprint) | `query types --name <tag> --file <file> --field-touchers` |
+| the synthetic **array** / **string** clusters | `query types --arrays` / `--strings` |
 | enumerate by scope (then `xargs` a stage) | `query types --wrap-only` / `--port-only` |
 | **submit** type findings (WRITE) | `query types --name <tag> --file <file> --update <file>` (or `--update -`) |
 | **create** a synthetic string/array cluster (WRITE) | `query types --create <cluster.json>` |
@@ -50,15 +50,13 @@ for a repo-wide, scope-blind pass.
 
 | you need | invocation |
 |----------|------------|
-| a symbol's record (signature, pointer analysis, type/sym deps) | `query symbols --name <name> --with-details` |
+| a symbol's record (signature, pointer analysis, type/sym deps) | `query symbols --name <name>` |
 | the **type-generator** primitives (`DEFINE_*` / `DECLARE_*` macro families, `macro.typegen`) | `query symbols --typegens` |
+| a type's lifecycle **roles** -- READ what the analyzer already flagged, grouped into `dropped_by`/`fields_disposed_by`/`cloned_by` | `query symbols --lifetime-for <SPEC> [--array]` |
+| lifecycle **candidates** -- DISCOVER the pool to triage (the inverse); `--calling` keeps only those reaching a known primitive | `query symbols --taking <SPEC> [--calling FN,...] [--hops N] [--array]` |
 | **submit** symbol findings (WRITE) | `query symbols --name <name> --file <file> --update <file>` |
 
-Lifecycle roles are NOT enumerated -- a routine is a `Drop`/`Clone` iff it is
-named in some pointer's `owned.dropped_by` / `owned.cloned_by` binding, which the
-symbol analyzer fills where observable (a function that frees its own arg; a
-constructor's return). There is no separate primitive catalogue or `--lifetime`
-view; the roles are derived from the bindings.
+`SPEC` = struct tag / typedef, or `void` (raw byte-level) / `string`.
 
 ## `query dag` -- dependency closure
 
@@ -94,9 +92,19 @@ view; the roles are derived from the bindings.
   validate (rejecting malformed findings), map onto the schema, and merge under
   a lock -- so re-submitting is idempotent and other entries/slots are left
   untouched. Run `--update-help` for the findings shape before your first write.
+- **Never strip `CRUSTIFY_OUT_SUFFIX` from the environment.** It is set by the
+  orchestrator when your run is one arm of a parallel matrix, and it redirects
+  your writes to `syms/types_<SUFFIX>.json` so concurrent arms do not clobber each
+  other or the canonical tree. If you shell out (e.g. `subprocess.run`), inherit
+  the environment as-is: do NOT pass a hand-built `env=`, and do NOT
+  `env.pop('CRUSTIFY_OUT_SUFFIX')`. Dropping it silently redirects your findings
+  into canonical and corrupts every other arm's baseline. The suffix is not a
+  demotion -- suffixed records are promoted to canonical after review.
 - **Enumerate -> xargs a stage**: `query types --wrap-only | xargs ... wrap --name`.
 - **`dag` closure vs scope**: `query dag --name X` is X's transitive *deps*
-  (emitted before it); `--depth 1` = direct deps only. A WRAP-scope node's
-  `depends_on.syms` is empty by design -- read the closure, don't infer from it.
+  (emitted before it); `--depth 1` = direct deps only. Scope gates EMISSION,
+  never CONTENT: an emitted record's `depends_on` / `used_by` are codebase-wide
+  regardless of its scope, so a WRAP-scope node's `depends_on.syms` is populated
+  and safe to walk.
 - **`audit` is deterministic (no LLM)**: per-seed unsafe surface + a tree-wide
   `global` section + `totals`; printed to stdout, nothing written.

@@ -121,50 +121,65 @@ an argument and a return, so there is no reason to fork their schemas. The only
 difference is that a `ptr_args` record also names the parameter (`position` /
 `name`).
 
-COMPOSER fields (skeleton, always set): on each `ptr_args` record `position` and
-`name` (param name as written, falling back to `arg<N>`); on both `ptr_args` and
-`ptr_ret` `type` (verbatim innermost pointee type -- a user tag like `EVP_PKEY`,
-a primitive like `char`/`void`, or the synthetic markers `(routine)`/`(array)`),
-`const` (is the innermost pointee const-qualified?), and `depth` (1 for `T*`, 2
-for `T**`, ...).
+COMPOSER fields (skeleton, always set), at the record's TOP level: on each
+`ptr_args` record `position` and `name` (param name as written, falling back to
+`arg<N>`); on both `ptr_args` and `ptr_ret` `type` (verbatim innermost pointee
+type -- a user tag like `EVP_PKEY`, a primitive like `char`/`void`, or the
+synthetic markers `(routine)`/`(array)`), `const` (is the innermost pointee
+const-qualified?), and `depth` (1 for `T*`, 2 for `T**`, ...).
 
-AGENT fields -- the SAME structured ownership block a struct field's
-[`ptr`](types.md#ptr) carries, so a pointer is described identically whether it
-lives in a struct or crosses a call:
+AGENT field -- each record carries a single `ptr` sub-object holding the
+ownership block, the SAME structured block a struct field's
+[`ptr`](types.md#ptr) carries (so a pointer is described identically whether it
+lives in a struct or crosses a call). It nests under `ptr` -- isolated from the
+composer's top-level structural keys -- so `--update` replaces `ptr_args[i].ptr`
+/ `ptr_ret.ptr` WHOLESALE, and a submitted block must be complete. Its keys:
 
-- **`scalar`** -- `false`: this is never a single pointee, only `array` or `string` |
-  `true`: this may be a single pointee. May co-exist with `array`; mutually
-  exclusive with `string`.
-- **`array`** -- `null`: this may never be an array, only a single pointee or a string
-  | `{by_val: true}` (buffer of inline
+- **`scalar`** -- Is there any execution path where this pointer references a
+  SINGLE pointee? If not, `null`; otherwise `{by_val: true}` (points at one inline
+  value -- the ordinary `T*`) | `{by_ref: {owned, borrowed}}` (points at one
+  POINTER -- a `T**`, e.g. an out-param). Under `by_ref`, `owned`/`borrowed` is
+  the INNER pointee's ownership (the top-level `owned`/`borrowed` then describes
+  the OUTER slot -- for an out-param, borrowed); each is the same block as the
+  top-level below. May co-exist with `array`; mutually exclusive with `string`.
+- **`array`** -- Is there any execution path where this pointer references an array
+  of elements? If not, `null`; otherwise `{by_val: true}` (buffer of inline
   values) | `{by_ref: {owned, borrowed}}` (buffer of element pointers -- a
   container). Under `by_ref`, `owned`/`borrowed` is the ELEMENT ownership, and
   EACH is the same block as the top-level `owned`/`borrowed` below -- so a
   container of owned elements carries the element's release/clone bindings.
-  May co-exist with `scalar`; mutually exclusive with `string`.
-- **`string`** -- pointee is a NUL-terminated string.
-- **`owned`** -- `null`, or `{exclusive, shared, dropped_by, cloned_by}`:
-  ownership TRANSFERRED across the call (on an arg the callee takes it, on the
-  return the caller receives it). `exclusive` = sole ownership -> `CBox`;
-  `shared` = refcounted -> `CArc`.
-  - **`dropped_by`** -- the release binding: the list of routine names that may
-  free this owned pointer, or `null`. A function that frees its own arg names itself
-  (`CRYPTO_free`'s `ptr` arg -> `["CRYPTO_free"]`); a constructor's return names
-  the free the caller must use.  A list because the decision of which routine frees
-  the pointer may be decided by the caller at runtime, which signals that a Rust-native
-  representation would fork it to provide multiple `Drop` implementations that a Rust
-  caller can choose at runtime. This is the single source of "what is a destructor": a routine is a
-  `Drop` iff it is named here (exclusive owner -> `CBox::drop`; shared ->
-  `CArc::drop`/`down_ref`).
-  - **`cloned_by`** -- the mirror for `Clone`: the list of routines that produce
-  a fresh owned copy of this pointer, or `null`. Generally, any existing dup will
-  be bundled with the above drop instances to form Rust-native safe types.
-  Exclusive -> the deep-copy dup (`strdup`/`memdup` -> `CBox::clone`); shared ->
-  the `up_ref` (`CArc::clone`). 
+  May co-exist with `scalar`; mutually exclusive with `string`. `scalar.by_ref`
+  vs `array.by_ref` differ only in cardinality (one pointer vs a buffer of them).
+- **`string`** -- Is there any execution path where this pointer is a NUL-terminated string?
+  If yes, `true`; otherwise `false`.
+- **`owned`** -- `true` if ownership TRANSFERRED across the call, `false`
+  otherwise. On an arg the callee takes it, on the return the caller receives it.
 - **`borrowed`** -- `null`, or `{lifetime}`: the pointer is borrowed, bound to
   another entity's lifetime. Sources are `arg:<name>`, `arg:<name>->path`,
   `static`, or `other` -- the arg-oriented vocabulary (a struct field instead
-  borrows from `self` / a sibling field). 
+  borrows from `self` / a sibling field). Args are referenced BY NAME (the
+  composer names every arg, real or synthetic `arg<pos>`); the positional
+  `arg:<idx>` form is rejected. A transient read that doesn't outlive the call
+  borrows from its OWN arg -- `arg:<its own name>`.
+- **`lifetime`** -- ARG-ONLY (absent on `ptr_ret`, a global `ptr`, and a struct
+  field's `ptr` -- a return is produced not acted on, a field derives from its
+  field-type). Which lifecycle-primitive role THIS method plays on THIS arg; from
+  it each type's `Drop`/`Clone` is reverse-derived (the type-analyzer collects the
+  methods whose arg of that type carries the flag). Independent, several may be set
+  on one arg (a full dtor
+  is `is_dropped` + `is_disposed`).
+  - **`is_dropped`** -- `true` if the method frees the arg's own STORAGE (i.e. heap
+  allocation), `false` otherwise. Requires `owned`.
+  - **`is_disposed`** -- `true` if the method frees the storage of the arg's
+  FIELDS (a full destructor, or a teardown / cleanup that resets the fields but
+  keeps the storage), `false` otherwise.  Independent of `owned`/`borrowed` (a
+  cleanup borrows the container).
+  - **`is_cloned`** -- `null`, or `{deep, upref}`: the method produces a copy of
+    the arg. `deep` = a fresh allocation -> `Clone for CBox` on a type with no
+    refcount, else a plain method (`CArc`'s `Clone` is its up_ref). `upref` = a
+    refcount bump -> `Clone for CArc`. Both MAY be set: a body that branches
+    between the two, or a `void *` whose concrete element decides at
+    runtime. Requires `borrowed` (it reads the source to copy it).
 - **`nullable`** -- may be NULL -> Rust `Option<...>`.
 - **`mutable`** -- null/true/false: (i) `const=true` forces `false`; (ii)
   otherwise the agent decides by body inspection -- does the callee write through
@@ -172,30 +187,32 @@ lives in a struct or crosses a call:
   e.g. an external symbol).
 - **`note`** -- free-form; justify the above, highlight gaps and corner cases if any.
 
-`owned` and `borrowed` MAY both be non-null -- runtime-conditional dual ownership
-(owned on one path, borrowed on another); likewise `owned.exclusive`+`.shared`
-and `array.by_ref.owned`+`.borrowed`. A pointer that is neither owned nor
-borrowed is a transient read the callee does not retain. The judgement is a fact
-about the C code, uniform for every symbol: it does not depend on port/wrap
-scope, nor on the Rust representation the pointer eventually gets.
+`owned` and `borrowed` MAY both be set -- runtime-conditional dual ownership
+(owned on one path, borrowed on another); likewise, `array.by_ref.owned`+`.borrowed`.
 
-**Invariants** (enforced on `--update`): `array` is null | exactly one of
-`{by_val, by_ref}`; `string` XOR (`array` | `scalar`); a borrowed pointer needs a lifetime;
-`exclusive`/`shared` only under `owned`; `const`-in-type implies `mutable != true`;
-`ptr_ret` only on a pointer-returning symbol.
+**Invariants** (enforced on `--update`): a `ptr` block replaces the record's
+prior block wholesale, so it must be complete -- `scalar` and `array` are each
+null | exactly one of `{by_val, by_ref}`; `string` XOR (`array` | `scalar`);
+`string`, `owned`, and `is_cloned.deep`/`.upref` are explicit booleans (never
+null); a pointer sets at least one of `{scalar, array, string}` (the floor); a
+pointer is either owned, or borrowed, or both (never none) -- as is each `by_ref`
+element; a borrowed pointer needs a lifetime, and an `arg:<name>` lifetime names
+a real arg BY NAME; `is_dropped` implies `owned`; `is_cloned` implies `borrowed`;
+`const`-in-type implies `mutable != true`; `ptr_ret` only on a pointer-returning
+symbol.
 
 ## ptr / locked_by (globals)
 
 A `global_*` entry has no call boundary, so it carries no `ptr_args`/`ptr_ret`.
 Two agent-filled slots take their place (both `null` in the composer skeleton):
 
-- **`ptr`** -- `null`, or the SAME ownership block as a `ptr_args` record
-  (`array`, `string`, `owned`, `borrowed`, `nullable`, `mutable`, `note`), for a
-  global that is itself a pointer -- so a global pointer is described like any
-  other. A global is `'static`, so `owned.dropped_by`/`cloned_by` are normally
-  `null` (nothing frees or clones a process-lifetime global); the useful facets
-  are `const`/`mutable`, `borrowed` (typically `{lifetime: static}`), and the
-  buffer shape. `null` for a non-pointer global (a scalar or struct value).
+- **`ptr`** -- `null`, or the SAME ownership block a `ptr_args`/`ptr_ret` record
+  nests under its `ptr` (`scalar`, `array`, `string`, `owned`, `borrowed`,
+  `nullable`, `mutable`, `note`), for a global that stores a pointer (i.e. the
+  pointee is allocated on the heap, or is another global).  Here the
+  entry's `ptr` IS that block directly (a global has no `position`/`type`/`const`
+  to un-mix, since those live at the entry level), so it too is replaced
+  wholesale. `null` for a non-pointer global (a scalar or a by-value struct).
 - **`locked_by`** -- `null`, or `{lock, lock_op, unlock_op}`: the concurrency
   binding on ANY global (pointer or not) accessed under a lock.
   - **`lock`** -- name of the lock object (a global or field) that guards the slot.

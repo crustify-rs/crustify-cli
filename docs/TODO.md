@@ -328,6 +328,51 @@ Tracker: none.
 
 ---
 
+## 2026-07-17 - `used_by` / `depends_on` are complete only within the extracted build config + call graph
+
+The schemas claim `used_by` (and by symmetry `depends_on`) is *"COMPLETE:
+every consumer tree-wide"* (`docs/schemas/{syms,types}.md`). It is complete only
+**within the one preprocessor configuration the CodeQL DB was built under, and
+only for statically-resolved call edges.** Two structural blind spots:
+
+**(a) Conditional compilation.** A call inside an inactive `#ifdef` branch does
+not exist in the compiled TU CodeQL extracts, so the edge is absent from both
+`used_by` and `depends_on` (symmetric -- so it is NOT a composer bug; the
+composer builds both directions from the same CodeQL call-edge relation).
+Concrete: `EVP_PKEY_generate -> evp_pkey_free_legacy` (`crypto/evp/pmeth_gn.c`,
+inside `#if !defined(FIPS_MODULE) && !defined(OPENSSL_NO_DEPRECATED_3_6)`) is
+missing from `evp_pkey_free_legacy.used_by.call`, while its *unconditional*
+caller `evp_pkey_free_it` IS captured -- proof the query works and the config is
+the cause.
+
+**(b) Vtable / function-pointer dispatch.** An indirect call through a method
+table produces no static call edge, so `used_by.call` is empty for vtable-only
+targets (`dtls1_free`/`tls1_free`/`ossl_quic_free`/`ossl_ssl_connection_free` via
+`SSL_free`'s `s->method->ssl_free`; `dtls1_clear` via `SSL_clear`'s
+`s->method->ssl_reset`). Empty `used_by` is then AMBIGUOUS -- it can mean
+"dtor-only" (a `ssl_free` slot) or "reset" (a `ssl_clear` slot). Same root as the
+`SSL_clear` discovery blind spot: `--calling` reachability can't cross a fn
+pointer either.
+
+**Why it matters.** The lifecycle subsumed-vs-standalone discriminant is
+caller-based: "reached only via the dtor -> fold into `Drop`; reached from
+re-init too -> a genuine manual `is_disposed`." An incomplete `used_by` (a) can
+hide a re-init caller and wrongly mark a real disposer subsumed -- silently
+dropping a manual method a FIPS/deprecated build needs; (b) can't disambiguate
+the vtable case at all. It also under-reports the wrap surface (dispatched
+teardowns invisible).
+
+**Fixes.** (1) Resolve `SSL_METHOD`/`EVP_*`-style method-table assignments in a
+CodeQL query and inject the indirect edges -- closes (b) AND recovers
+vtable-dispatched lifecycle ops for discovery. (2) For cross-config completeness,
+extract DBs under the relevant `#ifdef` variants (min: FIPS on/off) and union the
+edge relations -- closes (a). (3) Soften the "COMPLETE tree-wide" wording in both
+schema docs to "complete within the extracted build configuration + static call
+graph." Pairs with the 2026-06-04 macro-expansion-provenance item (same
+CodeQL-single-view family) and the 2026-06-16 inline-fn-ptr callback item.
+
+---
+
 **Parked / deferred** -- design notes and known gaps, older; each keeps its
 surfaced-date tag.
 

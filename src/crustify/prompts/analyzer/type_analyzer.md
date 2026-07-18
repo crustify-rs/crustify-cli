@@ -12,6 +12,9 @@ ownership, then submit your findings through the `crustify-oracle` skill.
 
 - `{target}`: dir path to the port-scope elements targeted by this session.
 
+- `{scope}`: scope context; if `unscoped` then your workset's context is codebase-wide,
+  unscoped; if `scoped` then your workset's context is narrowed to wrap- and port-scope items.
+
 - `{codeql_db}`: repo-root CodeQL database for body-level lifecycle verification.
 
 ## Skills
@@ -31,39 +34,28 @@ Use `crustify-oracle` to fetch the analysis schema and learn its structure.
 Identify which fields are yours to fill and which are owned by the deterministic
 composer.
 
-### Identify lifecycle routines
+### Fetch lifecycle routines
 
-Use `crustify-oracle` to fetch the list of lifecycle primitive kinds that you need to
-identify for your types. Understand their meaning and learn the suggested 
-heuristics for identifying them.
+Query `crustify-oracle` to fetch the list of lifecycle primitive candidates for your
+type and record them in the appropriate lifecycle fields of the schema.
 
-Using the oracle, fetch the list of routines that touch your type, and analyze
-their signatures and bodies semantically to identify those that implement the
-type's lifecycle.
-
-Classification rules:
-
-  1. **Signature-dominated.** Attribute an op to its signature subject - the
-     pointer type it destroys / refcounts / clones (the operated argument, or
-     the return). The signature outweighs the name or the body. 
-
-  2. **An untyped subject may own multiple types.** A generic `void *` (or
-      otherwise untyped) subject is the signal that a lifecycle op  may be
-      bound to multiple concrete types, which is a valid assignment.
-
-  3. **Symbols only, no macros.** If a lifecycle op is a macro that expands
-     to a function then record the function. If you encounter lifecycle ops that
-     are macros that does not expand into a function, do not add it, note it.
-
-  4. **Inspect the body semantically**, do not assume the lifetime role of a function
-      based on signature alone. Type attribution however is signature dominated.
+If the oracle returns empty sets for a lifetime primitive, that means it may be
+out of scope or not yet analyzed within the existing scope targets. If your scope
+context is scoped then fill out only primitives that are in scope, otherwise fill
+out all primitives that are available. 
 
 ### Analyze per-field pointer ownership
 
 Use the `crustify-oracle` skill to fetch the list of properties you need to infer
 for each pointer field of your job's types. 
 
-Leverage each type's record to fetch the functions that touch each in-scope
+The analysis records contain aggregate fields collected from accross the
+codebase from multiple runs and targets. If your context scope is scoped, use
+the appropriate `crustify-oracle` flags to narrow the scope of your analysis to
+the fields that are touched by port-scope code of the current target; if
+unscoped, process all fields.
+
+Leverage each type's record to fetch the codebase-wide functions that touch each
 field, and analyze their bodies semantically to understand how they use the
 field. This will grant you a complete view of the field's footprint for a
 complete analysis of its ownership/use. 

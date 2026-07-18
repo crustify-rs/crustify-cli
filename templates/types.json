@@ -28,6 +28,9 @@
         ],
         "shared": []
       },
+      "fields_disposed_by": [
+        "statem_secret_free"
+      ],
       "casted": {
         "to": [],
         "from": []
@@ -57,23 +60,14 @@
           "type": "unsigned char *",
           "ref": "pointer",
           "ptr": {
-            "scalar": false,
+            "scalar": null,
             "array": {
               "by_val": true
             },
             "string": false,
             "owned": {
               "exclusive": true,
-              "shared": false,
-              "dropped_by": [
-                "CRYPTO_clear_free"
-              ],
-              "cloned_by": [
-                "CRYPTO_memdup"
-              ],
-              "disposed_in": [
-                "statem_secret_free"
-              ]
+              "shared": false
             },
             "borrowed": null,
             "nullable": true,
@@ -115,6 +109,9 @@
           "SSL_SESSION_up_ref"
         ]
       },
+      "fields_disposed_by": [
+        "SSL_SESSION_free"
+      ],
       "casted": {
         "to": [],
         "from": []
@@ -158,21 +155,12 @@
           "type": "X509 *",
           "ref": "pointer",
           "ptr": {
-            "scalar": true,
+            "scalar": {"by_val": true},
             "array": null,
             "string": false,
             "owned": {
               "exclusive": false,
-              "shared": true,
-              "dropped_by": [
-                "X509_free"
-              ],
-              "cloned_by": [
-                "X509_up_ref"
-              ],
-              "disposed_in": [
-                "SSL_SESSION_free"
-              ]
+              "shared": true
             },
             "borrowed": null,
             "nullable": true,
@@ -200,6 +188,7 @@
         "exclusive": [],
         "shared": []
       },
+      "fields_disposed_by": [],
       "casted": {
         "to": [],
         "from": []

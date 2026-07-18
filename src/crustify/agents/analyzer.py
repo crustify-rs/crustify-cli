@@ -163,8 +163,14 @@ class CrustifyTypeAnalyzer(CrustifyAgent):
         selection: str | None = None,
         stage: str | None = None,
         stage_suffix: str | None = None,
+        unscoped: bool = False,
     ) -> None:
         super().__init__(target)
+        # Scope CONTEXT for the prompt's `{scope}` input: mirrors whether the
+        # caller passed --unscoped. Not a filter — the composer has already
+        # gated emission; this only tells the agent how wide its workset's
+        # context is (codebase-wide vs wrap-/port-scope).
+        self._unscoped = bool(unscoped)
         # Per-dir contract input. Empty when this is the whole-tree buffer
         # synthesis pass; that pass uses `selection` below and the agent
         # walks the analysis tree itself per the synthesis prompt's
@@ -194,6 +200,7 @@ class CrustifyTypeAnalyzer(CrustifyAgent):
             "repo_root":            str(self.repo_root),
             "manifests":            json.dumps(self._manifests, indent=2),
             "codeql_db":            str(root_dir / "codeql" / "db"),
+            "scope":                "unscoped" if self._unscoped else "scoped",
             # buffer_analyzer only:
             "selection":            self._selection,
             "alloc_doc":            alloc_json,    # buffer_analyzer

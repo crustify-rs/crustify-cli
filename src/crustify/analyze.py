@@ -266,9 +266,14 @@ def _build_chains(
 
 def _run_chain(
     target: Path, agent_cls, jobs: list[tuple[str, list[dict]]],
+    agent_kwargs: dict | None = None,
 ) -> list[tuple[str, BaseException]]:
     """Run a chain's jobs sequentially. Continue-then-report on
     per-job failures so one bad entry doesn't strand its siblings.
+
+    ``agent_kwargs`` are extra per-subject constructor kwargs (e.g. the
+    type analyzer's ``unscoped``); positional so this stays usable from
+    ``ThreadPoolExecutor.submit``.
     """
     failures: list[tuple[str, BaseException]] = []
     for stage_suffix, manifests in jobs:
@@ -277,6 +282,7 @@ def _run_chain(
                 target,
                 manifests=manifests,
                 stage_suffix=stage_suffix,
+                **(agent_kwargs or {}),
             ).run()
         except BaseException as exc:  # noqa: BLE001 — continue-then-report
             failures.append((stage_suffix, exc))
@@ -416,11 +422,20 @@ def _run_subject_manifests_list(
 
     # 4. Run chains. Each chain runs sequentially within itself;
     #    chains run in parallel up to ``parallel_max``.
+    #    The type analyzer's prompt takes a `{scope}` context: `unscoped` when
+    #    the caller passed --unscoped (workset context is codebase-wide),
+    #    `scoped` otherwise (narrowed to wrap-/port-scope items). The symbol
+    #    analyzer's prompt has no such input, so it gets no such kwarg.
+    agent_kwargs: dict = {}
+    if subject == "types":
+        agent_kwargs["unscoped"] = bool(getattr(filter_spec, "unscoped", False))
+
     failures: list[tuple[str, BaseException]] = []
     if parallel and len(chains) > 1:
         with ThreadPoolExecutor(max_workers=parallel_max) as ex:
             futures = {
-                ex.submit(_run_chain, target, agent_cls, jobs): (idx, len(jobs))
+                ex.submit(_run_chain, target, agent_cls, jobs, agent_kwargs):
+                    (idx, len(jobs))
                 for idx, jobs in enumerate(chains)
             }
             for fut in as_completed(futures):
@@ -449,7 +464,7 @@ def _run_subject_manifests_list(
     else:
         # Serial: walk chains in deterministic order, jobs sequentially.
         for chain_idx, jobs in enumerate(chains):
-            chain_failures = _run_chain(target, agent_cls, jobs)
+            chain_failures = _run_chain(target, agent_cls, jobs, agent_kwargs)
             for sub_suffix, sub_exc in chain_failures:
                 failures.append((sub_suffix, sub_exc))
                 print(
@@ -494,6 +509,67 @@ def analyze_scope(
         _scope(target)
     else:
         _wrap_scope(target)
+
+
+#: `analyze symbols --lifetime-for` SPECs that name an untyped tier rather than
+#: a struct tag -- these have no types.json entry to compose.
+LIFETIME_SPEC_KEYWORDS = ("void", "string")
+
+
+def analyze_lifetime_for(
+    target: Path, spec: str, *, compose_only: bool = False,
+) -> None:
+    """Lifetime-discovery mode: hand ONE symbol-analyzer agent the job of
+    identifying `spec`'s lifecycle primitives.
+
+    Unlike the normal stages there is no composed worklist -- the point of this
+    mode is that we do NOT know which symbols are primitives yet. The agent
+    discovers them itself (`query symbols --taking <spec> --calling ... --hops
+    N`), triages the pool down to the routines that actually drop / dispose /
+    clone `spec`, analyzes only those, and submits their arg-level `lifetime`
+    flags. `query symbols --lifetime-for <spec>` then reverse-derives the type's
+    Drop/dispose/Clone from what landed.
+
+    So the agent's worklist carries a MODE MARKER instead of entries:
+    ``[{"lifetime_for": "<spec>"}]``. `spec` is a struct tag / typedef, or the
+    `void` / `string` keyword.
+
+    For a real type we first compose its types.json entry (the discovery query
+    resolves the tag's typedef aliases through it, and the type record is what
+    ultimately receives the reverse-derived roles). The `void` / `string` tiers
+    are untyped and have no entry to compose.
+
+    The symbol tree itself is NOT re-composed: it is the discovery surface, and
+    the agent reads it through the oracle. Compose it first (e.g. `analyze
+    symbols --all --unscoped --compose-only`) so out-of-scope primitives are
+    visible -- scope gates emission, so an unemitted primitive is unfindable.
+
+    Tiers are staged: run `void` first, then `string`, then each `<tag>` -- a
+    tier's `--calling` filter names the primitives the previous tier established.
+    """
+    from compose.filter_spec import FilterSpec
+
+    if spec not in LIFETIME_SPEC_KEYWORDS:
+        # Compose the type entry so its aliases resolve and it has a record to
+        # receive the roles. Types-side compose only; no agent.
+        analyze_types(
+            target,
+            filter_spec=FilterSpec(names=[spec], scope_json_path=None),
+            compose_only=True,
+        )
+    if compose_only:
+        print(f"[crustify analyze symbols] --lifetime-for {spec}: "
+              f"--compose-only, no agent spawned.")
+        return
+    failures = _run_chain(
+        target, CrustifySymbolAnalyzer,
+        [(f"lifetime_for__{_slug_tag(spec)}", [{"lifetime_for": spec}])],
+    )
+    if failures:
+        raise SystemExit(
+            f"analyze symbols --lifetime-for {spec}: agent failed: "
+            f"{failures[0][1]}"
+        )
 
 
 def analyze_symbols(

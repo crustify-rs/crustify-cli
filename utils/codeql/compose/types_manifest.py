@@ -126,9 +126,11 @@ def _null_ptr_skeleton() -> dict[str, Any]:
     """Agent-fillable pointer-ownership block, emitted with null/false
     placeholders by the composer."""
     return {
-        # scalar: single-object capability (-> COwn/CBox). Co-exists with `array`
-        # (a generic allocator may serve BOTH a singleton and a buffer); a pointer
-        # must be at least one of {scalar, array, string}.
+        # scalar: ONE pointee. null | {by_val: true} (points at a single inline
+        # value -> COwn/CBox) | {by_ref: {owned, borrowed}} (points at a single
+        # pointer -- a `T**` out-param; owned/borrowed = the INNER pointee's).
+        # Co-exists with `array` (a generic allocator may serve BOTH a singleton
+        # and a buffer); a pointer must be at least one of {scalar, array, string}.
         "scalar": None,
         # array: null (single pointee) | {by_val: true} (buffer of inline values)
         # | {by_ref: {owned, borrowed}} (buffer of element pointers -- a
@@ -137,8 +139,8 @@ def _null_ptr_skeleton() -> dict[str, Any]:
         "array": None,
         "string": None,
         # owned/borrowed: the pointer's own (buffer/pointee) ownership. `owned`
-        # nests {exclusive, shared} (the owned-mode); `borrowed` nests {lifetime}.
-        # Both may be non-null for runtime-conditional dual ownership.
+        # is a bool; `borrowed` nests {lifetime}. Both may be set for
+        # runtime-conditional dual ownership.
         "owned": None,
         "borrowed": None,
         "nullable": None,
@@ -448,17 +450,20 @@ def _wrap_port_reachable(
 
 def _lifecycle_skeleton() -> dict[str, Any]:
     # No `ops` list: a concrete type's method surface is DERIVED (lifecycle only)
-    # via scope.type_method_syms. `dropped_by`/`cloned_by` are TOP-LEVEL type
-    # fields (no `lifetime` wrapper), each `{exclusive, shared}` of fn lists:
-    #   dropped_by.exclusive = plain `*_free`(s) (solely-owned heap header +
-    #     fields -> CBox); dropped_by.shared = refcount-decrementing free
-    #     (pairs with cloned_by.shared up_ref -> CArc).
-    #   cloned_by.exclusive = deep-copy `dup`(s); cloned_by.shared = up_ref(s).
-    # The old `drop.fields` dispose role is now per-field (`owned.disposed_in`).
-    # See docs/schemas/types.md (dropped_by / cloned_by).
+    # via scope.type_method_syms. `dropped_by`/`cloned_by`/`fields_disposed_by`
+    # are TOP-LEVEL type fields (no `lifetime` wrapper):
+    #   dropped_by = a flat list of this type's destructors.
+    #   cloned_by.deep = duplicator(s) that produce a fresh allocation;
+    #     cloned_by.upref = refcount bump(s). A refcounted type takes its `Clone`
+    #     from the upref (-> CArc) and its deep dups stay plain methods; a type
+    #     with no refcount takes `Clone` from the deep duplicator (-> CBox).
+    #   fields_disposed_by = a flat list of this type's own methods that dispose
+    #     its fields.
+    # See docs/schemas/types.md (dropped_by / cloned_by / fields_disposed_by).
     return {
-        "dropped_by": {"exclusive": [], "shared": []},
-        "cloned_by": {"exclusive": [], "shared": []},
+        "dropped_by": [],
+        "cloned_by": {"deep": [], "upref": []},
+        "fields_disposed_by": [],
     }
 
 
