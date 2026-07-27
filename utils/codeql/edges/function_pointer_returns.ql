@@ -44,31 +44,55 @@ string pathOf(File f) {
   else result = f.getAbsolutePath()
 }
 
+/** Holds if a pointer level is reachable from `t` through qualifiers/typedefs. */
+predicate reachesPointer(Type t) {
+  t instanceof PointerType
+  or
+  reachesPointer(t.(SpecifiedType).getBaseType())
+  or
+  reachesPointer(t.(TypedefType).getBaseType())
+}
+
+/** A typedef whose unwrap chain reaches a `RoutineType` — terminal for the
+ *  pointer walk, so the reported identity is the typedef name. */
+predicate isCallbackTypedef(Type t) { t instanceof TypedefType and exists(routineOf(t)) }
+
 /**
- * Walk through `PointerType` levels and outer-`SpecifiedType`
- * qualifier wrappers (e.g. `void *__restrict__`). The outer
- * SpecifiedType wraps the pointer, not the pointee, and must be
- * stripped to avoid stopping early. Inner SpecifiedType (on the
- * pointee, like `const T *`) is preserved so consumers'
- * `.isConst()` check stays correct. See the matching helpers in
- * `function_pointer_args.ql` for the full rationale.
+ * Pointer indirection count, seeing THROUGH pointer typedefs — mirrors
+ * `edges/function_pointer_args.ql`. A return type that is itself a pointer
+ * typedef (`SSL_verify_cb SSL_CTX_get_verify_callback(...)`) used to score 0
+ * and produce no `ptr_ret` record at all. A typedef naming a NON-pointer
+ * (`typedef struct ssl_st SSL;`) is not unwrapped, so `SSL *` still reports
+ * pointee `SSL`.
  */
 int pointerDepth(Type t) {
-  if t instanceof PointerType
-  then result = 1 + pointerDepth(t.(PointerType).getBaseType())
-  else if t instanceof SpecifiedType and
-       t.(SpecifiedType).getBaseType() instanceof PointerType
-  then result = pointerDepth(t.(SpecifiedType).getBaseType())
-  else result = 0
+  if isCallbackTypedef(t)
+  then result = 1
+  else
+    if t instanceof PointerType
+    then result = 1 + pointerDepth(t.(PointerType).getBaseType())
+    else
+      if t instanceof SpecifiedType and reachesPointer(t.(SpecifiedType).getBaseType())
+      then result = pointerDepth(t.(SpecifiedType).getBaseType())
+      else
+        if t instanceof TypedefType and reachesPointer(t.(TypedefType).getBaseType())
+        then result = pointerDepth(t.(TypedefType).getBaseType())
+        else result = 0
 }
 
 Type pointerInner(Type t) {
-  if t instanceof PointerType
-  then result = pointerInner(t.(PointerType).getBaseType())
-  else if t instanceof SpecifiedType and
-       t.(SpecifiedType).getBaseType() instanceof PointerType
-  then result = pointerInner(t.(SpecifiedType).getBaseType())
-  else result = t
+  if isCallbackTypedef(t)
+  then result = t
+  else
+    if t instanceof PointerType
+    then result = pointerInner(t.(PointerType).getBaseType())
+    else
+      if t instanceof SpecifiedType and reachesPointer(t.(SpecifiedType).getBaseType())
+      then result = pointerInner(t.(SpecifiedType).getBaseType())
+      else
+        if t instanceof TypedefType and reachesPointer(t.(TypedefType).getBaseType())
+        then result = pointerInner(t.(TypedefType).getBaseType())
+        else result = t
 }
 
 string pointeeName(Type inner) {

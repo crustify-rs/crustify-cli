@@ -22,10 +22,20 @@ Relationships come straight from the analysis tree:
                       the ambiguous bidirectional cast relation resolves to a
                       correct-direction ordering edge without manufacturing an
                       SCC.
-  - **symbol → type / symbol**  port functions/macros use body+signature
-                      ``depends_on``; wrap functions use a signature-only
-                      ``depends_on``; ``ptr_args``/``ptr_ret`` types fold in as
-                      the fallback for symbols without one.
+  - **symbol → type / symbol**  every emitted symbol carries a codebase-wide
+                      ``depends_on`` (the composer applies no port/wrap shape
+                      fork); ``ptr_args``/``ptr_ret`` types fold in as the
+                      fallback for symbols without one.
+
+**Callbacks are symbols, not types.** A function-pointer typedef is a
+signature — it carries ``ptr_args``/``ptr_ret``, not ``fields[]`` — so it mints
+an ordinary ``SymNode`` keyed ``(name, canonical-decl)`` like any other
+declaration-only symbol, and gets no special handling here: consumers reach it
+through their own ``depends_on.syms``, exactly as they reach a direct callee.
+The composer (``syms_manifest._callback_deps``) puts it there, from both the
+signature relation and the indirect-call relation. The one place a callback is
+still resolved by name is a struct FIELD of function-pointer type, which the
+type-side ``fields[].type`` string cannot route on its own (see ``cb_keys``).
 
 **Ops are NOT folded into their types.** Every op (ctor/dtor/up_ref/clone/
 locking/method) is its own symbol node; its dependency on its type falls out
@@ -87,7 +97,7 @@ def _sym_filekey(defined_in: Any, declared_in: Any) -> str | None:
 class TypeNode:
     __slots__ = ("tag", "kind", "defined_in", "declared_in",
                  "ctype_refs", "ops", "ctors", "drop_syms", "dep_types", "dep_syms",
-                 "used_by_call", "cast_to", "cast_from", "elem_refs", "nfields")
+                 "cast_to", "cast_from", "elem_refs", "nfields")
 
     def __init__(self, tag: str) -> None:
         self.tag = tag
@@ -100,7 +110,6 @@ class TypeNode:
         self.drop_syms: set[str] = set()    # dtor storage/fields fn names (sig-fold only)
         self.dep_types: set[str] = set()    # resolved canonical tags
         self.dep_syms: set[str] = set()     # resolved free-symbol names
-        self.used_by_call: set[str] = set()  # callback: consumer fn names (used_by.call)
         self.cast_to: set[str] = set()      # casted.to tags (this -> T)
         self.cast_from: set[str] = set()    # casted.from tags (T -> this)
         self.elem_refs: set[str] = set()    # array cluster: raw elem type strings
@@ -282,31 +291,6 @@ def _collect(analysis_root: Path):
             if not _is_real(e, "name"):
                 continue
             name = e["name"]
-            if e.get("kind") == "callback":
-                # A callback is now a SYMBOL (function-pointer typedef in
-                # syms.json), but its DAG role is type-like: its wrapper is a
-                # Rust `extern "C" fn` type that consumers order AFTER. So we
-                # route it into the TYPE node set (keyed by its tag) and keep
-                # the type-side callback edge logic. Its forward deps live in
-                # `depends_on.types` (arg/return types), not `fields[]`; fold
-                # them into ctype_refs so it layers after those wrappers. Its
-                # `used_by.{call,ref}` feeds the reverse edge in `_build_edges`
-                # (consumers lose the callback identity in their own ptr_args —
-                # it collapses to "(routine)" — so the edge can only come here).
-                tn = types.get(name) or types.setdefault(name, TypeNode(name))
-                if tn.kind is None:
-                    tn.kind = "callback"
-                if tn.defined_in is None:
-                    tn.defined_in = e.get("defined_in")
-                if tn.declared_in is None:
-                    tn.declared_in = _canonical_decl(e.get("declared_in"))
-                for d in (e.get("depends_on") or {}).get("types") or []:
-                    if d.get("type"):
-                        tn.ctype_refs.add(d["type"])
-                ub = e.get("used_by") or {}
-                tn.used_by_call |= {c for c in ub.get("call") or [] if c}
-                tn.used_by_call |= {c for c in ub.get("ref") or [] if c}
-                continue
             key: SymKey = (name, _sym_filekey(e.get("defined_in"),
                                               e.get("declared_in")))
             n = syms.get(key) or syms.setdefault(key, SymNode(name, key[1]))
@@ -387,23 +371,40 @@ def _build_edges(types, syms, amap):
     def classify_ext(name: str) -> str:
         return "builtin" if name.startswith("__builtin") else "external"
 
-    def res_type_tag(tag: str, into: set[str]):
+    # Callback name -> its symbol key, for resolving a struct FIELD whose type
+    # is a function-pointer typedef (`OSSL_FUNC_cipher_update_fn *cupdate;`).
+    # `_resolve_ctype` cannot: a callback is a symbol, so it is neither in
+    # `types` nor in the type-alias map, and the ref would resolve to None and
+    # be dropped. This is the type-side counterpart of the composer's
+    # `_callback_deps` — on the symbol side the composer already emits the
+    # callback under `depends_on.syms`, so nothing here special-cases it.
+    cb_keys: dict[str, SymKey] = {
+        key[0]: key for key, n in syms.items() if n.kind == "callback"
+    }
+
+    def res_type_tag(tag: str, dt: set[str]):
         """A depends_on.types tag (already canonical) -> node."""
         if tag in types:
-            into.add(tag)
+            dt.add(tag)
         elif tag:
             ext_types.add(tag)
-            into.add(tag)
+            dt.add(tag)
 
-    def res_ctype(ref: str, into: set[str]):
+    def res_ctype(ref: str, dt: set[str], ds: set[SymKey] | None = None):
+        # Checked before `_resolve_ctype` — see `cb_keys`.
+        if ds is not None:
+            cb = cb_keys.get(ref) or cb_keys.get(_base_type_name(ref) or "")
+            if cb is not None:
+                ds.add(cb)
+                return
         t = _resolve_ctype(ref, amap, types)
         if t is None:
             return
         if t in types:
-            into.add(t)
+            dt.add(t)
         else:
             ext_types.add(t)
-            into.add(t)
+            dt.add(t)
 
     def res_sym(depkey: SymKey, dt: set[str], ds: set[SymKey]):
         name = depkey[0]
@@ -438,7 +439,12 @@ def _build_edges(types, syms, amap):
     for tag, n in types.items():
         for ref in n.ctype_refs:                     # field refs (hard layout)
             t = _resolve_ctype(ref, amap, types)
-            res_ctype(ref, n.dep_types)
+            # `n.dep_syms` passed so a field of function-pointer-typedef type
+            # lands on the callback's SYMBOL node. This edge is load-bearing:
+            # a function that invokes a callback it reached through a struct
+            # field never names the typedef in its own signature, so its
+            # ordering runs struct -> callback, and it depends on the struct.
+            res_ctype(ref, n.dep_types, n.dep_syms)
             if t in types and t != tag:
                 wedge[(tag, t)] += 1
         for opname in (set(n.ops) | set(n.ctors) | n.drop_syms):   # op/ctor/dtor SIGNATURE refs
@@ -484,15 +490,13 @@ def _build_edges(types, syms, amap):
                 wedge[(t, tag)] += 1
                 forced_back.append((tag, t))      # cluster -> elem (fallback)
 
-    # Symbols (ALL — ops included, never folded). Consume whatever dependency
-    # signal each entry carries, which now differs by scope:
-    #   - port functions/macros → body+signature `depends_on` (types + syms)
-    #   - wrap functions        → signature-only `depends_on` (types, syms:[])
-    #   - any symbol            → `ptr_args`/`ptr_ret` signature pointer types
+    # Symbols (ALL — ops and callbacks included, never folded). Two sources:
+    #   - `depends_on` (types + syms) — codebase-wide, no port/wrap shape fork
+    #   - `ptr_args`/`ptr_ret` signature pointer types
     # `depends_on` is authoritative when present (it already unions the
-    # signature types, and for wrap captures the by-value + callback identity
-    # that `ptr_args` collapses to `(routine)`). The `sig_type_refs` fold-in is
-    # then redundant, but it is the SOLE source for symbols carrying no
+    # signature types, and carries the by-value + callback identity that
+    # `ptr_args` collapses to `(routine)`). The `sig_type_refs` fold-in is then
+    # redundant, but it is the SOLE source for symbols carrying no
     # `depends_on` at all (function-like macros with no typed signature).
     # Unioning all sources can only add a genuine edge, never drop one.
     for key, n in syms.items():
@@ -503,23 +507,8 @@ def _build_edges(types, syms, amap):
         for dk in n.dep_on_syms:
             res_sym(dk, n.dep_types, n.dep_syms)
         for ref in n.sig_type_refs:
-            res_ctype(ref, n.dep_types)
+            res_ctype(ref, n.dep_types, n.dep_syms)
         n.dep_syms.discard(key)          # no self-edge
-
-    # Callback consumers: a function taking a callback param has only "(routine)"
-    # in its ptr_args (the typedef identity is gone), so the consumer→callback
-    # edge can't be recovered from the function side — inject it from the
-    # callback's `used_by.call`. Each consumer then depends on the callback, so
-    # the callback wrapper is ordered before its consumers' wrappers.
-    for tag, n in types.items():
-        if n.kind != "callback":
-            continue
-        for cname in n.used_by_call:
-            if cname in types:           # name collides with a type tag → skip
-                continue
-            for ckey in syms_by_name.get(cname, ()):
-                if ckey[0] != tag:       # no self-edge
-                    syms[ckey].dep_types.add(tag)
 
     return ext_syms, ext_types, dict(wedge), forced_back
 

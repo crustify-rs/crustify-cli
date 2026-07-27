@@ -83,6 +83,87 @@ def _is_scalar_typedef(type_name: str, by_name: dict[str, dict]) -> bool:
     return terminal.get("unaliased_kind", "") == "primitive"
 
 
+def _is_callback_typedef(type_name: str, by_name: dict[str, dict]) -> bool:
+    """True for a function-pointer typedef (`unaliased_kind == "callback"`,
+    stamped deterministically by `entities/types.ql`).
+
+    A callback is a SIGNATURE, not an aggregate: it carries `ptr_args`/
+    `ptr_ret` and is emitted as its own `kind:"callback"` symbol entry. So a
+    consumer's dependency on one belongs in `depends_on.syms`, alongside its
+    callees — NOT in `depends_on.types`, which is the aggregate-layout surface.
+    `_callback_deps` routes it there.
+
+    Walks the alias chain (same shape as `_is_scalar_typedef`), because
+    `unaliased_kind` is stamped only on the row that ENDS the chain: for
+    `typedef int (*SSL_verify_cb)(...)` the base reaches no named `UserType`,
+    so `aliases` is "" and the kind lands as "callback"; but for a chained
+    `typedef SSL_verify_cb my_cb;` the base IS a named `UserType`, so `my_cb`
+    carries `aliases="SSL_verify_cb"` and an EMPTY `unaliased_kind`. A
+    direct-row check would miss `my_cb`. The CSV layer already treats both as
+    callbacks — `callback_call_sites.ql` and `callback_signature_type_uses.ql`
+    both use a `routineOf` that walks `TypedefType` — so `compose` gates
+    callback enumeration on this same predicate, keeping filter and
+    enumeration in agreement: every tag dropped from `.types` here has a
+    callback entry to point at.
+    """
+    row = by_name.get(type_name)
+    if row is None or row["kind"] != "typedef":
+        return False
+    terminal = scope.resolve_typedef(type_name, by_name)
+    if terminal is None or terminal["kind"] != "typedef":
+        return False
+    return terminal.get("unaliased_kind", "") == "callback"
+
+
+def _callback_deps(
+    reach: Reach,
+    name: str,
+    def_file: str,
+    by_name: dict[str, dict],
+    *,
+    sig_types: list[tuple[str, str, str, str]] | None = None,
+    invoked: bool = True,
+) -> list[dict[str, Any]]:
+    """The callbacks this entity depends on, as `depends_on.syms` records
+    (`{name, defined_in, declared_in}`), sorted like `_compose_dep_syms`.
+
+    Two sources, because a consumer reaches a callback two ways:
+
+      1. **Named in the signature** -- from `signature_type_uses.csv`. This
+         cannot come from `ptr_args`: `edges/function_pointer_args.ql` renders
+         a function-pointer parameter's pointee as the synthetic marker
+         `"(routine)"`, erasing which typedef it was. `signature_type_uses`
+         keeps the identity (a `TypedefType` is a `UserType`, so
+         `reachableUserType` binds it directly).
+      2. **Invoked** -- from `callback_call_sites.csv`, via
+         `reach.callbacks_invoked_by`. An indirect call through a function
+         pointer IS a call, so it belongs in `depends_on.syms` beside the
+         direct callees. This is the only source for a callback reached
+         through a STRUCT FIELD (`s->psk_server_callback(...)`): the invoker
+         names the typedef nowhere in its own record, and the owning struct's
+         `fields[]` is only the port-accessed subset. Pass `invoked=False` for
+         a callback's own entry -- a typedef invokes nothing.
+
+    `defined_in` is always null -- a callback is a header typedef with no
+    definition site -- so consumers key it by its canonical declaration,
+    exactly as they do for any other declaration-only symbol.
+    """
+    if sig_types is None:
+        sig_types = reach.types_in_signature_of(name, def_file)
+    names = {t for t, _k, _f, _p in sig_types if _is_callback_typedef(t, by_name)}
+    if invoked:
+        names |= reach.callbacks_invoked_by(name, def_file)
+    out: list[dict[str, Any]] = []
+    for cb in sorted(names):
+        row = by_name.get(cb) or {}
+        out.append({
+            "name": cb,
+            "defined_in": None,
+            "declared_in": sorted(_decls_list(row.get("decl_files", ""))),
+        })
+    return out
+
+
 def _resolve_dep_type_tag(
     type_name: str,
     by_name: dict[str, dict],
@@ -162,7 +243,17 @@ def _load_field_access_index(
     no completed `build execute` run).
     """
     import csv as _csv
-    path = csv_dir_t2 / "field_accesses.csv"
+    # `fa_with_root.csv` when present: it re-keys an access through an
+    # ANONYMOUS embedded member (`s->ext.hostname`) onto the outermost NAMED
+    # container and supplies the dotted `field_path`, so those accesses land in
+    # `depends_on.types[].fields` under the same qualified name
+    # `entities/fields.ql` puts in the parent's `fields[]`. With the flat CSV
+    # they carried `struct_name = "(unnamed …)"` and were dropped by the filter
+    # below. Falls back to the flat CSV for a pre-existing extraction.
+    path = csv_dir_t2 / "fa_with_root.csv"
+    rooted = path.is_file()
+    if not rooted:
+        path = csv_dir_t2 / "field_accesses.csv"
     if not path.exists():
         return FieldAccessIndex({}, multidef)
     by_site: dict[tuple[str, str], dict[str, list[str]]] = {}
@@ -170,8 +261,12 @@ def _load_field_access_index(
         for row in _csv.DictReader(f):
             enclosing = row.get("enclosing_name", "")
             access_file = row.get("access_file", "")
-            struct = row.get("struct_name", "")
-            field = row.get("field_name", "")
+            if rooted and row.get("root_struct_name"):
+                struct = row["root_struct_name"]
+                field = row.get("field_path") or row.get("field_name", "")
+            else:
+                struct = row.get("struct_name", "")
+                field = row.get("field_name", "")
             if not enclosing or not struct or struct.startswith("("):
                 continue
             structs = by_site.setdefault((enclosing, access_file), {})
@@ -209,6 +304,12 @@ def _compose_dep_types(
          a field. The Rust port must still name these, so they're real
          deps; emitted with an empty fields list. Empty for callbacks.
 
+    Function-pointer typedefs are excluded from all three sources: a callback
+    is signature-shaped, not aggregate-shaped, so it is emitted as a
+    `depends_on.syms` record by `_callback_deps` instead. Struct fields of
+    function-pointer type never reach here anyway — the field parser renders
+    them as the synthetic `..(*)(..)`, not as the typedef tag.
+
     No final sort — first-encounter order is preserved end-to-end so
     consumers see a deterministic, source-faithful traversal with no
     additional processing.
@@ -226,6 +327,8 @@ def _compose_dep_types(
     for type_name, _type_kind, _type_def_file, _pos in sig_types:
         if _is_scalar_typedef(type_name, by_name):
             continue
+        if _is_callback_typedef(type_name, by_name):
+            continue                       # → depends_on.syms
         tag = _resolve_dep_type_tag(type_name, by_name)
         if not tag or tag.startswith("(") or tag in seen:
             continue
@@ -252,6 +355,8 @@ def _compose_dep_types(
     for type_name, _kind, _tdf, _use in reach.types_in_body_of(name, def_file):
         if _is_scalar_typedef(type_name, by_name):
             continue
+        if _is_callback_typedef(type_name, by_name):
+            continue                       # → depends_on.syms
         tag = _resolve_dep_type_tag(type_name, by_name)
         if not tag or tag.startswith("(") or tag in seen:
             continue
@@ -380,7 +485,13 @@ def _port_additions_function(
             "ref": sorted(refs),
         },
         "depends_on": {
-            "syms": _compose_dep_syms(forward_syms, sym_index),
+            # Callees/refs, then the callback typedefs this function's
+            # signature names (a callback is signature-shaped — it belongs
+            # with the syms, not in `.types`).
+            "syms": (
+                _compose_dep_syms(forward_syms, sym_index)
+                + _callback_deps(reach, name, def_file, by_name)
+            ),
             "types": _compose_dep_types(
                 reach, name, def_file, by_name, field_access_index,
             ),
@@ -403,13 +514,64 @@ def _base_global(row: dict) -> dict[str, Any]:
     }
 
 
-def _port_additions_global(row: dict, reach: Reach) -> dict[str, Any]:
+def _port_additions_global(
+    row: dict,
+    reach: Reach,
+    by_name: dict[str, dict],
+    sym_index: dict[tuple[str, str], dict[str, Any]],
+) -> dict[str, Any]:
+    """Global additions. Forward deps come from two places:
+
+      - **its declared type** (`global_type_uses.csv`) — a
+        `const version_info tls_version_table[]` depends on `version_info`.
+      - **its initializer** (`function_addresses.csv` / `global_accesses.csv`)
+        — a file-scope dispatch table takes the address of every handler it
+        names. Recovering this is why `enclosingNameOf` in those two queries
+        falls back to the initialised VARIABLE: a file-scope access has no
+        enclosing function, so it used to be attributed to "" and dropped,
+        leaving every table (`ext_defs` and its 129 handlers) a false leaf.
+
+    Both were previously hardcoded empty even though the type index existed.
+    """
     name = row["name"]
     def_file = row["def_file"]
     accessors = reach.all_accessors_of(name, def_file)
+
+    forward: set[tuple[str, str]] = set()
+    forward |= reach.addr_targets_of(name, def_file)
+    for gname, gdef, _kind in reach.globals_used_by(name, def_file):
+        if (gname, gdef) != (name, def_file):        # no self-edge
+            forward.add((gname, gdef))
+    forward = {(n, df or "") for n, df in forward}
+
+    dep_types: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for type_name, _kind, _tdf in reach.types_in_global_type(name, def_file):
+        if _is_scalar_typedef(type_name, by_name):
+            continue
+        if _is_callback_typedef(type_name, by_name):
+            continue                                  # → depends_on.syms
+        tag = _resolve_dep_type_tag(type_name, by_name)
+        if not tag or tag.startswith("(") or tag in seen:
+            continue
+        seen.add(tag)
+        dep_types.append({"type": tag, "fields": []})
+
+    cb_types = [
+        t for t, _k, _f in reach.types_in_global_type(name, def_file)
+        if _is_callback_typedef(t, by_name)
+    ]
+    dep_syms = _compose_dep_syms(forward, sym_index)
+    for cb in sorted(set(cb_types)):
+        r = by_name.get(cb) or {}
+        dep_syms.append({
+            "name": cb,
+            "defined_in": None,
+            "declared_in": sorted(_decls_list(r.get("decl_files", ""))),
+        })
     return {
         "used_by": {"call": None, "ref": sorted(accessors)},
-        "depends_on": {"syms": [], "types": []},
+        "depends_on": {"syms": dep_syms, "types": dep_types},
     }
 
 
@@ -478,9 +640,14 @@ def _base_callback(
     # Disjoint (call wins), mirroring the function schema's call/ref split.
     callsites = reach.callback_callsites_of(name, decl_file)
     declarers = {fn for fn, _ in reach.functions_using_type(name, "")}
+    cb_sig_types = reach.callback_sig_types_of(name, decl_file)
     dep_types = _compose_dep_types(
-        reach, name, decl_file, by_name, None,
-        sig_types=reach.callback_sig_types_of(name, decl_file),
+        reach, name, decl_file, by_name, None, sig_types=cb_sig_types,
+    )
+    # A callback whose own signature takes another callback depends on it the
+    # same way any consumer does — as a sym, not a type.
+    dep_syms = _callback_deps(
+        reach, name, decl_file, by_name, sig_types=cb_sig_types, invoked=False,
     )
     return {
         "name": name,
@@ -493,7 +660,7 @@ def _base_callback(
         "ptr_args": ptr_args,
         "ptr_ret": ret,
         "used_by": {"call": sorted(callsites), "ref": sorted(declarers - callsites)},
-        "depends_on": {"syms": [], "types": dep_types},
+        "depends_on": {"syms": dep_syms, "types": dep_types},
     }
 
 
@@ -673,8 +840,13 @@ def compose(
             ):
                 continue
         base = _base_global(r)
-        port_add = _port_additions_global(r, reach)   # content: codebase-wide
-        fwd = set() if is_port else None
+        # content: codebase-wide
+        port_add = _port_additions_global(r, reach, by_name, sym_index)
+        # A global's initializer references drive the closure exactly like a
+        # function's callees do (a dispatch table pulls in its handlers).
+        fwd = ({(n, df or "") for n, df in reach.addr_targets_of(r["name"], r["def_file"])}
+               | {(gn, gd or "") for gn, gd, _k in
+                  reach.globals_used_by(r["name"], r["def_file"])}) if is_port else None
         target_file = r["def_file"] or _first_decl(r["decl_files"])
         candidates.append({
             "base": base,
@@ -710,16 +882,22 @@ def compose(
             "target_file": target_file,
         })
 
-    # Callbacks: function-pointer typedefs from the types CSV (CodeQL stamps
-    # `unaliased_kind = "callback"` deterministically). A callback is signature-
-    # shaped and never ported (it becomes an `extern "C" fn` type), so it is
+    # Callbacks: function-pointer typedefs from the types CSV. Gated on
+    # `_is_callback_typedef`, which resolves the alias chain — `unaliased_kind`
+    # is stamped only on the row that ENDS it, so a chained `typedef
+    # SSL_verify_cb my_cb;` carries an empty kind and a direct-row check would
+    # skip it. The CSVs already treat it as a callback (both callback queries
+    # walk `TypedefType` in `routineOf`), and `_callback_deps` filters it out
+    # of `depends_on.types` — so it must get an entry here, or consumers would
+    # point at a node that does not exist. A callback is signature-shaped and
+    # never ported (it becomes an `extern "C" fn` type), so it is
     # always wrap; inclusion is the wrap-reach gate (filter mode) or a direct
     # --name seed (seed mode). The same `_wrap_port_reachable` gate that admits
     # wrap structs admits a callback (it is keyed by type name).
     from .types_manifest import _wrap_port_reachable  # noqa: E402 (avoid import cycle)
     seen_cb: set[str] = set()
     for r in types:
-        if r["kind"] != "typedef" or r.get("unaliased_kind") != "callback":
+        if r["kind"] != "typedef" or not _is_callback_typedef(r["name"], by_name):
             continue
         name = r["name"]
         if not name or name.startswith("(") or name in seen_cb:

@@ -92,15 +92,84 @@ predicate reachableUserType(Type outer, UserType t) {
   reachableUserType(outer.(DerivedType).getBaseType(), t)
 }
 
-from Field f, UserType t
+/**
+ * The aggregate a field EMBEDS by value — arrays and cv-qualifiers unwrapped,
+ * pointers NOT (a pointer to an anonymous struct does not contain it).
+ * Mirrors `entities/fields.ql`.
+ */
+Type embeddedTypeOf(Type t) {
+  if t instanceof ArrayType
+  then result = embeddedTypeOf(t.(ArrayType).getBaseType())
+  else
+    if t instanceof SpecifiedType
+    then result = embeddedTypeOf(t.(SpecifiedType).getBaseType())
+    else result = t
+}
+
+/** The ANONYMOUS struct/union a field embeds by value, if any. */
+UserType anonMemberAggregate(Field f) {
+  result = embeddedTypeOf(f.getType()) and
+  result.getName().prefix(1) = "(" and
+  (result instanceof Struct or result instanceof Union)
+}
+
+/**
+ * `f` is reachable from `root` through ANONYMOUS embedded members; `path` is
+ * the dotted access path. Mirrors `entities/fields.ql` so the two agree on
+ * which fields belong to which named struct.
+ */
+predicate anonEmbeddedField(UserType root, Field f, string path) {
+  exists(Field outer |
+    outer.getDeclaringType() = root and
+    f.getDeclaringType() = anonMemberAggregate(outer) and
+    path = outer.getName() + "." + f.getName()
+  )
+  or
+  exists(Field outer, string sub |
+    outer.getDeclaringType() = root and
+    anonEmbeddedField(anonMemberAggregate(outer), f, sub) and
+    path = outer.getName() + "." + sub
+  )
+}
+
+string aggDefFileOf(UserType u) {
+  if exists(u.(Struct).getDefinition())
+  then result = pathOf(u.(Struct).getDefinition().getFile())
+  else
+    if exists(u.(Union).getDefinition())
+    then result = pathOf(u.(Union).getDefinition().getFile())
+    else result = ""
+}
+
+from Field f, UserType t, string struct_name, string struct_def_file, string field_name
 where
   reachableUserType(f.getType(), t) and
   t.getName() != "" and
   not t.getName().prefix(1) = "(" and
-  typeKindOf(t) != "other"
-select f.getDeclaringType().getName() as struct_name,
-       structDefFileOf(f) as struct_def_file,
-       f.getName() as field_name,
+  typeKindOf(t) != "other" and
+  (
+    // Field of a named struct/union (existing behaviour).
+    f.getDeclaringType().getName() != "" and
+    not f.getDeclaringType().getName().prefix(1) = "(" and
+    struct_name = f.getDeclaringType().getName() and
+    struct_def_file = structDefFileOf(f) and
+    field_name = f.getName()
+    or
+    // Field of an ANONYMOUS aggregate embedded by value: its type is a
+    // dependency of the OWNING named struct, recorded under the qualified
+    // member path (`ext.hostname`). Without this the type edge was attributed
+    // to `(unnamed …)` and dropped.
+    exists(UserType root |
+      root.getName() != "" and
+      not root.getName().prefix(1) = "(" and
+      anonEmbeddedField(root, f, field_name) and
+      struct_name = root.getName() and
+      struct_def_file = aggDefFileOf(root)
+    )
+  )
+select struct_name,
+       struct_def_file,
+       field_name,
        t.getName() as type_name,
        typeKindOf(t) as type_kind,
        typeDefFileOf(t) as type_def_file

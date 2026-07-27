@@ -5,6 +5,9 @@
  *   - root_struct_name      : the named ancestor's tag (or ""
  *                             when no named ancestor is found)
  *   - root_struct_def_file  : that ancestor's definition file
+ *   - field_path            : dotted member path from the named ancestor
+ *                             (`ext.hostname`); equals field_name when the
+ *                             access is not through an anonymous member
  *
  * Heuristic: a Struct/Union whose Name starts with "(unnamed" is
  * treated as anonymous; we recurse via the qualifier expression
@@ -53,6 +56,26 @@ Type rootContainerOfExpr(Expr e) {
   else result = e.getType().stripType()
 }
 
+/**
+ * The dotted member path from the outermost NAMED container down to `fa`'s
+ * field: `ext.hostname`, `s3.tmp.new_cipher`. Plain (non-anonymous) accesses
+ * yield the bare field name. Must agree with the qualified names
+ * `entities/fields.ql` and `edges/field_type_uses.ql` emit for the same
+ * flattened members, or the declaration side and the access side key
+ * differently.
+ */
+string rootFieldPath(FieldAccess fa) {
+  if isAnonNamed(fa.getTarget().getDeclaringType().getName())
+  then (
+    exists(FieldAccess q | q = fa.getQualifier() |
+      result = rootFieldPath(q) + "." + fa.getTarget().getName()
+    )
+    or
+    not fa.getQualifier() instanceof FieldAccess and result = fa.getTarget().getName()
+  )
+  else result = fa.getTarget().getName()
+}
+
 Type rootNamedDeclaringType(FieldAccess fa) {
   if isAnonNamed(fa.getTarget().getDeclaringType().getName())
   then result = rootContainerOfExpr(fa.getQualifier())
@@ -76,5 +99,6 @@ select enclosingNameOf(fa) as enclosing_name,
        rootT.getName() as root_struct_name,
        structDefFileOf(rootT) as root_struct_def_file,
        f.getName() as field_name,
+       rootFieldPath(fa) as field_path,
        accessKindOf(fa) as access_kind,
        fa.getLocation().getStartLine() as access_line

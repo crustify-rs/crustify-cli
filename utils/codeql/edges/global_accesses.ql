@@ -60,10 +60,22 @@ string linkageOf(GlobalVariable g) {
   else result = "global_extern"
 }
 
-string enclosingNameOf(VariableAccess va) {
-  if exists(va.getEnclosingFunction())
-  then result = va.getEnclosingFunction().getName()
-  else result = ""
+/**
+ * The entity an access belongs to: the enclosing function when there is one,
+ * else the file-scope VARIABLE whose initializer contains the access, else "".
+ * Mirrors `edges/function_addresses.ql` — a static table that references
+ * another global (`&other_tbl`, a nested pointer entry) is a real forward edge
+ * from that table, not an anonymous file-scope event.
+ */
+string enclosingNameOf(Expr e) {
+  exists(e.getEnclosingFunction()) and result = e.getEnclosingFunction().getName()
+  or
+  not exists(e.getEnclosingFunction()) and
+  exists(Variable v | v.getInitializer().getExpr().getAChild*() = e | result = v.getName())
+  or
+  not exists(e.getEnclosingFunction()) and
+  not exists(Variable v | v.getInitializer().getExpr().getAChild*() = e) and
+  result = ""
 }
 
 string accessKindOf(VariableAccess va) {

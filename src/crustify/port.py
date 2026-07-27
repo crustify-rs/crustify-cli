@@ -264,8 +264,7 @@ def port(
     # flattened to their underlying symbol in the dag, so a real dep shows up as
     # that symbol, not the macro).
     port_types = sorted(
-        (n for n in named if _scope_of(n) == "port"
-         and n.node_kind == "type" and n.subkind != "callback"),
+        (n for n in named if _scope_of(n) == "port" and n.node_kind == "type"),
         key=lambda x: x.id)
     if port_types:
         listing = "\n".join(f"  - {n.id}  ({n.defined_in or '?'})" for n in port_types)

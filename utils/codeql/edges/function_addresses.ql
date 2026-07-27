@@ -17,9 +17,9 @@
  * `FunctionAccess` for `foo` as its callee expression).
  *
  * # cols:
- *   enclosing_name      : enclosing function's C identifier (or "" if
- *                         the access is at file scope, e.g. inside a
- *                         static initializer table)
+ *   enclosing_name      : the enclosing function's C identifier; for a
+ *                         file-scope access (a static initializer table) the
+ *                         VARIABLE being initialised; "" if neither
  *   access_file         : repository-relative path of the access
  *                         site's file
  *   target_name         : the referenced function's C identifier
@@ -51,10 +51,25 @@ string defFileOf(Function fn) {
   else result = ""
 }
 
-string enclosingNameOf(FunctionAccess fa) {
-  if exists(fa.getEnclosingFunction())
-  then result = fa.getEnclosingFunction().getName()
-  else result = ""
+/**
+ * The entity an access belongs to: the enclosing function when there is one,
+ * else the file-scope VARIABLE whose initializer contains the access, else "".
+ *
+ * The variable fallback is what makes a dispatch table a real dependency node.
+ * `static const EXTENSION_DEFINITION ext_defs[] = { { ..., tls_parse_ctos_alpn,
+ * ... } }` has no enclosing function, so attributing it to "" dropped every
+ * one of its function references on the floor — the table looked like a leaf
+ * with no forward edges, and the port had to rediscover them by hand.
+ */
+string enclosingNameOf(Expr e) {
+  exists(e.getEnclosingFunction()) and result = e.getEnclosingFunction().getName()
+  or
+  not exists(e.getEnclosingFunction()) and
+  exists(Variable v | v.getInitializer().getExpr().getAChild*() = e | result = v.getName())
+  or
+  not exists(e.getEnclosingFunction()) and
+  not exists(Variable v | v.getInitializer().getExpr().getAChild*() = e) and
+  result = ""
 }
 
 from FunctionAccess fa, Function target

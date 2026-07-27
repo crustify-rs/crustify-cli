@@ -18,12 +18,17 @@
  *     (`(unnamed …)`); the consumer drops those at the join site.
  *   - Whether the pointee is `const`-qualified (cv-qualifier on the
  *     innermost non-pointer type).
- *   - The pointer depth (1 for `T *`, 2 for `T **`, …). Function
- *     pointer / RoutineType parameters classify as depth 1 with
- *     `pointee_type = "(routine)"` — they're callable types passed
- *     by pointer, not data buffers, and consumers usually want to
- *     handle them via the `callback` type-kind path rather than the
- *     ownership analysis path.
+ *   - The pointer depth (1 for `T *`, 2 for `T **`, …). A typedef that
+ *     HIDES a `*` counts as a pointer level, so `SSL_verify_cb cb` and
+ *     `OPENSSL_STRING s` are depth 1 rather than being dropped from the
+ *     result entirely (the `pointerDepth > 0` gate used to filter them,
+ *     leaving those parameters with no record and hence nowhere to carry an
+ *     ownership block). A typedef naming a NON-pointer is not unwrapped, so
+ *     `SSL *` still reports `SSL`, not `ssl_st`.
+ *   - A CALLBACK typedef is terminal: `pointee_type` is the typedef name
+ *     (`SSL_verify_cb`), not `"(routine)"`. `"(routine)"` now appears only
+ *     for a bare, un-typedef'd function pointer, which names nothing a
+ *     consumer could depend on.
  *
  * # cols:
  *   function_name      : enclosing function's C identifier
@@ -63,24 +68,46 @@ string pathOf(File f) {
   else result = f.getAbsolutePath()
 }
 
+/** Holds if a pointer level is reachable from `t` through qualifiers/typedefs. */
+predicate reachesPointer(Type t) {
+  t instanceof PointerType
+  or
+  reachesPointer(t.(SpecifiedType).getBaseType())
+  or
+  reachesPointer(t.(TypedefType).getBaseType())
+}
+
 /**
- * The pointer depth of `t` — number of `PointerType` levels at the
- * outside of the type before reaching a non-pointer. Returns 0 for
- * non-pointer types. Walks transparently through `SpecifiedType`
- * wrappers (cv- and other qualifiers like `__restrict__`,
- * `_Atomic`) when they're applied to the pointer itself — these
- * don't count as a depth step but must be unwrapped so we don't
- * stop early. The walk stops when the chain reaches something that
- * is neither a `PointerType` nor a pointer-wrapping
- * `SpecifiedType`.
+ * A CALLBACK typedef — a typedef whose unwrap chain reaches a `RoutineType`.
+ * It is terminal for the pointer walk: the identity we want is the typedef
+ * name, not the anonymous routine it wraps.
+ */
+predicate isCallbackTypedef(Type t) { t instanceof TypedefType and exists(routineOf(t)) }
+
+/**
+ * Pointer indirection count, seeing THROUGH pointer typedefs.
+ *
+ * A typedef that hides a `*` (`typedef int (*SSL_verify_cb)(...)`,
+ * `typedef char *OPENSSL_STRING;`) is a pointer level: without this, such a
+ * parameter scored depth 0, failed the `pointerDepth(ptype) > 0` gate, and
+ * produced NO ptr_args record at all — so it had nowhere to carry an
+ * ownership block. A typedef that names a NON-pointer
+ * (`typedef struct ssl_st SSL;`) is NOT unwrapped, so `SSL *` still reports
+ * depth 1 with pointee `SSL` rather than `ssl_st`.
  */
 int pointerDepth(Type t) {
-  if t instanceof PointerType
-  then result = 1 + pointerDepth(t.(PointerType).getBaseType())
-  else if t instanceof SpecifiedType and
-       t.(SpecifiedType).getBaseType() instanceof PointerType
-  then result = pointerDepth(t.(SpecifiedType).getBaseType())
-  else result = 0
+  if isCallbackTypedef(t)
+  then result = 1
+  else
+    if t instanceof PointerType
+    then result = 1 + pointerDepth(t.(PointerType).getBaseType())
+    else
+      if t instanceof SpecifiedType and reachesPointer(t.(SpecifiedType).getBaseType())
+      then result = pointerDepth(t.(SpecifiedType).getBaseType())
+      else
+        if t instanceof TypedefType and reachesPointer(t.(TypedefType).getBaseType())
+        then result = pointerDepth(t.(TypedefType).getBaseType())
+        else result = 0
 }
 
 /**
@@ -96,12 +123,18 @@ int pointerDepth(Type t) {
  * would lose the underlying pointer.
  */
 Type pointerInner(Type t) {
-  if t instanceof PointerType
-  then result = pointerInner(t.(PointerType).getBaseType())
-  else if t instanceof SpecifiedType and
-       t.(SpecifiedType).getBaseType() instanceof PointerType
-  then result = pointerInner(t.(SpecifiedType).getBaseType())
-  else result = t
+  if isCallbackTypedef(t)
+  then result = t
+  else
+    if t instanceof PointerType
+    then result = pointerInner(t.(PointerType).getBaseType())
+    else
+      if t instanceof SpecifiedType and reachesPointer(t.(SpecifiedType).getBaseType())
+      then result = pointerInner(t.(SpecifiedType).getBaseType())
+      else
+        if t instanceof TypedefType and reachesPointer(t.(TypedefType).getBaseType())
+        then result = pointerInner(t.(TypedefType).getBaseType())
+        else result = t
 }
 
 /**

@@ -224,7 +224,13 @@ def _merge_dep_types(existing: list, incoming: list) -> list:
             continue
         prev = by_tag.get(scope.entry_tag(t))
         if prev is None:
-            entry = {"name": scope.entry_tag(t), "fields": list(t.get("fields") or [])}
+            # Carry the incoming record's own shape. `depends_on.types` uses
+            # `{type, fields}` (see docs/schemas/syms.md); minting `{"name":…}`
+            # here wrote the types.json record-level convention into a
+            # syms.json field-level record, which only round-tripped because
+            # `entry_tag` falls back to `type`.
+            entry = dict(t)
+            entry["fields"] = list(t.get("fields") or [])
             by_tag[scope.entry_tag(t)] = entry
             out.append(entry)
         else:

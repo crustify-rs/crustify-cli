@@ -74,14 +74,6 @@ string pathOf(File f) {
   else result = f.getAbsolutePath()
 }
 
-string structDefFileOf(Field f) {
-  if exists(f.getDeclaringType().(Struct).getDefinition())
-  then result = pathOf(f.getDeclaringType().(Struct).getDefinition().getFile())
-  else if exists(f.getDeclaringType().(Union).getDefinition())
-  then result = pathOf(f.getDeclaringType().(Union).getDefinition().getFile())
-  else result = ""
-}
-
 /**
  * Holds if any unwrap of `t` reaches a Struct, Union, or Enum.
  * Walks both DerivedType.getBaseType() (pointers, arrays,
@@ -127,6 +119,8 @@ predicate namingTypedef(UserType anon, TypedefType td) {
   unwrappedUserType(td.getBaseType(), anon)
 }
 
+/** Definition file of any struct/union (named or anonymous); "" if the DB
+ *  holds no full-body definition. */
 string anonDefFileOf(UserType anon) {
   if exists(anon.(Struct).getDefinition())
   then result = pathOf(anon.(Struct).getDefinition().getFile())
@@ -135,29 +129,89 @@ string anonDefFileOf(UserType anon) {
   else result = ""
 }
 
-from Field f, string struct_name, string struct_def_file
+/**
+ * The aggregate a field EMBEDS by value, if any — arrays and cv-qualifiers are
+ * unwrapped, but pointers are NOT: `struct { … } *p` points at a struct, it
+ * does not contain one, so its members must not be flattened into the parent.
+ */
+Type embeddedTypeOf(Type t) {
+  if t instanceof ArrayType
+  then result = embeddedTypeOf(t.(ArrayType).getBaseType())
+  else
+    if t instanceof SpecifiedType
+    then result = embeddedTypeOf(t.(SpecifiedType).getBaseType())
+    else result = t
+}
+
+/** The ANONYMOUS struct/union a field embeds by value, if any. */
+UserType anonMemberAggregate(Field f) {
+  result = embeddedTypeOf(f.getType()) and
+  result.getName().prefix(1) = "(" and
+  (result instanceof Struct or result instanceof Union)
+}
+
+/**
+ * `f` is reachable from aggregate `root` through one or more ANONYMOUS
+ * embedded members; `path` is the dotted access path (`ext.hostname`,
+ * `s3.tmp.new_cipher`). Recursion stops at the first NAMED aggregate — a
+ * member of named type is its own entity and keeps its own edge.
+ */
+predicate anonEmbeddedField(UserType root, Field f, string path) {
+  exists(Field outer |
+    outer.getDeclaringType() = root and
+    f.getDeclaringType() = anonMemberAggregate(outer) and
+    path = outer.getName() + "." + f.getName()
+  )
+  or
+  exists(Field outer, string sub |
+    outer.getDeclaringType() = root and
+    anonEmbeddedField(anonMemberAggregate(outer), f, sub) and
+    path = outer.getName() + "." + sub
+  )
+}
+
+/**
+ * The manifest identity of an aggregate: its own tag when named, else the
+ * typedef that names it. Single definition shared by the plain-field and the
+ * flattened-anonymous-member cases so the two cannot drift.
+ */
+predicate ownerOf(UserType t, string name, string file) {
+  t.getName() != "" and
+  not t.getName().prefix(1) = "(" and
+  name = t.getName() and
+  file = anonDefFileOf(t)
+  or
+  exists(TypedefType td |
+    namingTypedef(t, td) and
+    name = td.getName() and
+    file = anonDefFileOf(t)
+  )
+}
+
+
+from Field f, string struct_name, string struct_def_file, string field_name
 where
   (
-    // Named declaring struct/union (existing behaviour).
-    f.getDeclaringType().getName() != "" and
-    not f.getDeclaringType().getName().prefix(1) = "(" and
-    struct_name = f.getDeclaringType().getName() and
-    struct_def_file = structDefFileOf(f)
+    // Ordinary field of a named struct/union, or of an anonymous aggregate
+    // that a typedef names (`typedef struct { … } git_cache;`).
+    ownerOf(f.getDeclaringType(), struct_name, struct_def_file) and
+    field_name = f.getName()
   )
   or
   (
-    // Anonymous struct/union that a typedef names — attribute its fields to
-    // the typedef identity (e.g. `typedef struct { … } git_cache;`). Inner
-    // anonymous unions of a named outer struct are NOT typedef-named, so they
-    // do not match here and still surface via cpp-all flattening.
-    exists(TypedefType td |
-      namingTypedef(f.getDeclaringType(), td) and
-      struct_name = td.getName()
-    ) and
-    struct_def_file = anonDefFileOf(f.getDeclaringType())
+    // Field of an ANONYMOUS aggregate embedded by value in `root`. C gives
+    // these no independent identity — `s->ext.hostname` names no type a
+    // consumer can reference — so they are flattened into the owning named
+    // struct under a QUALIFIED name (`ext.hostname`). Without this they were
+    // dropped at every stage: no node (anonymous tags are rejected), no entry
+    // in the parent's `fields[]`, and no dependency edge for their types.
+    exists(UserType root |
+      ownerOf(root, struct_name, struct_def_file) and
+      anonEmbeddedField(root, f, field_name)
+    )
   )
 select struct_name,
        struct_def_file,
-       f.getName() as field_name,
+       field_name,
        f.getType().toString() as field_type,
        isScalarOf(f) as is_scalar

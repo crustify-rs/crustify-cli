@@ -196,14 +196,15 @@ def form_units(
     and ordered **lifecycle-first** (ctors/dtor/up_ref/clones/locking) so the
     shape-bearing surface always lands in the first, type-def-bearing batch.
 
-    A **callback** (a function-pointer typedef — `node_kind == "type"`,
-    `subkind == "callback"`) is symbol-shaped: it routes as a sym-unit so the
-    wrap stage's `symbol_wrapper.md` (its callback section) emits the
-    `#[repr(transparent)]` fn-pointer handle, not a struct wrapper."""
+    A **callback** (a function-pointer typedef, `subkind == "callback"`) is a
+    `node_kind == "symbol"` node in the dag, so it falls through to the
+    sym-unit branch on its own — the wrap stage's `symbol_wrapper.md` (its
+    callback section) emits the `#[repr(transparent)]` fn-pointer handle, not a
+    struct wrapper."""
     type_meta = type_meta or {}
     units: list[Unit] = []
     for n in nodes:
-        if n.node_kind == "type" and n.subkind != "callback":
+        if n.node_kind == "type":
             fields, lifecycle = type_meta.get(n.id, ([], set()))
             ops = ordered_ops(n, by_key, lifecycle, in_scope)
             units.append(Unit("type", n, ops, list(fields)))

@@ -88,7 +88,7 @@ class Reach:
         self._build_function_address_indexes(csv_dir_t2 / "function_addresses.csv")
         self._build_global_access_indexes(csv_dir_t2 / "global_accesses.csv")
         self._build_macro_expansion_indexes(csv_dir_t2 / "macro_expansions.csv")
-        self._build_field_access_indexes(csv_dir_t2 / "field_accesses.csv")
+        self._build_field_access_indexes(csv_dir_t2)
         self._build_signature_type_indexes(csv_dir_t2 / "signature_type_uses.csv")
         self._build_callback_sig_type_indexes(csv_dir_t2 / "callback_signature_type_uses.csv")
         self._build_callback_callsite_indexes(csv_dir_t2 / "callback_call_sites.csv")
@@ -219,18 +219,36 @@ class Reach:
 
     # ------------------------------------------------------------ field_accesses
 
-    def _build_field_access_indexes(self, path: Path) -> None:
+    def _build_field_access_indexes(self, csv_dir_t2: Path) -> None:
         # Forward: (enclosing_name, access_file) → set of (struct_name, struct_def_file, field_name, access_kind).
         # Per-struct: (struct_name, struct_def_file) → list of
         #   (enclosing_name, access_file, field_name, access_kind).
         # The per-struct index is what types_manifest.py uses to
         # populate fields[] and non_opaque_in.
+        #
+        # Source is `fa_with_root.csv`, NOT `field_accesses.csv`: an access
+        # through an ANONYMOUS embedded member (`s->ext.hostname`) carries
+        # `struct_name = "(unnamed class/struct/union)"`, which every consumer
+        # filters out — so those accesses used to vanish from both `fields[]`
+        # and `non_opaque_in`. `fa_with_root` walks the qualifier chain to the
+        # outermost NAMED container and supplies the dotted `field_path`
+        # (`ext.hostname`), matching the qualified names `entities/fields.ql`
+        # emits. Falls back to the flat CSV when the enriched one is absent
+        # (a pre-existing extraction).
+        path = csv_dir_t2 / "fa_with_root.csv"
+        rooted = path.is_file()
+        if not rooted:
+            path = csv_dir_t2 / "field_accesses.csv"
         self._fda_forward: dict[tuple[str, str], set[tuple[str, str, str, str]]] = defaultdict(set)
         self._fda_by_struct: dict[tuple[str, str], list[tuple[str, str, str, str]]] = defaultdict(list)
         for r in _load_csv(path):
             site = (r["enclosing_name"], r["access_file"])
-            struct = (r["struct_name"], r["struct_def_file"])
-            field = r["field_name"]
+            if rooted and r.get("root_struct_name"):
+                struct = (r["root_struct_name"], r.get("root_struct_def_file", ""))
+                field = r.get("field_path") or r["field_name"]
+            else:
+                struct = (r["struct_name"], r["struct_def_file"])
+                field = r["field_name"]
             kind = r["access_kind"]
             self._fda_forward[site].add(struct + (field, kind))
             self._fda_by_struct[struct].append(
@@ -295,12 +313,23 @@ class Reach:
         # refinement of `used_by` that excludes pass-through declarations —
         # where the arg/return borrow-vs-own contract is realised.
         self._cb_callsites: dict[tuple[str, str], set[str]] = defaultdict(set)
+        # The same relation FORWARD: (callsite_name, callsite_def_file) → the
+        # callback names that function invokes. An indirect call through a
+        # function pointer is a call, so this feeds the invoker's
+        # `depends_on.syms` exactly like `callees_of` — a callback reached
+        # through a struct field is named nowhere else in the invoker's record
+        # (its `ptr_args` renders the pointee as `"(routine)"`, and the owning
+        # struct's `fields[]` is only the port-accessed subset).
+        self._cb_invoked: dict[tuple[str, str], set[str]] = defaultdict(set)
         if not path.exists():
             return
         for r in _load_csv(path):
             cb = (r["callback_name"], r["callback_def_file"])
             if r["callsite_name"]:
                 self._cb_callsites[cb].add(r["callsite_name"])
+                self._cb_invoked[
+                    (r["callsite_name"], r["callsite_def_file"])
+                ].add(r["callback_name"])
 
     # ================================================================ Query API
 
@@ -741,6 +770,13 @@ class Reach:
         user-defined types.
         """
         return list(self._cbstu_forward.get((cb_name, cb_def_file), []))
+
+    def callbacks_invoked_by(self, fn_name: str, fn_def_file: str) -> set[str]:
+        """Forward: the callback typedef names this function INVOKES (indirect
+        call through a function-pointer value). The inverse of
+        `callback_callsites_of`; drives the invoker's `depends_on.syms`.
+        """
+        return set(self._cb_invoked.get((fn_name, fn_def_file), set()))
 
     def callback_callsites_of(self, cb_name: str, cb_def_file: str) -> set[str]:
         """Function names that **invoke** this callback (indirect call through a
