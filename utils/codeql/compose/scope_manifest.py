@@ -212,7 +212,7 @@ def compose(config_path: Path, t1_dir: Path, repo_root: Path | None = None) -> d
     """Emit the v2 port-scope manifest.
 
     `t1_dir` is `<repo_root>/crustify/codeql/t1` — the entity tables
-    produced by `build execute`. The filesystem walk gives the candidate
+    produced by `analyze extract-ql`. The filesystem walk gives the candidate
     universe; the T1 tables decide which files and entities actually
     compiled under this build configuration.
 

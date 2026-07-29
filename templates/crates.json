@@ -4,8 +4,8 @@
     "port. Target-agnostic and cumulative: 'which unique Rust .rs does this C",
     "symbol/type live in', independent of porting progress. Port/wrap status and",
     "per-target scope live in scope.json, never here. Two layers seeded at",
-    "different times: CRATES (one per link unit, seeded mechanically from",
-    "build.json by `build propose`) and, within each, MODULES + their .rs files,",
+    "different times: CRATES (one per link unit, mirroring build.json's",
+    "`libraries` keys) and, within each, MODULES + their .rs files,",
     "whose `members` CrustifyScaffolder fills as entities are brought in scope.",
     "`crustify scaffold` is a mechanical lookup against this file."
   ],

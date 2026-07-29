@@ -240,7 +240,7 @@ def _load_field_access_index(
     when cpp-all flattens anonymous inner types.
 
     Returns an empty dict when the CSV is absent (e.g. a target with
-    no completed `build execute` run).
+    no completed `analyze extract-ql` run).
     """
     import csv as _csv
     # `fa_with_root.csv` when present: it re-keys an access through an

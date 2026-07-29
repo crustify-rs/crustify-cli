@@ -100,8 +100,7 @@ class CrustifyAgent:
         Used by every agent that produces subsystem-scoped output
         (analyzer, port, type_wrapper, …).
       - ``tier = "repo_root"`` — `<repo_root>/.crustify/<output>`. Used
-        by agents whose artifact is project-wide and target-independent
-        (BuildPropose, BuildExecute).
+        by agents whose artifact is project-wide and target-independent.
 
     Agent logs always go to the *target* tier
     (`<target>/.crustify/logs/<session>/`), regardless of ``tier``,

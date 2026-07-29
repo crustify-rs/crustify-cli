@@ -924,7 +924,7 @@ loop was matching a ghost that is structurally guaranteed to exist for as
 long as the loop runs. A second, independent defect compounded it: the
 `make test` had run `Files=1, Tests=0, Result: NOTESTS`, i.e. it was
 invoked from a per-unit **worktree** with no configured build tree rather
-than the repo-root build that `build execute` had configured — so even on
+than the configured repo-root build tree — so even on
 a clean exit the equivalence check had nothing to compare.
 
 **Where it came from.** The port prompt §5 says only "`build.json` build

@@ -454,7 +454,7 @@ def main() -> None:
              "help. For `analyze symbols` and `analyze types` this "
              "spawns one agent per stem-group manifest dir, capped at "
              "`--parallel-max`. Composer-only stages "
-             "(`analyze scope`) and build stages "
+             "(`analyze extract-ql`, `analyze scope`, `analyze dag`) "
              "ignore this flag.",
     )
     parser.add_argument(
@@ -468,50 +468,6 @@ def main() -> None:
     )
 
     sub = parser.add_subparsers(dest="command", required=True)
-
-    # -- build -----------------------------------------------------------
-    build_p = sub.add_parser(
-        "build",
-        help=(
-            "Two-phase build pipeline: 'propose' drafts build.json; "
-            "'execute' runs the configure+build+tests+CodeQL pipeline "
-            "described by it. The two phases are deliberately separate "
-            "subcommands so the gating is explicit rather than driven "
-            "by on-disk file presence."
-        ),
-    )
-    build_sub = build_p.add_subparsers(dest="build_subject", required=True)
-
-    build_propose_p = build_sub.add_parser(
-        "propose",
-        help=(
-            "Phase 1: draft <repo_root>/.crustify/build.json. Refuses "
-            "to run if build.json already exists (use --reset to "
-            "regenerate)."
-        ),
-    )
-    build_propose_p.add_argument(
-        "--reset", action="store_true",
-        help="Delete an existing build.json before proposing so the "
-             "pipeline regenerates it fresh.",
-    )
-
-    build_execute_p = build_sub.add_parser(
-        "execute",
-        help=(
-            "Phase 2 + 3: run configure + build + tests + CodeQL "
-            "database creation per build.json, then extract T1/T2 "
-            "CSVs the analyze pipeline consumes. Refuses to run if "
-            "build.json does not exist (run `build propose` first). "
-            "--reset deletes the existing CodeQL database before "
-            "re-executing."
-        ),
-    )
-    build_execute_p.add_argument(
-        "--reset", action="store_true",
-        help="Delete the existing CodeQL database (codeql/db/) before "
-             "executing so the pipeline rebuilds it fresh.",
-    )
 
     sub.add_parser("alloc", help="Produce alloc.json — the allocator-surface catalogue.")
 
@@ -560,7 +516,7 @@ def main() -> None:
         "analyze",
         help=(
             "Run an analyze stage. A subject is required: "
-            "'scope', 'symbols', 'types', or 'dag'."
+            "'extract-ql', 'scope', 'symbols', 'types', or 'dag'."
         ),
     )
     analyze_p.add_argument(
@@ -569,6 +525,17 @@ def main() -> None:
              "regenerates them fresh.",
     )
     analyze_sub = analyze_p.add_subparsers(dest="subject", required=True)
+
+    analyze_sub.add_parser(
+        "extract-ql",
+        help="Run the T1 (entities) + T2 (edges) .ql batches against the "
+             "CodeQL database at crustify/codeql/db/ and write one CSV per "
+             "query under crustify/codeql/{t1,t2}/. Composer-only, no LLM. "
+             "The database is NOT created here — build the project under "
+             "`codeql database create --language=cpp --command=...` "
+             "yourself first. --reset wipes the existing t1/ and t2/ trees "
+             "(the database is left alone).",
+    )
 
     analyze_scope_p = analyze_sub.add_parser(
         "scope",
@@ -586,7 +553,8 @@ def main() -> None:
         "--wrap-only", action="store_true", dest="wrap_only",
         help="Derive the `wrap` import-closure section (appended alongside "
              "`port`; computed standalone from CodeQL T1/T2 + the `port` "
-             "section — needs only `analyze scope --port-only` + `build execute`).",
+             "section — needs only `analyze scope --port-only` + "
+             "`analyze extract-ql`).",
     )
 
     analyze_symbols_p = analyze_sub.add_parser(
@@ -966,6 +934,12 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
 
     subject = args.subject
     reset_stages = getattr(args, "reset_stages", False)
+
+    if subject == "extract-ql":
+        if reset_stages:
+            analyze_mod.reset_extract_ql(target)
+        analyze_mod.analyze_extract_ql(target)
+        return
 
     if subject == "scope":
         port_only = bool(getattr(args, "port_only", False))

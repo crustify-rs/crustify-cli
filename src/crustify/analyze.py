@@ -1,7 +1,12 @@
 """Orchestration for the ``analyze`` command family.
 
-The analyze pipeline has three stages, run as separate verbs at the
+The analyze pipeline has four stages, run as separate verbs at the
 CLI level:
+
+  0. ``crustify analyze extract-ql`` — composer-only (no agent).
+     Runs the `.ql` batches against the hand-created CodeQL database at
+     `<repo_root>/crustify/codeql/db/`; writes the T1/T2 CSVs under
+     `<repo_root>/crustify/codeql/{t1,t2}/`. Every stage below reads them.
 
   1. ``crustify analyze scope``    — composer-only (no agent).
      Reads `<target>/.crustify/config.json`; writes
@@ -15,12 +20,10 @@ CLI level:
      Same pattern with `compose.types_manifest` +
      `CrustifyTypeAnalyzer`.
 
-  ``crustify analyze --all`` runs 1 → 2 → 3 in sequence.
-
-Stage 2 depends on 1; stage 3 depends on 2 (the type analyzer
-agent reads syms manifests for op-candidate discovery via inverted
-`depends_on.types` lookup). Composers are pure functions of T1 + T2
-+ scope.json — fast, deterministic, run unconditionally.
+Stage 1 depends on 0; stage 2 depends on 1; stage 3 depends on 2 (the
+type analyzer agent reads syms manifests for op-candidate discovery via
+inverted `depends_on.types` lookup). Composers are pure functions of
+T1 + T2 + scope.json — fast, deterministic, run unconditionally.
 """
 
 from __future__ import annotations
@@ -39,19 +42,70 @@ _COMPOSE_PARENT = _CRUSTIFY_ROOT / "utils" / "codeql"
 if str(_COMPOSE_PARENT) not in sys.path:
     sys.path.insert(0, str(_COMPOSE_PARENT))
 
-from crustify.agents.analyzer import (
-    CrustifySymbolAnalyzer,
-    CrustifyTypeAnalyzer,
-)
+# The analyzer agents are imported lazily, inside the subjects that spawn
+# them: importing them pulls in the agent backend, and the composer-only
+# subjects (`extract-ql`, `scope`, `dag`) must stay runnable without it.
 
 
 # ---------------------------------------------------------------- composer wrappers
+
+def analyze_extract_ql(target: Path) -> None:
+    """Stage 0: run every `.ql` under `utils/codeql/entities/` and
+    `utils/codeql/edges/` against the CodeQL database and write one CSV
+    per query under `<repo_root>/crustify/codeql/{t1,t2}/`.
+
+    Deterministic (no agent). The CodeQL database itself is **not**
+    produced here — configuring the project, building it under
+    `codeql database create --language=cpp --command=...`, and depositing
+    the result at `<repo_root>/crustify/codeql/db/` is the orchestrator's
+    job, done by hand. This stage only turns that database into the T1
+    (entities) / T2 (edges) tables every other analyze subject reads.
+    """
+    import shutil
+
+    from compose.extract_csvs import extract_t1_t2
+
+    if shutil.which("codeql") is None:
+        print(
+            "error: the `codeql` CLI is not on PATH. Install it and run "
+            "`codeql pack install` in utils/codeql/ so codeql/cpp-all "
+            "resolves.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    layout = Layout.discover(target)
+    db = layout.codeql_db
+    if not db.is_dir():
+        print(
+            f"error: CodeQL database not found at {db}.\n"
+            f"       Build the project under CodeQL trace first, e.g.\n"
+            f"         codeql database create {db} --language=cpp "
+            f"--command=\"<build command>\"",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    succeeded, failed = extract_t1_t2(db, _CRUSTIFY_ROOT, layout.codeql)
+    print(
+        f"[crustify analyze extract-ql] {succeeded} queries ok, "
+        f"{failed} failed"
+    )
+    if failed:
+        print(
+            f"error: {failed} query extraction(s) failed; see output above. "
+            f"Analyze stages will see empty / missing CSVs for those "
+            f"queries.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
 
 def _scope(target: Path) -> Path:
     """Run the scope composer; return the path to scope.json.
 
     v2 anchors the manifest on the CodeQL T1 tables, so this stage
-    depends on `build execute` having produced `crustify/codeql/t1/`.
+    depends on `analyze extract-ql` having produced `crustify/codeql/t1/`.
     Gated accordingly.
     """
     from compose.scope_manifest import compose as scope_compose
@@ -62,7 +116,7 @@ def _scope(target: Path) -> Path:
     if not (t1 / "functions.csv").is_file():
         print(
             f"error: scope v2 requires CodeQL T1 CSVs at {t1}.\n"
-            f"       Run `crustify <target> build execute` first.",
+            f"       Run `crustify <target> analyze extract-ql` first.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -329,6 +383,11 @@ def _run_subject_manifests_list(
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     # Subject dispatch — composer, agent class, schema bits.
+    from crustify.agents.analyzer import (
+        CrustifySymbolAnalyzer,
+        CrustifyTypeAnalyzer,
+    )
+
     if subject == "symbols":
         from compose.syms_manifest import compose as compose_fn
         from compose.syms_manifest import _COMMENT as COMMENT
@@ -561,6 +620,8 @@ def analyze_lifetime_for(
         print(f"[crustify analyze symbols] --lifetime-for {spec}: "
               f"--compose-only, no agent spawned.")
         return
+    from crustify.agents.analyzer import CrustifySymbolAnalyzer
+
     failures = _run_chain(
         target, CrustifySymbolAnalyzer,
         [(f"lifetime_for__{_slug_tag(spec)}", [{"lifetime_for": spec}])],
@@ -676,6 +737,8 @@ def run_buffer_pass(target: Path) -> None:
         )
         return
     print("[crustify analyze types] buffer pass: creating string/array clusters")
+    from crustify.agents.analyzer import CrustifyTypeAnalyzer
+
     CrustifyTypeAnalyzer(
         target,
         selection="strings; arrays",
@@ -734,7 +797,8 @@ def _wrap_scope(target: Path) -> None:
     importing port TU actually ``#include``s (build-resolved). Writes the
     ``wrap`` key alongside ``port`` in scope.json — derived, regenerable when
     ``port`` changes. Requires only ``analyze scope --port-only`` (the ``port``
-    section) and ``build execute`` (the T1 ``includes.csv`` + T1/T2 tables).
+    section) and ``analyze extract-ql`` (the T1 ``includes.csv`` + T1/T2
+    tables).
     """
     import json
     from compose import scope as scope_mod
@@ -753,7 +817,7 @@ def _wrap_scope(target: Path) -> None:
     if not includes_csv.is_file():
         print(
             f"error: includes.csv missing at {includes_csv}. Run "
-            f"`crustify {target} build execute` first.",
+            f"`crustify {target} analyze extract-ql` first.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -783,6 +847,19 @@ def _wrap_scope(target: Path) -> None:
 
 
 # ---------------------------------------------------------------- reset helpers
+
+def reset_extract_ql(target: Path) -> None:
+    """Delete the T1/T2 CSV trees so the next ``analyze extract-ql``
+    re-runs every query fresh. The CodeQL database is left alone — it is
+    hand-created and expensive to rebuild."""
+    import shutil
+
+    layout = Layout.discover(target)
+    for d in (layout.t1, layout.t2):
+        if d.is_dir():
+            shutil.rmtree(d)
+            print(f"[crustify --reset] removed {d}")
+
 
 def reset_scope(target: Path) -> None:
     """Delete scope.json so the next ``analyze scope`` re-emits fresh."""

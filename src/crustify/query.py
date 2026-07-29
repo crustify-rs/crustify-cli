@@ -627,8 +627,10 @@ _FINDINGS_TOP = set(_TYPE_LIFECYCLE_KEYS) | {
     "fields", "fields_disposed_by", "_comment_agent"}
 # `refcount` marks the ONE field that stores the type's reference count (the
 # datum an up_ref bumps and a down-ref decrements). It is what makes the type
-# `CArc`-shaped rather than `CBox`-shaped, and it names the field a generated
-# shim reads when the type carries a refcount but exposes no up_ref function.
+# decides which ROUTINE backs the type's `CDropped`/`CCloned` impl (down-ref and
+# up_ref vs `*_free` and `*_dup`) -- the wrapper is `CBox` either way -- and it
+# names the field a generated shim reads when the type carries a refcount but
+# exposes no up_ref function.
 _FIELD_AGENT_KEYS = {"ptr", "locked_by", "refcount"}
 
 # --create ingest (buffer pass): a whole synthetic string/array cluster entry.
@@ -2149,7 +2151,8 @@ def query_files(
             raise SystemExit(
                 f"error: scope.json has no `wrap` section at {scope_path}. Run "
                 f"`crustify {target} analyze scope --wrap-only` first "
-                f"(composer-only; needs just the `port` section + `build execute`).")
+                f"(composer-only; needs just the `port` section + "
+                f"`analyze extract-ql`).")
         wrap_files = sorted(set(wrap.get("files") or []))
 
     if port_only:
