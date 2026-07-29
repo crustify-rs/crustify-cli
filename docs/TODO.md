@@ -114,6 +114,42 @@ porting the C consumers (see the callback-gate note below).
 
 ---
 
+## Harden `crates.json` validation (2026-07-29)
+
+`crates.validate()` checks three things: `(kind, name, tu)` uniqueness, the
+`depends_on` DAG, and that every `depends_on` names a defined crate. Everything
+else in `docs/schemas/crates.md` is documented but unenforced -- and the file is
+hand-authored, so an invariant nobody checks is one that silently rots.
+
+Two real bugs shipped past a clean `--validate` while authoring the `ssl/`
+oracle, both in `rust_path`:
+
+- module `core` claimed `rust_path: "src/core"` while its `.rs` sat at
+  `src/*.rs` (no such dir on disk);
+- module `record` spans `ssl/record/` and `ssl/record/methods/`, and `rust_path`
+  was taken from each file's own dir, so the last one written won -- leaving
+  four `.rs` above the recorded root.
+
+Neither failed loudly because **nothing reads `rust_path`** (it appears only in
+a `crates.py` docstring). That is the worst case: wrong data, no signal.
+
+Candidate checks, cheapest first:
+
+- every `rs` key starts with its module's `rust_path` (catches both bugs above);
+- `tu` ends in `.c`; every `headers` entry ends in `.h`/`.hpp` (a `.c` can
+  legitimately appear in an entity's `declared_in` -- a file-local forward
+  declaration -- and must not leak into `headers`);
+- no member name is anonymous (`(unnamed …)`) or empty;
+- each `rs` key is unique across the WHOLE file, not just within its module;
+- `tu` is unique across the file (two `.rs` mirroring one TU is a split module);
+- optionally, against the analysis tree: every member exists in `scope.json`,
+  and every `tu`/`headers` path exists on disk.
+
+The last group needs a target (scope.json is per-target) while `crates.json` is
+target-agnostic, so it belongs behind a flag rather than in the default gate.
+
+---
+
 ## Use cbindgen for the C-side re-export declarations instead of the port agent (2026-07-28)
 
 `port.md` currently makes the agent hand-write **both** halves of the re-export

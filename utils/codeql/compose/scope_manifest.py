@@ -181,6 +181,15 @@ def _port_entities(t1_dir: Path, candidate_files: set[str]) -> dict[str, list[di
     for r in types_rows:
         if _scope.classify_type(r, by_name, candidate_files) != "port":
             continue
+        # An ANONYMOUS tag (`(unnamed enum)`, `(unnamed class/struct/union)`) is
+        # a synthetic placeholder CodeQL reuses for every anonymous definition in
+        # the DB, so it is not a name anything can reference or place: dozens of
+        # distinct types collide on the one string. The analysis tree already
+        # drops them (types.json carries none); this keeps scope.json in
+        # agreement. Their FIELDS are not lost — `entities/fields.ql` flattens an
+        # anonymous member into its named parent under a qualified name.
+        if str(r.get("name") or "").startswith("("):
+            continue
         if r.get("unaliased_kind") == "callback":
             port_funcs.append(_ent(r))
         else:

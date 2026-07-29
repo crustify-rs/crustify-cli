@@ -1,14 +1,15 @@
 """Orchestration for the ``scaffold`` command — the crates.json-driven ``.rs``
 oracle.
 
-``crates.json`` (authored by ``CrustifyScaffolder``) maps every in-scope C
-symbol/type to the unique Rust ``.rs`` that homes it. ``scaffold`` is the
-mechanical front door:
+``crates.json`` maps every in-scope C symbol/type to the unique Rust ``.rs``
+that homes it. It is authored OUTSIDE this stage — by hand, or by an
+orchestrator driving ``prompts/scaffolder.md`` — and ``scaffold`` never writes
+it. This command is purely mechanical:
 
   - **query** (default) — resolve the selection (``--name`` / ``--file`` /
-    ``--dir`` / ``--all``) to its ``.rs`` path(s) and print them. On a ``--name``
-    lookup MISS, spawn ``CrustifyScaffolder`` to place the missing seeds, then
-    re-resolve.
+    ``--dir`` / ``--all``) to its ``.rs`` path(s) and print them. A lookup MISS
+    is a hard error naming the unplaced entities: placement is an authoring
+    decision, so the stage reports the gap rather than guessing at one.
   - **``--create``** — materialize the resolved ``.rs`` on disk (stub + module
     tree), lazily and idempotently. ``rust/`` grows as users ask for it.
   - **``--validate``** — the crates.json consistency gate.
@@ -60,27 +61,32 @@ def scaffold(
 
     doc = crates.load(layout)
 
-    # --- resolve the entries to act on, spawning the agent for --name/--all misses
+    # --- resolve the entries to act on; an unplaced selection is a hard error
     if all:
         if not (doc.get("crates")):
-            _spawn(target)
-            doc = crates.load(layout)
+            raise SystemExit(
+                f"scaffold: crates.json is empty ({layout.crates_json}). It is the "
+                f"placement oracle and is authored outside this stage — populate it "
+                f"(see templates/crates.json for the schema) before scaffolding.")
         entries = _all_entries(doc)
     elif name:
         misses = [n for n in name if crates.lookup(doc, n) is None]
         if misses:
-            # Validate unplaced seeds against the in-scope universe BEFORE spawning
-            # the LLM scaffolder — a typo'd / out-of-scope name is otherwise placed
-            # as a phantom seed (an agent run authoring crates.json for a symbol that
-            # does not exist), instead of failing fast like `query syms --name` does.
+            # Split the miss two ways so the message is actionable: a name that is
+            # not in scope at all is a typo / wrong target, while an in-scope name
+            # is simply not placed yet in crates.json.
             universe = _in_scope_names(layout, target)
             unknown = [n for n in misses if n not in universe] if universe else []
+            unplaced = [n for n in misses if n not in unknown]
+            msg = []
             if unknown:
-                raise SystemExit(
-                    "scaffold: not in scope (unknown symbol/type): "
-                    + ", ".join(repr(n) for n in unknown))
-            _spawn(target, seeds=misses)
-            doc = crates.load(layout)
+                msg.append("not in scope (unknown symbol/type): "
+                           + ", ".join(repr(n) for n in unknown))
+            if unplaced:
+                msg.append("in scope but not placed in crates.json: "
+                           + ", ".join(repr(n) for n in unplaced)
+                           + " — add them to the oracle, then re-run.")
+            raise SystemExit("scaffold: " + "; ".join(msg))
         entries, missing = _entries_for_names(doc, name)
         for n in missing:
             print(f"scaffold: {n}: not placed", file=sys.stderr)
@@ -97,7 +103,7 @@ def scaffold(
 
     # --- act
     if create:
-        stats = _materialize(layout, entries, _elem_aliases(layout, target),
+        stats = _materialize(layout, entries,
                              _scope_map(layout, target), _field_map(layout))
         mstats = _materialize_manifests(layout, doc)
         print(f"[crustify scaffold --create] {stats}{mstats} → {layout.rust}")
@@ -108,11 +114,6 @@ def scaffold(
             if p not in seen:
                 seen.add(p)
                 print(p)
-
-
-def _spawn(target: Path, seeds: list[str] | None = None) -> None:
-    from crustify.agents.scaffolder import CrustifyScaffolder
-    CrustifyScaffolder(target, seeds=seeds).run()
 
 
 def _in_scope_names(layout, target: Path) -> set[str]:
@@ -193,7 +194,8 @@ def _validate(layout) -> None:
 
 def _entry(cname: str, c: dict, rs: str, rr: dict) -> dict:
     return {"crate": cname, "crate_path": c.get("crate_path"), "rs": rs,
-            "members": rr.get("members") or {}, "def_file": rr.get("def_file")}
+            "members": rr.get("members") or {}, "tu": rr.get("tu"),
+            "headers": rr.get("headers") or []}
 
 
 def _all_entries(doc: dict) -> list[dict]:
@@ -229,7 +231,7 @@ def _entries_for_path(doc, layout, target, file, dir) -> list[dict]:
     for cname, c in (doc.get("crates") or {}).items():
         for m in (c.get("modules") or {}).values():
             for rs, rr in (m.get("rs") or {}).items():
-                files = [f for f in [rr.get("def_file"), *(rr.get("decl_files") or [])] if f]
+                files = [f for f in [rr.get("tu"), *(rr.get("headers") or [])] if f]
                 if file is not None:
                     hit = any(f == want for f in files)
                 else:
@@ -248,38 +250,9 @@ def _path_filter(layout, target, sel: str) -> str:
 
 # ------------------------------------------------------------------- materialize
 
-def _elem_aliases(layout, target) -> dict[str, list[str]]:
-    """`element-type tag -> [array-cluster tag, …]` from the deps-dag.
-
-    An array cluster is a foundational leaf: the generic `CVec<T, S>` is
-    T-agnostic and a synthetic tag has no dependents, so it wraps FIRST. Its
-    typed `CVec<T>` aliases reference element wrappers that wrap LATER — the dag
-    records those as the cluster's `fallback` (the cluster renders the elem raw
-    `ffi::T`, back-filled once the elem lands). So the alias is scaffolded in the
-    ELEMENT's module (owner = the elem) as `// Alias: <cluster>` — the back-fill
-    site — not in the cluster's. The dag has already resolved elem strings to
-    canonical tags and dropped scalars (no wrapper); missing dag → empty."""
-    out: dict[str, list[str]] = {}
-    try:
-        doc = json.loads(layout.deps_dag(target).read_text())
-    except (OSError, ValueError, AttributeError):
-        return out
-    for layer in doc.get("layers", []):
-        for n in layer:
-            if not isinstance(n, dict) or n.get("subkind") != "array":
-                continue
-            for et in (n.get("fallback") or {}).get("types", []):
-                out.setdefault(et, []).append(n["id"])
-    for et in out:
-        out[et].sort()
-    return out
-
-
 def _materialize(layout, entries: list[dict],
-                 alias_map: dict[str, list[str]] | None = None,
                  scope_map: dict[str, str] | None = None,
                  field_map: dict[str, list[str]] | None = None) -> str:
-    alias_map = alias_map or {}
     scope_map = scope_map or {}
     field_map = field_map or {}
     created = updated = preserved = links = 0
@@ -289,11 +262,11 @@ def _materialize(layout, entries: list[dict],
         rs_path = crate_dir / rs
         if not rs_path.exists():
             rs_path.parent.mkdir(parents=True, exist_ok=True)
-            rs_path.write_text(_stub(e, alias_map, scope_map, field_map))
+            rs_path.write_text(_stub(e, scope_map, field_map))
             created += 1
-        elif _merge_anchors(rs_path, e, alias_map, scope_map, field_map):
-            # File already there but newly-homed members (or a cluster's element
-            # aliases) lack an anchor — `--create` is additive/idempotent (the
+        elif _merge_anchors(rs_path, e, scope_map, field_map):
+            # File already there but newly-homed members lack an anchor —
+            # `--create` is additive/idempotent (the
             # docstring contract), so add the missing ones rather than leaving
             # them unscaffolded.
             updated += 1
@@ -318,9 +291,9 @@ def _materialize_manifests(layout, doc: dict) -> str:
     crates = doc.get("crates") or {}
     # A wrapper crate becomes "real" once it has a scaffolded lib.rs (members were
     # placed there); skip empty ones (e.g. a foreign lib with no wrappers). NOTE:
-    # `in_tree` is NOT the gate — foreign-lib wrapper crates (libc, libpthread)
-    # are `in_tree=False` yet hold wrapper code (e.g. the pthread_mutex_t wrapper)
-    # that must compile and obey the SAFETY discipline just like the project crate.
+    # `in_tree` is provenance, never a gate: an out-of-tree dependency (libc,
+    # libpthread) gets a wrapper crate like any other, holding safe Rust that
+    # must compile and obey the SAFETY discipline just like the project crate.
     real = {n: c for n, c in crates.items()
             if (layout.repo_root / c["crate_path"] / "src" / "lib.rs").exists()}
     ws_toml = layout.rust / "Cargo.toml"
@@ -349,8 +322,8 @@ def _crate_manifest(name: str, c: dict, crate_dir: Path, layout,
     # it resolves identically from the main checkout and from any worktree.
     deps = [f'crustify-prim = {{ path = "{crustify_prim}" }}']
     # The crate's -sys FFI dep: explicit `sys_crate`, else the `<name>-sys`
-    # convention (foreign wrapper crates carry no `sys_crate` but still reference
-    # `ffi::` from their bindgen crate, e.g. libpthread → libpthread-sys).
+    # convention. Every library with bound entities has one, in-tree or not
+    # (e.g. libpthread → libpthread-sys).
     sysdir = (layout.repo_root / c["sys_crate"]) if c.get("sys_crate") else None
     if sysdir is None and (layout.rust / f"{name}-sys").exists():
         sysdir = layout.rust / f"{name}-sys"
@@ -405,24 +378,19 @@ def _ensure_workspace_lints(ws_toml: Path) -> None:
 
 
 def _merge_anchors(rs_path: Path, e: dict,
-                   alias_map: dict[str, list[str]] | None = None,
                    scope_map: dict[str, str] | None = None,
                    field_map: dict[str, list[str]] | None = None) -> int:
     """Add anchors missing from the existing managed `.rs`: for each member, its
     item anchor by scope (`// Wraps:` wrap / `// Replaces:` port) + todo (macros
-    are never anchored), a type's `// Field:` accessor anchors, and — for a type
-    that is an array cluster's element — a `// Alias: <cluster>` + todo per
-    arraying cluster, inserted right after that ELEMENT's item-anchor line so it
-    lands in the element's region (its owner; the back-fill site for the cluster's
-    raw alias). Idempotent (skips anchors already present, filled `///` or not).
-    Returns the number of anchors added."""
-    alias_map = alias_map or {}
+    are never anchored), plus a type's `// Field:` accessor anchors. Idempotent
+    (skips anchors already present, filled `///` or not). Returns the number of
+    anchors added."""
     scope_map = scope_map or {}
     field_map = field_map or {}
     text = rs_path.read_text()
     added = 0
     new: list[str] = []
-    for kind in ("types", "functions", "globals"):
+    for kind in ("types", "functions", "callbacks", "globals"):
         for nm in e["members"].get(kind) or []:
             # Verb-agnostic match (won't duplicate a fresh-composed anchor of
             # either verb).
@@ -438,28 +406,6 @@ def _merge_anchors(rs_path: Path, e: dict,
         if not text.endswith("\n"):
             text += "\n"
         text += "\n".join(new) + "\n"
-    # element aliases — one `// Alias: <cluster>` per arraying cluster, inserted
-    # into THAT element's region (so an element arrayed by two clusters gets a
-    # sub-anchor under each — they're distinct CVec<Elem,S> aliases over distinct
-    # strategies). The presence check is region-scoped.
-    for nm in e["members"].get("types") or []:
-        clusters = alias_map.get(nm)
-        if not clusters:
-            continue
-        mrep = re.search(rf"(?m)^[ \t]*//+\s*(?:Replaces|Wraps):\s*{re.escape(nm)}\b.*\n", text)
-        if not mrep:
-            continue
-        region_start = mrep.end()
-        nxt = re.search(r"(?m)^[ \t]*//+\s*(?:Replaces|Wraps):", text[region_start:])
-        region = text[region_start:region_start + (nxt.start() if nxt else len(text))]
-        ins: list[str] = []
-        for ct in clusters:
-            if re.search(rf"(?m)^\s*//+\s*Alias:\s*{re.escape(ct)}\b", region):
-                continue
-            ins += [f"// Alias: {ct}", _TODO, ""]
-        if ins:
-            text = text[:region_start] + "\n".join(ins) + "\n" + text[region_start:]
-            added += len(ins) // 3
     if added:
         rs_path.write_text(text)
     return added
@@ -468,8 +414,7 @@ def _merge_anchors(rs_path: Path, e: dict,
 _TODO = "// crustify:todo"  # matches _schedule._TODO; a surviving one = pending
 
 
-def _stub(e: dict, alias_map: dict[str, list[str]] | None = None,
-          scope_map: dict[str, str] | None = None,
+def _stub(e: dict, scope_map: dict[str, str] | None = None,
           field_map: dict[str, list[str]] | None = None) -> str:
     # Each member is laid as an item anchor whose verb is its scope — `// Wraps:`
     # for a wrap-scope item, `// Replaces:` for a port-scope one (a native Rust
@@ -477,18 +422,17 @@ def _stub(e: dict, alias_map: dict[str, list[str]] | None = None,
     # Macros are NOT anchored: bindgen owns their `ffi::` bindings /
     # `crustify_<NAME>` shims and the C `#define` stays, so the port/wrap stages
     # never fill a macro. A type additionally gets one `// Field: <name>` accessor
-    # anchor per field, and — if it is an array cluster's element — one
-    # `// Alias: <cluster>` sub-anchor per arraying cluster (its typed
-    # `CVec<Self, ClusterStrategy>` alias), all laid right after the item anchor so
-    # they bind to it as the owner. The wrap/port AGENT locates each by its anchor,
+    # anchor per field, laid right after the item anchor so it binds to it as
+    # the owner. The wrap/port AGENT locates each by its anchor,
     # fills it, and promotes `//` -> `///` while dropping the todo. This is the
     # agent's fill contract — the scheduler schedules blindly and no longer reads
     # these markers, so the verb + todo are load-bearing for the agent, not the
     # scheduler.
-    alias_map = alias_map or {}
     scope_map = scope_map or {}
     field_map = field_map or {}
-    src = e.get("def_file") or "(external — no in-tree source)"
+    src = e.get("tu") or (
+        "(no TU — placed by headers: "
+        + ", ".join(e.get("headers") or ["?"]) + ")")
     lines = ["//! crustify:managed — generated module skeleton.",
              "//!",
              f"//! C source: {src}",
@@ -496,15 +440,13 @@ def _stub(e: dict, alias_map: dict[str, list[str]] | None = None,
              ""]
     m = e["members"]
     any_member = False
-    for kind in ("types", "functions", "globals"):
+    for kind in ("types", "functions", "callbacks", "globals"):
         for nm in m.get(kind) or []:
             verb = "Wraps" if scope_map.get(nm) == "wrap" else "Replaces"
             lines += [f"// {verb}: {nm}", _TODO, ""]
             if kind == "types":
                 for fld in field_map.get(nm, ()):
                     lines += [f"// Field: {fld}", _TODO, ""]
-            for ct in alias_map.get(nm, ()):
-                lines += [f"// Alias: {ct}", _TODO, ""]
             any_member = True
     if not any_member:
         lines.append("// (no members homed here yet)")

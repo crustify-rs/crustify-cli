@@ -1,24 +1,34 @@
 """Access layer for ``crates.json`` — the whole-repo crate/module decomposition.
 
 ``crates.json`` is the placement oracle: it maps every in-scope C symbol/type
-to the unique Rust ``.rs`` that homes it. ``CrustifyScaffolder`` writes the file
-(filling ``templates/crates.json``'s layout); this module is the consumer-side
-read / lookup / validate API the ``scaffold`` command uses against it. Schema
+to the unique Rust ``.rs`` that homes it. It is authored outside crustify — by
+hand, or by an orchestrator driving ``prompts/scaffolder.md`` — against the
+layout in ``templates/crates.json``; this module is the consumer-side read /
+lookup / validate API the ``scaffold`` command uses against it. Schema
 authority: ``templates/crates.json``.
 
-Shape (eliding ``_comment_*`` keys)::
+Shape (eliding ``_comment`` keys)::
 
     crates.<crate> = {
       kind, in_tree, crate_path, sys_crate?, depends_on: [crate, ...],
       modules.<module> = {
         rust_path,
         rs.<path> = {                 # single source of truth; the module's
-          def_file: str | None,       # TU list + header surface derive from these
-          decl_files: [str, ...],
-          members: {functions: [], types: [], macros: [], globals: []},
+          tu: str | None,             # source + header surface derive from these
+          headers: [str, ...],
+          members: {functions: [], types: [], callbacks: [],
+                    macros: [], globals: []},
         },
       },
     }
+
+``tu`` is the ONE translation unit the ``.rs`` mirrors (null when there is no
+in-tree definition site — a callback, an extern, an opaque struct, or any
+entity of an out-of-tree library); ``headers`` are the headers its members are
+declared or defined through. Scalar ``tu`` + plural ``headers`` is what lets a
+same-stem ``foo.c``/``foo.h`` pair be ONE Rust module instead of colliding.
+
+Field meaning: ``docs/schemas/crates.md``. Layout: ``templates/crates.json``.
 """
 
 from __future__ import annotations
@@ -26,7 +36,9 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-_KINDS = ("functions", "types", "macros", "globals")
+# Member buckets. `macros` is homed for library attribution only — bindgen
+# owns a macro's whole surface, so nothing anchors or wraps one.
+_KINDS = ("functions", "types", "callbacks", "macros", "globals")
 
 
 # --------------------------------------------------------------- load / save
@@ -46,26 +58,26 @@ def save(layout, doc: dict) -> None:
 
 # ------------------------------------------------------------------- lookup
 
-def lookup(
-    doc: dict, name: str, *,
-    def_file: str | None = None, decl_file: str | None = None,
-) -> Optional[dict]:
+def lookup(doc: dict, name: str, *, file: str | None = None) -> Optional[dict]:
     """Resolve an entity to its home, or ``None`` on a miss. Returns
     ``{crate, module, rs, crate_path}``.
 
-    Matches a member ``name`` in some ``.rs`` whose provenance matches the given
-    ``def_file`` (exact) or ``decl_file`` (∈ ``decl_files``). With neither
-    qualifier the first ``.rs`` containing ``name`` wins — pass ``def_file`` /
-    ``decl_file`` to disambiguate a name collision (file-local statics)."""
+    Matches a member ``name`` in some ``.rs``; ``file`` narrows by provenance,
+    matching EITHER the ``tu`` or any of the ``headers``. One qualifier rather
+    than two because an entity is reached by whichever file the caller happens
+    to hold — a header-defined struct is looked up by its header, a TU function
+    by its ``.c``, and both may name the same ``.rs``.
+
+    With no qualifier the first ``.rs`` containing ``name`` wins — pass ``file``
+    to disambiguate a name collision (file-local statics in different TUs)."""
     for crate, c in (doc.get("crates") or {}).items():
         for mod, m in (c.get("modules") or {}).items():
             for rs, r in (m.get("rs") or {}).items():
                 members = r.get("members") or {}
                 if not any(name in (members.get(k) or []) for k in _KINDS):
                     continue
-                if def_file is not None and r.get("def_file") != def_file:
-                    continue
-                if decl_file is not None and decl_file not in (r.get("decl_files") or []):
+                if file is not None and file != r.get("tu") and file not in (
+                        r.get("headers") or []):
                     continue
                 return {"crate": crate, "module": mod, "rs": rs,
                         "crate_path": c.get("crate_path")}
@@ -77,8 +89,9 @@ def lookup(
 def validate(doc: dict) -> list[str]:
     """Return a list of error strings (``[]`` = valid):
 
-      - **uniqueness** — each ``(kind, name, def_file)`` homes in exactly one
-        ``.rs`` (two ``.rs`` claiming it = a duplicate Rust definition).
+      - **uniqueness** — each ``(kind, name, tu)`` homes in exactly one ``.rs``
+        (two ``.rs`` claiming it = a duplicate Rust definition). The ``tu``
+        component keeps same-named file-local statics in different TUs apart.
       - **deps DAG** — ``depends_on`` has no cycle (Rust forbids crate cycles).
       - **well-formedness** — every ``depends_on`` names a defined crate.
     """
@@ -89,13 +102,13 @@ def validate(doc: dict) -> list[str]:
     for crate, c in crates.items():
         for mod, m in (c.get("modules") or {}).items():
             for rs, r in (m.get("rs") or {}).items():
-                df = r.get("def_file")
+                tu = r.get("tu")
                 for kind, names in (r.get("members") or {}).items():
                     for nm in names or []:
-                        key = (kind, nm, df)
+                        key = (kind, nm, tu)
                         if key in seen:
                             errors.append(
-                                f"duplicate: {kind} {nm!r} (def_file={df}) in "
+                                f"duplicate: {kind} {nm!r} (tu={tu}) in "
                                 f"{seen[key]} AND {crate}/{mod}/{rs}")
                         else:
                             seen[key] = f"{crate}/{mod}/{rs}"

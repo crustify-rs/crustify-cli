@@ -338,7 +338,7 @@ def wrap_types(
     _doc = _crates.load(layout)
 
     def _lib_of(n) -> str | None:
-        hit = _crates.lookup(_doc, n.id, def_file=n.defined_in)
+        hit = _crates.lookup(_doc, n.id, file=n.defined_in)
         return hit["crate"] if hit else None
 
     _check_bindgen(layout, target,

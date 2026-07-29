@@ -94,11 +94,11 @@ _SKIP_CRATES: frozenset[str] = frozenset()
 _TODO = "// crustify:todo"
 _MANAGED = "//! crustify:managed"
 
-# Classification is by kind *prefix* (robust to the fresh composer's coarse
-# taxonomy — `function_exported`/`function_static`/`global_extern`/`macro` —
-# and the analyzer's finer one): `function_*`/`global_*` get a re-export /
-# safe-view `// Replaces:` anchor; port-scope (TU) `macro*` gets `// Mirrors:`
-# (header macros are bindgen's `-sys` job). These never anchor:
+# Classification is by kind *prefix*: `function_*` / `global_*` get a
+# re-export / safe-view `// Replaces:` anchor. `macro*` gets NONE — macros are
+# neither ported nor wrapped, bindgen owns their whole surface. `Mirrors` is
+# retained on the anchor grammar for the port stage's own use. These never
+# anchor (no manifest entry exists to place):
 _SKIP_KINDS: frozenset[str] = frozenset({"external", "builtin"})
 
 
@@ -249,13 +249,11 @@ def _wrap_home_header(decls: list[str], defined_in: str) -> str:
     return scope.canonical_decl(decls) or defined_in
 
 
-def _classify_symbols(syms_by_dir, port_files, want, analysis_root, manifest_dirs):
+def _classify_symbols(syms_by_dir, port_files, want):
     """Yield ``(name, defined_in, decls, verb, scope_label)`` for every
-    anchorable symbol — the file-grained replacement for ``_symbol_anchors``'
-    owner routing. Classification is identical (``function_*``/``global_*`` →
-    ``Replaces``; port TU ``macro`` → ``Mirrors``; in-tree callable wrap macro →
-    ``Replaces``; external/value macros skipped); routing is the caller's job."""
-    macro_kinds = _macro_kinds(analysis_root, manifest_dirs)
+    anchorable symbol, routed file-grained. Classification is (``function_*``/``global_*`` →
+    ``Replaces``; macros skipped entirely — bindgen owns them); routing is
+    the caller's job."""
     for mdir, entries in syms_by_dir.items():
         parts = Path(mdir).parts
         crate = parts[0] if parts else None
@@ -269,16 +267,14 @@ def _classify_symbols(syms_by_dir, port_files, want, analysis_root, manifest_dir
             df = e.get("defined_in") or ""
             decls = _decls(e.get("declared_in"))
             if kind.startswith("macro"):
-                dl = decls or ([df] if df else [])
-                if scope.classify(df, dl, port_files) == "port":
-                    yield name, df, dl, "Mirrors", "port"
-                else:
-                    in_tree = bool(df) and not df.startswith("/")
-                    if in_tree and macro_kinds.get((name, df)) in (
-                            "macro_symbol", "macro_misc"):
-                        yield name, df, dl, "Replaces", "wrap"
-                    # external / value macro → bindgen's job, no stub anchor.
-            elif kind.startswith(("function_", "global_")):
+                # Macros get NO anchor: they are the one kind that is neither
+                # ported (port.py: "macros … are bindgen's") nor wrapped
+                # (wrap.py excludes macro_* from selection) — bindgen owns their
+                # whole surface, a `crustify_<NAME>` shim or a `pub const`. They
+                # still appear in crates.json `members` so bindgen can resolve
+                # which library owns them, but nothing anchors them to a .rs.
+                continue
+            if kind.startswith(("function_", "global_")):
                 yield name, df, decls, "Replaces", scope.classify(df, decls, port_files)
 
 
@@ -398,7 +394,7 @@ def compose_files(
             add_type(entry, _entry_scope(entry, port_files) if port_files else "wrap")
 
     for name, df, decls, verb, scope_label in _classify_symbols(
-            syms_by_dir, port_files, want, analysis_root, manifest_dirs):
+            syms_by_dir, port_files, want):
         if scope_label == "wrap":
             tf = sym_via.get((name, df)) or _wrap_home_header(decls, df)
         else:
@@ -630,108 +626,6 @@ def _op_ownership(
                 if op and (op not in owner or tag < owner[op]):
                     owner[op] = tag
     return owner
-
-
-def _macro_kinds(
-    analysis_root: Path | None, manifest_dirs: set[str],
-) -> dict[tuple[str, str | None], str]:
-    """``(name, defined_in) -> refined macro subkind`` from the on-disk
-    ``syms.json``. The fresh composer only emits the coarse ``"macro"``, but the
-    scaffolder must tell **callable** wrap macros (``macro_symbol`` /
-    ``macro_misc`` — get a safe wrapper) from **value** ones (``macro_constant``
-    — bindgen surfaces a plain const, no wrapper). Same fresh-vs-on-disk pattern
-    as :func:`_op_ownership`."""
-    out: dict[tuple[str, str | None], str] = {}
-    if analysis_root is None:
-        return out
-    for mdir in sorted(manifest_dirs):
-        try:
-            doc = json.loads((analysis_root / mdir / "syms.json").read_text())
-        except (OSError, ValueError):
-            continue
-        for e in doc.get("symbols", []):
-            k = e.get("kind") or ""
-            if k.startswith("macro") and e.get("name"):
-                out[(e["name"], e.get("defined_in"))] = k
-    return out
-
-
-def _symbol_anchors(
-    syms_by_dir: dict[str, list[dict]],
-    port_files: set[str],
-    want: set[str] | None,
-    analysis_root: Path | None,
-    manifest_dirs: set[str],
-) -> tuple[dict[str, list[SymAnchor]], dict[str, list[SymAnchor]]]:
-    """Classify every in-scope symbol into a stable per-item anchor.
-
-    Returns ``(ops_by_tag, free_by_mdir)``:
-      - ``ops_by_tag[tag]`` — a type's owned-op anchors (ride in their
-        type's home ``.rs``, file-grained).
-      - ``free_by_mdir[mdir]`` — a source file's free-symbol + mirrored-macro
-        anchors (live in its ``<stem>.rs``).
-
-    The **fresh** composer is scope-authoritative and gives the deterministic
-    base kind (``function_*`` / ``global_*`` / ``macro``); ownership comes from
-    the on-disk ``ops`` (see :func:`_op_ownership`). Classification by kind
-    prefix (robust to the coarse fresh taxonomy): ``function_*`` / ``global_*``
-    → ``// Replaces:``; port-scope (TU) ``macro`` → ``// Mirrors:``; an
-    **in-tree callable** wrap (header) ``macro`` → ``// Replaces:`` safe wrapper
-    over its bindgen shim (external / value macros get only the bindgen.h C
-    shim, no wrapper); ``external`` / ``builtin`` skipped. The bare ``kind:null``
-    gate lives in the scheduler (it reads the DAG, where bare kinds appear — the
-    fresh composer never emits one).
-    """
-    op_owner = _op_ownership(analysis_root, manifest_dirs)
-    macro_kinds = _macro_kinds(analysis_root, manifest_dirs)
-
-    ops_by_tag: dict[str, list[SymAnchor]] = defaultdict(list)
-    free_by_mdir: dict[str, list[SymAnchor]] = defaultdict(list)
-
-    for mdir, entries in syms_by_dir.items():
-        parts = Path(mdir).parts
-        crate = parts[0] if parts else None
-        if crate is None or crate in _SKIP_CRATES or (
-                want is not None and crate not in want):
-            continue
-        for e in entries:
-            name = e.get("name")
-            kind = e.get("kind") or ""
-            if not name or kind in _SKIP_KINDS:
-                continue
-            df = e.get("defined_in")
-            if kind.startswith("macro"):
-                decls = e.get("declared_in") or []
-                if not isinstance(decls, list):
-                    decls = [decls] if decls else []
-                if scope.classify(df or "", decls, port_files) == "port":
-                    # TU (port) macro -> mirror in its <stem>.rs
-                    free_by_mdir[mdir].append(SymAnchor(name, df, "Mirrors"))
-                else:
-                    # header (wrap) macro: the C shim is bindgen's (bindgen.h);
-                    # an *in-tree, callable* one also gets a safe Rust wrapper
-                    # over `ffi::crustify_<NAME>` in its header's <stem>.rs.
-                    # external / value (constant) macros get neither here.
-                    in_tree = bool(df) and not df.startswith("/")
-                    if in_tree and macro_kinds.get((name, df)) in (
-                            "macro_symbol", "macro_misc"):
-                        free_by_mdir[mdir].append(SymAnchor(name, df, "Replaces"))
-            elif kind.startswith(("function_", "global_")):
-                anc = SymAnchor(name, df, "Replaces")
-                owner = op_owner.get(name)
-                (ops_by_tag[owner] if owner else free_by_mdir[mdir]).append(anc)
-
-    def _dedupe(items: list[SymAnchor]) -> list[SymAnchor]:
-        seen: set[str] = set()
-        out: list[SymAnchor] = []
-        for a in sorted(items):
-            if a.name not in seen:
-                seen.add(a.name)
-                out.append(a)
-        return out
-
-    return ({k: _dedupe(v) for k, v in ops_by_tag.items()},
-            {k: _dedupe(v) for k, v in free_by_mdir.items()})
 
 
 def _entry_scope(entry: dict[str, Any], port_files: set[str]) -> str:

@@ -577,9 +577,10 @@ def main() -> None:
         "scaffold",
         help=(
             "Resolve C symbols/types to their Rust .rs via crates.json. "
-            "Looks up the placement oracle; on a miss spawns CrustifyScaffolder "
-            "to fill it. `--all` fills the whole target; `--validate` runs the "
-            "consistency gate."
+            "Deterministic, no LLM: the placement oracle is authored outside "
+            "this stage, and an unplaced selection is a hard error. `--all` "
+            "materializes the whole target; `--validate` runs the consistency "
+            "gate."
         ),
     )
     # Selection is required and explicit — there is no default.

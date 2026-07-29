@@ -236,7 +236,7 @@ def resolve_path(node: Node, doc: dict, layout) -> Path | None:
     no longer parses anchors at all (it schedules blindly; see module docstring)."""
     from crustify import crates as _crates
     from crustify.scaffold import _full_rs
-    hit = (_crates.lookup(doc, node.id, def_file=node.defined_in or None)
+    hit = (_crates.lookup(doc, node.id, file=node.defined_in or None)
            or _crates.lookup(doc, node.id))
     if not hit:
         return None

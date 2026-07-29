@@ -1,61 +1,5 @@
 {
-  "_comment": [
-    "Whole-repo crate/module decomposition - the target architecture of the Rust",
-    "port. Target-agnostic and cumulative: 'which unique Rust .rs does this C",
-    "symbol/type live in', independent of porting progress. Port/wrap status and",
-    "per-target scope live in scope.json, never here. Two layers seeded at",
-    "different times: CRATES (one per link unit, mirroring build.json's",
-    "`libraries` keys) and, within each, MODULES + their .rs files,",
-    "whose `members` CrustifyScaffolder fills as entities are brought in scope.",
-    "`crustify scaffold` is a mechanical lookup against this file."
-  ],
-
-  "_comment_placement": [
-    "Every symbol/type is attributed to EXACTLY ONE .rs, in two mechanical steps.",
-    "(1) Assign the entity to a MODULE (the subsystem it belongs to, see modules) -",
-    "reasoned from its `query` record (`defined_in` / `declared_in`), the codebase,",
-    "and build.json (NOT build.info, a per-target artifact some targets lack).",
-    "Normally every entity from one C source file shares a module. (2) Home it in",
-    "`<source-stem>.rs` within that module: take its `defined_in`, drop the",
-    "directory, swap the extension for .rs - a TU (`bn_lib.c` -> `bn_lib.rs`) and a",
-    "header (`bn_local.h` -> `bn_local.rs`) are treated IDENTICALLY. Entities that",
-    "share a `defined_in` co-home. Entities with `defined_in: null` (callbacks,",
-    "externs, opaque/forward-declared structs) have no source file: place each in",
-    "the module and `<header>.rs` of the best-fit `declared_in` header. Lookup key:",
-    "(name, def_file) OR (name, decl_file) for null-def_file entities."
-  ],
-
-  "_comment_crate": [
-    "crates: one entry per link unit, keyed by crate name. `kind` is the crate",
-    "type (library -> staticlib/cdylib, executable -> bin). `in_tree` is false for",
-    "external deps we only bind (libc): their entities carry a null def_file.",
-    "`sys_crate` (the FFI/wrap companion) is present only for in_tree libraries.",
-    "`depends_on` is the inter-crate edge set from build.json link_dependencies -",
-    "a DAG; the SCC floor forbids a cycle between two crates. `modules` is {} in a",
-    "freshly seeded shell."
-  ],
-
-  "_comment_module": [
-    "modules: logical subsystems within a crate, keyed by module name. `rust_path`",
-    "is the module dir under crate_path. `rs` maps each Rust file to the C source",
-    "file it mirrors and is the single source of truth - the module's source-file",
-    "and header surface are NOT stored, they are DERIVED on demand from the `rs`",
-    "entries: the module's source files are the distinct `def_file`s (`.c` TUs and",
-    "`.h` headers alike); its boundary headers are the union of the `decl_files`,",
-    "zoned by path -> Rust visibility (`*_local.h` -> pub(crate); `include/internal/*`",
-    "-> pub to sibling crates; `include/openssl/*` -> published API)."
-  ],
-
-  "_comment_rs": [
-    "rs: keyed by the .rs path under crate_path. Each entry mirrors ONE C source",
-    "file - `def_file` is that file: a `.c` for a TU-homed set, a `.h` for a",
-    "header-homed set, or null only for an external/system entity set (libc,",
-    "placed by `decl_files`). `decl_files` are the headers the members are declared",
-    "through. `members` lists the entities homed here by kind (functions / types /",
-    "macros / globals) as BARE NAMES - provenance lives once on the .rs, not per",
-    "member. Every entity whose `defined_in` is this file homes here; a null-def",
-    "entity homes here when this is the `<header>.rs` of its best-fit `declared_in`."
-  ],
+  "_comment": "Whole-repo crate/module decomposition — the target architecture of the Rust port. Field meaning and the placement algorithm: docs/schemas/crates.md. Authored outside crustify; `crustify scaffold` only reads it.",
 
   "crates": {
     "libssl": {
@@ -69,23 +13,30 @@
           "rust_path": "src/statem",
           "rs": {
             "src/statem/statem_lib.rs": {
-              "def_file": "ssl/statem/statem_lib.c",
-              "decl_files": ["ssl/statem/statem_local.h", "include/internal/statem.h"],
-              "_comment": "TU-homed: the functions/globals defined in statem_lib.c.",
+              "_comment": "TU + its own headers: functions from statem_lib.c and a type defined in one of the headers below co-home here.",
+              "tu": "ssl/statem/statem_lib.c",
+              "headers": ["ssl/statem/statem_local.h", "include/internal/statem.h"],
               "members": {
                 "functions": ["tls_setup_handshake", "ossl_statem_set_in_init"],
-                "types": [],
+                "types": ["ossl_statem_st"],
+                "callbacks": [],
                 "macros": [],
                 "globals": []
               }
-            },
-            "src/statem/statem_local.rs": {
-              "def_file": "ssl/statem/statem_local.h",
-              "decl_files": ["ssl/statem/statem_local.h"],
-              "_comment": "header-homed: a type DEFINED in statem_local.h mirrors statem_local.rs - NOT bound to a consuming/implementing TU.",
+            }
+          }
+        },
+        "quic": {
+          "rust_path": "src/quic",
+          "rs": {
+            "src/quic/quic_ackm.rs": {
+              "_comment": "STEM-PARTNER attribution: include/internal/quic_ackm.h names no crate on its own (include/ is in several libraries' include_dirs and no library's source_dirs), but it shares a stem with ssl/quic/quic_ackm.c — so it takes that TU's crate and module, and both co-home in this one .rs.",
+              "tu": "ssl/quic/quic_ackm.c",
+              "headers": ["include/internal/quic_ackm.h"],
               "members": {
-                "functions": [],
-                "types": ["ossl_statem_st"],
+                "functions": ["ossl_ackm_new", "ossl_ackm_free"],
+                "types": ["ossl_ackm_st"],
+                "callbacks": [],
                 "macros": [],
                 "globals": []
               }
@@ -106,13 +57,14 @@
           "rust_path": "src/comp",
           "rs": {
             "src/comp/comp.rs": {
-              "def_file": "include/openssl/comp.h",
-              "decl_files": ["include/openssl/comp.h", "include/internal/cryptlib.h"],
-              "_comment": "stack_st_SSL_COMP is a phantom (null def_file); placed by its best-fit declared_in header (comp.h), homing in comp.rs alongside comp.h's own defined entities.",
+              "_comment": "No TU — a header-only module. stack_st_SSL_COMP is declared but never defined, so it homes by its best-fit header. OPENSSL_malloc is homed for library attribution only: bindgen owns it, no anchor is laid.",
+              "tu": null,
+              "headers": ["include/openssl/comp.h", "include/internal/cryptlib.h"],
               "members": {
                 "functions": [],
                 "types": ["stack_st_SSL_COMP"],
-                "macros": [],
+                "callbacks": ["COMP_METHOD_free_fn"],
+                "macros": ["OPENSSL_malloc"],
                 "globals": []
               }
             }
@@ -151,16 +103,23 @@
       "kind": "library",
       "in_tree": false,
       "crate_path": "crustify/rust/libc",
+      "sys_crate": "crustify/rust/libc-sys",
       "depends_on": [],
-      "_comment": "external dep: in_tree=false. Its entities are externs (null def_file) placed by decl_files; def_file stays null (no in-tree source to mirror). bindgen-only, never ported; no sys_crate.",
+      "_comment": "Out-of-tree dependency. `in_tree: false` is provenance only — it gets a -sys crate and a wrapper crate like any in-tree library, and its wrappers obey the same SAFETY discipline. Its entities simply have no TU.",
       "modules": {
         "mem": {
           "rust_path": "src/mem",
           "rs": {
             "src/mem.rs": {
-              "def_file": null,
-              "decl_files": ["string.h"],
-              "members": {"functions": ["memcpy", "memset"], "types": [], "macros": [], "globals": []}
+              "tu": null,
+              "headers": ["string.h"],
+              "members": {
+                "functions": ["memcpy", "memset"],
+                "types": [],
+                "callbacks": [],
+                "macros": ["NULL"],
+                "globals": []
+              }
             }
           }
         }

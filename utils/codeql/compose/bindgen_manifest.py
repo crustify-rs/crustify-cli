@@ -217,8 +217,8 @@ def _crate_index(repo_root: Path | None) -> dict[str, list[tuple[str, str | None
     for crate, c in (doc.get("crates") or {}).items():
         for m in (c.get("modules") or {}).values():
             for r in (m.get("rs") or {}).values():
-                df = r.get("def_file")
-                decls = set(r.get("decl_files") or [])
+                df = r.get("tu")
+                decls = set(r.get("headers") or [])
                 for names in (r.get("members") or {}).values():
                     for nm in names or []:
                         idx[nm].append((crate, df, decls))
