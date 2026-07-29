@@ -12,7 +12,7 @@
     "All crustify artifacts live under a single `crustify/` directory at the",
     "repository root (which also marks the root). REPO-ROOT-tier artifacts are",
     "project-wide: build.json + crates.json (user-authored),",
-    "alloc.json, the stem-grouped analysis tree",
+    "the stem-grouped analysis tree",
     "(analysis/<dir>/<stem>/{syms,types}.json), the CodeQL database",
     "(codeql/{db,t1,t2}/), and the shared Rust crates (rust/<crate>/).",
     "TARGET-tier artifacts live under crustify/targets/<target>/ and are",

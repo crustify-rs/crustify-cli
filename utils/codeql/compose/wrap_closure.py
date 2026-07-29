@@ -354,8 +354,8 @@ def compose_wrap(
     def add_type(tag: str, tu: str) -> None:
         meta = type_meta.get(tag)
         if meta is None:
-            return  # unknown tag (synthetic cluster / anonymous) — never a C
-                    # type bindgen binds; synthetics are wrap-by-kind downstream.
+            return  # unknown tag (anonymous / not in the types tree) — never
+                    # a C type bindgen binds.
         if not _is_aggregate(meta):
             return  # scalar/primitive typedef (Rust primitive) or a callback
                     # (a sym, handled on the symbol surface) — not a wrap-type.

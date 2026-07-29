@@ -38,8 +38,8 @@ WRAP_MAX_FIELDS: int = 50
 
 WRAP_MAX_SYMS: int = 50
 """Per-batch symbol budget for the wrap stage — wired as the scheduler's
-``max_syms``. It bounds BOTH a type's op-chunking (lifecycle ctors/dtor/up_ref/
-clone/locking + method ``ops[]`` counted together, lifecycle-first so the
+``max_syms``. It bounds BOTH a type's op-chunking (its lifecycle ops --
+droppers / disposers / cloners -- counted together, lifecycle-first so the
 shape-bearing surface is never dropped) AND the free-symbol pooling per file
 (how many wrap-scope free syms ride one ``wrap syms`` agent). Was
 ``WRAP_MAX_OPS`` — renamed to reflect its true dual role now that op sets are
@@ -52,7 +52,7 @@ small."""
 # Used by the port orchestrator (``crustify.port``) to bound the working set
 # handed to a single ``CrustifyPort`` agent. The orchestrator bin-packs
 # port-scope DAG nodes within a dependency layer under these caps; a scheduled
-# type folds its op-set (ctors/dtor/up_ref/clone/ops) into the symbol count, so
+# type folds its lifecycle op-set into the symbol count, so
 # a type and its methods ride one batch. The agent receives a fixed working set
 # and is unaware it is capped.
 #

@@ -55,13 +55,6 @@ stage uses for `bindgen.h`.
 Within a single dir, a file stem that collides with a child dir name is
 folded into that dir's `mod.rs` (the dir doubles as the file-stem module).
 
-Synthetic buffer clusters (`string`/`array`) are the one exception to the
-file-grained rule: they have no real C definition site, so each homes in a
-by-kind module of its library crate (`<crate>/<srcdir0>-{kind}s/<stem>`)
-rather than a source-file `.rs`. Typegens are NOT synthetic in this sense
-— their generators and instances carry real `defined_in`/`declared_in` and
-route through the normal file-grained home like any other type.
-
 The bindgen wiring (`<top>-sys/` crates) is intentionally NOT done here —
 that is the separate `CrustifyBindingsScaffolder` LLM agent's job.
 """
@@ -89,16 +82,9 @@ _BLOCK_END = "// crustify:modules:end"
 # need wrappers for libc/system types — so nothing is excluded by default.
 _SKIP_CRATES: frozenset[str] = frozenset()
 
-# Synthesized cluster kinds that the fresh (T1, T2) `types` composer cannot
-# reconstruct — they're produced by the `analyze types --buffers` /
-# `--typegens` synthesis passes (LLM + alloc.json) and live ONLY in the
-# on-disk analysis tree. The scaffolder pulls them back in from that tree (see
-# `_synthetic_entries`) so the wrap stage's string/array/typegen jobs get a
-# `// Replaces:` anchor to resolve against. NB: only `string`/`array` clusters
-# get a synthetic by-kind home (no real C definition site); `typegen` is here
-# only so its generator entry is pulled in — generators + instances then route
-# to their real `defined_in`/`declared_in` like any other type (see `add_type`).
-_SYNTH_KINDS: frozenset[str] = frozenset({"string", "array", "typegen"})
+# Every type the scaffolder homes comes from the fresh (T1, T2) `types`
+# composer — there are no agent-synthesized type kinds to pull back in from the
+# on-disk tree.
 
 # --- per-symbol anchor model (scheduler idempotency / --reset targets) --------
 # Every emitted symbol gets a stable, scaffolded location anchor + a
@@ -209,8 +195,7 @@ class FileStub:
     """All anchors homing in one source file's ``.rs`` module.
 
     ``src_label`` is the **home** (where the wrapper is placed — a wrap type's
-    declaring header, a port symbol's ``defined_in``, or a synthetic cluster's
-    ``<crustify … cluster: …>`` placeholder). ``source_files`` is the set of
+    declaring header, or a port symbol's ``defined_in``). ``source_files`` is the set of
     every C source path that *contributes* an anchor here (each element's
     ``defined_in`` ∪ ``declared_in``). The ``--file`` / ``--dir`` selectors match
     against ``source_files`` ∪ ``src_label``, so a focused scaffold can name the
@@ -260,7 +245,7 @@ def _load_wrap_routing(
 
 def _wrap_home_header(decls: list[str], defined_in: str) -> str:
     """Fallback import header for a wrap element absent from scope.wrap (e.g. a
-    synthetic cluster): its canonical declaration header, else ``defined_in``."""
+    its canonical declaration header, else ``defined_in``."""
     return scope.canonical_decl(decls) or defined_in
 
 
@@ -295,27 +280,6 @@ def _classify_symbols(syms_by_dir, port_files, want, analysis_root, manifest_dir
                     # external / value macro → bindgen's job, no stub anchor.
             elif kind.startswith(("function_", "global_")):
                 yield name, df, decls, "Replaces", scope.classify(df, decls, port_files)
-
-
-def _synthetic_entries(analysis_root, manifest_dirs, want):
-    """Yield the synthesized cluster type entries (string/array/typegen) the
-    fresh composer can't see, scoped to the in-scope manifest dirs."""
-    for mdir in sorted(manifest_dirs):
-        parts = Path(mdir).parts
-        if len(parts) < 2:
-            continue
-        crate = parts[0]
-        if crate in _SKIP_CRATES or (want is not None and crate not in want):
-            continue
-        try:
-            doc = json.loads((analysis_root / mdir / "types.json").read_text())
-        except (OSError, ValueError):
-            continue
-        for e in doc.get("types", []):
-            _tag = e.get("name") or e.get("type")
-            if (e.get("kind") in _SYNTH_KINDS and _tag
-                    and not str(_tag).startswith("_")):
-                yield e
 
 
 def _linked_in_by_mdir(analysis_root: Path | None) -> dict[str, str]:
@@ -409,26 +373,7 @@ def compose_files(
         tag = entry.get("name") or entry.get("type")
         if not tag:
             return
-        kind = entry.get("kind")
-        if kind in ("string", "array"):
-            # Synthesized buffer cluster — no real C definition. Home its TYPE in
-            # a by-kind module of the crate its ops live in:
-            # ``<crate>-{kind}s/<tag>.rs`` (e.g. ``src-arrays/git2_heap_array.rs``).
-            # Its ops keep their own anchors in their ``declared_in`` files, where
-            # the agent fills the per-synthetic ``impl`` blocks. (Typegens have a
-            # real generator/instantiation site and route normally, below.)
-            md = manifest_dir_for(entry.get("defined_in") or "")
-            crate = _crate_for(md.as_posix()) if md and md.parts else None
-            if crate is None:
-                return
-            stem = _module_name(tag) or tag
-            # Home the synthetic cluster in a by-kind top-level module of its
-            # library crate, keyed off the original source dir so distinct
-            # clusters stay separate: ``<lib>/<srcdir0>-{kind}s/<stem>``.
-            srcdir0 = md.parts[0] if md and md.parts else "synth"
-            st = _stub_at(f"{crate}/{srcdir0}-{kind}s/{stem}",
-                          f"<crustify {kind} cluster: {tag}>")
-        elif scope_label == "wrap":
+        if scope_label == "wrap":
             st = home(type_via.get(tag) or _wrap_home_header(
                 _decls(entry.get("declared_in")), entry.get("defined_in") or ""))
         else:
@@ -450,10 +395,6 @@ def compose_files(
         if crate in _SKIP_CRATES or (want is not None and crate not in want):
             continue
         for entry in entries:
-            add_type(entry, _entry_scope(entry, port_files) if port_files else "wrap")
-
-    if analysis_root is not None:
-        for entry in _synthetic_entries(analysis_root, manifest_dirs, want):
             add_type(entry, _entry_scope(entry, port_files) if port_files else "wrap")
 
     for name, df, decls, verb, scope_label in _classify_symbols(
@@ -666,8 +607,8 @@ def _op_ownership(
 ) -> dict[str, str]:
     """``op-name -> owning type tag`` from the **agent-annotated** on-disk
     ``types.json`` (the fresh T1/T2 composer leaves ``ops`` empty — it is an
-    analyzer-filled field). Scoped to the in-scope manifest dirs, exactly like
-    ``_synthetic_entries``. A name owned by several types is assigned to
+    analyzer-filled field). Scoped to the in-scope manifest dirs. A name owned
+    by several types is assigned to
     the lexicographically smallest tag, so its anchor lands in one file only
     (the other owners merely call it). Name-keyed: a same-named free static in
     another file can be mis-pulled (rare); the (name, defined_in) DAG keying is
@@ -1003,7 +944,7 @@ def main() -> None:
                     help="Restrict to these top-level crate dirs (post-scope).")
     ap.add_argument("--analysis-root", type=Path, default=None,
                     help="<repo_root>/.crustify/analysis. Optional; enables "
-                         "synthetic buffer clusters + linked_in routing.")
+                         "linked_in routing.")
     args = ap.parse_args()
 
     spec = FilterSpec(scope_json_path=args.scope_json)

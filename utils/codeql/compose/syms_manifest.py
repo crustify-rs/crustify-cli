@@ -395,40 +395,45 @@ def _compose_dep_syms(
     return out
 
 
-def _null_ptr_agent(for_arg: bool = False) -> dict:
-    """Agent-fillable ownership block that nests under a `ptr_args[*]` / `ptr_ret`
-    record's `ptr` key -- the SAME structured sub-object a struct field's `ptr`
-    carries (see types_manifest._null_ptr_skeleton), so a pointer is described
-    identically whether it sits in a struct or crosses a call boundary, and the
-    composer's structural keys (position/name/type/const/depth) stay OUTSIDE it.
-    `owned` is a bool, `borrowed` nests `{lifetime}`, and `array.by_ref` carries
-    element ownership.
+def _null_ptr_agent():
+    """The agent-fillable ownership slot on a `ptr_args[*]` / `ptr_ret` record,
+    emitted `null` by the composer.
 
-    `for_arg` adds the ARG-ONLY `lifetime` block ({is_dropped, is_disposed,
-    is_cloned}) -- the lifecycle-primitive role THIS method plays on THIS arg,
-    from which each type's Drop/Clone is reverse-derived. Returns/fields never
-    carry it (a return is produced, not acted on; a field derives from its
-    field-type's record)."""
-    blk = {
-        "scalar": None,
-        "array": None,
-        "string": None,
-        "owned": None,
-        "borrowed": None,
-        "nullable": None,
-        "mutable": None,
-        "note": None,
-    }
-    if for_arg:
-        blk["lifetime"] = {
-            "is_dropped": None, "is_disposed": None, "is_cloned": None}
-    return blk
+    `null` is the UNANALYZED state, so "has this pointer been through the
+    analyzer?" is a null check on one key -- an all-null keyed skeleton would be
+    indistinguishable from a block the agent filled with nulls, and is not
+    submittable anyway (a submitted block replaces the prior WHOLESALE and must
+    be complete, so the agent never patches individual keys into a skeleton).
+
+    Once filled it is `{scalar, array, string, owned, borrowed, nullable,
+    mutable, note}` -- the SAME structured sub-object a struct field's `ptr`
+    carries (see types_manifest._null_ptr_skeleton), so a pointer is described
+    identically whether it sits in a struct or crosses a call boundary. The
+    composer's structural keys (position/name/type/const/depth) stay OUTSIDE it,
+    which is what lets the whole block be replaced. The lifecycle-primitive role
+    a method plays is NOT here but on the symbol entry's top-level `lifetime`
+    (see `_null_lifetime`), which names its subject arg."""
+    return None
+
+
+def _null_lifetime():
+    """The entry-level `lifetime` slot on a call-boundary symbol (function /
+    callback), emitted `null` by the composer.
+
+    A lifecycle primitive is a property of the SYMBOL, not of one of its pointer
+    records: `SSL_free` IS a dropper, and the arg it drops is named by
+    `lifetime.for` -- by NAME, the same way a borrowed `ptr` names its source
+    (`arg:<name>`), so both arg-dependent facts use one vocabulary. Null means
+    "no lifecycle role" and is also the unprocessed state; a filled block is
+    `{for, is_dropper, is_disposer, is_cloner}` and must assert at least one
+    role. Globals and macros have no call boundary and carry no such slot."""
+    return None
 
 
 def _compose_ptr_args(reach: Reach, fn_name: str, fn_def_file: str) -> list[dict]:
     out: list[dict] = []
     for arg in reach.ptr_args_of(fn_name, fn_def_file):
-        out.append({**arg, "ptr": _null_ptr_agent(for_arg=True)})
+        out.append({**arg, "ptr": _null_ptr_agent()})
     return out
 
 
@@ -451,8 +456,16 @@ def _base_function(row: dict, reach: Reach) -> dict[str, Any]:
         "declared_in": sorted(_decls_list(row["decl_files"])),
         "defined_in": def_file or None,
         "type": row["signature"],
+        # Composer-filled: does this function take a trailing `...`? Terminal —
+        # a CodeQL fact off the declaration, never agent-edited. The `signature`
+        # string does not reliably show it. Absent column (a pre-`is_variadic`
+        # extraction) reads as false.
+        "is_variadic": str(row.get("is_variadic") or "0") == "1",
         "ptr_args": _compose_ptr_args(reach, name, def_file),
         "ptr_ret": _compose_ptr_ret(reach, name, def_file),
+        # Agent-filled lifecycle role of the WHOLE symbol, naming its subject arg
+        # in `for` (see _null_lifetime). Null until the analyzer sets it.
+        "lifetime": _null_lifetime(),
         # Body line span from functions.csv (0 when the column is absent — a
         # pre-`loc` extraction — or for a declaration-only extern). Drives the
         # port bin-packer's lines-of-code budget.
@@ -578,9 +591,9 @@ def _port_additions_global(
 def _base_macro(row: dict) -> dict[str, Any]:
     return {
         "name": row["name"],
-        "kind": "macro",  # deterministic + terminal; the agent records what the
-                          # macro expands to in the `macro` {alias,const,typegen}
-                          # block via --update, not by subdividing `kind`.
+        "kind": "macro",  # deterministic + terminal, and the ONLY classification
+                          # a macro carries -- what it expands to is read from
+                          # the source at `defined_in`, never stored.
         "declared_in": [row["def_file"]] if row["def_file"] else [],
         "defined_in": row["def_file"] or None,
         "type": None,
@@ -617,9 +630,10 @@ def _base_callback(
     ownership. `ptr_args`/`ptr_ret`/`depends_on` come from the same
     function-pointer signature CSVs the function composer uses (a callback is a
     subject there); `used_by.{call,ref}` from the function-side inverse +
-    callsites. The one ownership bit inferable from the type alone is
-    `mutable = not const` (a `const` pointee can't be written through); `owned`
-    stays null — owned-vs-borrowed is decided per concrete instance.
+    callsites. Its `ptr` slots are left `null` like any other symbol's — a
+    `const` pointee does pin `mutable` to false, but pre-seeding that would make
+    the slot non-null and so indistinguishable from an analyzed one; the
+    const⟹`mutable != true` implication is enforced at `--update` instead.
 
     A callback has no def_file (a header typedef) and is never ported to native
     Rust (it becomes an `extern "C" fn` type), so it is always wrap-shape;
@@ -629,11 +643,7 @@ def _base_callback(
     decl_file = _first_decl(row["decl_files"])
 
     ptr_args = _compose_ptr_args(reach, name, decl_file)
-    for a in ptr_args:
-        a["ptr"]["mutable"] = False if a["const"] else None
     ret = _compose_ptr_ret(reach, name, decl_file)
-    if ret is not None:
-        ret["ptr"]["mutable"] = False if ret["const"] else None
 
     # call = invokers (indirect-call sites — the contract-bearing set); ref =
     # the remaining signature declarers that only forward/store the pointer.
@@ -659,6 +669,10 @@ def _base_callback(
         "type": None,
         "ptr_args": ptr_args,
         "ptr_ret": ret,
+        # An invoked callback can itself be a lifecycle primitive (a `free_func`
+        # typedef drops its arg), so it carries the same entry-level slot; a fork
+        # may override it when invokers realize different contracts.
+        "lifetime": _null_lifetime(),
         "used_by": {"call": sorted(callsites), "ref": sorted(declarers - callsites)},
         "depends_on": {"syms": dep_syms, "types": dep_types},
     }

@@ -448,11 +448,10 @@ def _run_subject_manifests_list(
 
     # 3. Build agent-invocation plan. The type analyzer only annotates
     #    STRUCTS (real structs + generated-container instances, which are
-    #    ordinary structs). Enums, callbacks, and synthetic clusters stay
-    #    in the manifest (composer-filled, deterministic) but carry NO
-    #    agent worklist entry: enums have no lifecycle/fields; callbacks
-    #    are signature-shaped → the SYMBOL analyzer's job; string/array
-    #    are the buffer pass; typegen engines are the (deferred) wrap pass.
+    #    ordinary structs). Enums and callbacks stay in the manifest
+    #    (composer-filled, deterministic) but carry NO agent worklist entry:
+    #    enums have no fields; callbacks are signature-shaped → the SYMBOL
+    #    analyzer's job.
     worklist_by_dir = entries_by_dir
     if subject == "types":
         worklist_by_dir = {
@@ -695,8 +694,8 @@ def analyze_types(
     STRUCT): structs each carry substantial per-entry analysis work
     (lifecycle classification, per-field accessors, locking, conditional
     drop, per-pointer ownership), and one-per-entry bounds the per-agent
-    effort budget. Enums / synthetic clusters get no type-agent job (callbacks
-    are symbols now — see `_run_subject_manifests_list`). Same-path agents form a chain (sequential;
+    effort budget. Enums get no type-agent job (callbacks are symbols now —
+    see `_run_subject_manifests_list`). Same-path agents form a chain (sequential;
     write-safe); chains run in parallel up to `parallel_max` when
     `--parallel` is set. Without `--parallel` a single chain
     sequences all jobs.
@@ -705,13 +704,9 @@ def analyze_types(
     t1 = Layout(repo_root).t1
     t2 = Layout(repo_root).t2
 
-    seed_mode = filter_spec is not None and filter_spec.is_seed_mode()
-
     # The per-entry pass analyzes every struct (generated-container instances
-    # included — an instance is just an ordinary struct); enums, callbacks, and
-    # synthetic clusters are filtered out of the worklist. The buffer pass is
-    # skipped in seed mode — a focused --name X shouldn't trigger global
-    # synthesis.
+    # included — an instance is just an ordinary struct); enums and callbacks
+    # are filtered out of the worklist.
     _run_subject_manifests_list(
         target, repo_root, t1, t2,
         subject="types",
@@ -721,35 +716,6 @@ def analyze_types(
         per_entry=True,
         compose_only=compose_only,
     )
-
-    # The buffer/synthesis pass is an agent pass too — skip it under
-    # --compose-only (and in seed mode, as before).
-    if not seed_mode and not compose_only:
-        run_buffer_pass(target)
-
-
-def run_buffer_pass(target: Path) -> None:
-    """Single cross-cutting pass that creates `string` / `array`
-    allocator-cluster entries. Gated on alloc.json (the allocator
-    universe catalogue). Skipped with a note when absent.
-    """
-    alloc = Layout.discover(target).alloc_json
-    if not alloc.exists():
-        print(
-            "[crustify analyze types] buffer pass: alloc.json absent — skipping "
-            "string/array cluster synthesis. Run `crustify <target> alloc` "
-            "first to catalogue the allocator universe, then re-run "
-            "`analyze types --all` to synthesize them."
-        )
-        return
-    print("[crustify analyze types] buffer pass: creating string/array clusters")
-    from crustify.agents.analyzer import CrustifyTypeAnalyzer
-
-    CrustifyTypeAnalyzer(
-        target,
-        selection="strings; arrays",
-        stage="buffer_analyzer",
-    ).run()
 
 
 def analyze_dag(target: Path) -> None:
@@ -851,10 +817,6 @@ def _wrap_scope(target: Path) -> None:
     wrap = compose_wrap(layout.t1, layout.t2, scope_path, inc, port_paths,
                         type_rows, field_type_rows)
 
-    # NOTE: synthetic types (string/array clusters) are NOT written to
-    # scope.json — they are *always* wrap-scope, so consumers treat any
-    # synthetic-kind entity as wrap unconditionally. Only their real ops flow
-    # through scope.json's normal sym wrap/port boundary.
     manifest = json.loads(scope_path.read_text())
     manifest["wrap"] = wrap
     scope_path.write_text(json.dumps(manifest, indent=2) + "\n")

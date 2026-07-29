@@ -27,11 +27,10 @@ Checks run by the GATE:
                        mutable != true. (owned+borrowed MAY co-occur --
                        runtime-conditional dual ownership.)
 
-Lifecycle ops — the union of every entry's `ctors`, `dtor`, `up_ref`,
-`clone`, `locking.{acquire,release}` — are EXEMPT from op-uniqueness in
-every mode: they are legitimately shared across related types (a ctor
-that allocates a wider type and returns an embedded handle; a lock pair
-may guard more than one type). Pass `--raw` to a focused mode to disable
+Lifecycle ops — every type's reverse-derived droppers / disposers /
+cloners — are EXEMPT from op-uniqueness in every mode: they are
+legitimately shared across related types (one `*_free` reached through a
+vtable serves several). Pass `--raw` to a focused mode to disable
 the exemption and see every overlap.
 
 Detect-only: it flags, it does not resolve. Resolution is the agent's
@@ -76,32 +75,28 @@ def load(analysis_root: Path) -> dict[str, list[tuple[dict, Path]]]:
     return by_type
 
 
-def op_index(by_type) -> dict[str, dict[str, Path]]:
+def op_index(by_type, lifecycle) -> dict[str, dict[str, Path]]:
     """fn_name -> {type_tag: manifest_path} over every type's method surface
-    (lifecycle ops, derived via scope.type_method_syms; the explicit `ops` list
-    for synthetic clusters)."""
+    (its lifecycle, derived via scope.type_method_syms from `lifecycle`)."""
     idx: dict[str, dict[str, Path]] = defaultdict(dict)
     for tag, entries in by_type.items():
         for entry, path in entries:
-            for op in scope.type_method_syms(entry):
+            for op in scope.type_method_syms(entry, lifecycle):
                 idx[op][tag] = path
     return idx
 
 
-def lifetime_set(by_type) -> set[str]:
-    """Global union of lifecycle/lifetime function names: ctors + dtor
-    + up_ref + clones + locking.{acquire,release}. Exempt from
-    op-uniqueness.
+def lifetime_set(by_type, lifecycle) -> set[str]:
+    """Global union of every type's lifecycle function names — its droppers,
+    cloners and field-disposers, reverse-derived from the symbols that carry the
+    role. Exempt from op-uniqueness: one routine legitimately serves several
+    types (a shared `*_free` reached through a vtable). A type's allocators and
+    locking fns reach the set via the call graph instead.
     """
     out: set[str] = set()
     for entries in by_type.values():
         for entry, _ in entries:
-            # Top-level `dropped_by` (a flat fn list) + `cloned_by`
-            # ({deep, upref} fn lists); the readers fall back to a synthetic
-            # buffer cluster's lifetime.{drop,clone} block. A type's allocators
-            # and locking fns reach the set via the call graph.
-            out |= set(scope.drop_op_names(scope.type_dropped_by(entry)))
-            out |= set(scope.clone_op_names(scope.type_cloned_by(entry)))
+            out |= set(scope.type_method_syms(entry, lifecycle))
     return out
 
 
@@ -164,9 +159,10 @@ def _multidef_names(csv_path: Path | None) -> set[str]:
     return {n for n, files in seen.items() if len(files) > 1}
 
 
-def check_op_uniqueness(by_type, *, multidef=frozenset()) -> list[Finding]:
-    exempt = lifetime_set(by_type)
-    idx = op_index(by_type)
+def check_op_uniqueness(by_type, lifecycle, *,
+                        multidef=frozenset()) -> list[Finding]:
+    exempt = lifetime_set(by_type, lifecycle)
+    idx = op_index(by_type, lifecycle)
     out: list[Finding] = []
     for fn, tags in sorted(idx.items()):
         if fn in exempt:
@@ -241,12 +237,14 @@ def check_ptr_invariants(by_type) -> list[Finding]:
 
 
 def run_gate(
-    by_type, analysis_root, *, multidef=frozenset(),
+    by_type, analysis_root, *, multidef=frozenset(), lifecycle=None,
 ) -> list[Finding]:
     """Run every gate check and return all findings."""
+    if lifecycle is None:
+        lifecycle = scope.build_lifecycle_index(analysis_root)
     return [
         *check_entry_shape(analysis_root),
-        *check_op_uniqueness(by_type, multidef=multidef),
+        *check_op_uniqueness(by_type, lifecycle, multidef=multidef),
         *check_ptr_invariants(by_type),
     ]
 
@@ -254,11 +252,11 @@ def run_gate(
 # --------------------------------------------------- focused lenses
 
 def report_focused(
-    by_type, *, only_type, check_list, raw, sigs,
+    by_type, lifecycle, *, only_type, check_list, raw, sigs,
 ) -> int:
     """Single-type / candidate op-claim lens (advisory)."""
-    idx = op_index(by_type)
-    exempt = set() if raw else lifetime_set(by_type)
+    idx = op_index(by_type, lifecycle)
+    exempt = set() if raw else lifetime_set(by_type, lifecycle)
 
     if check_list is not None:
         flagged = [
@@ -334,6 +332,8 @@ def main() -> int:
         return 2
 
     by_type = load(args.analysis_root)
+    # A type stores no lifecycle — reverse-derive it from the syms tree once.
+    lifecycle = scope.build_lifecycle_index(args.analysis_root)
 
     # Focused lenses (single-type / candidate) — advisory, exit 1 if any
     # overlap so a caller can branch, but the agent treats it as a lens.
@@ -344,7 +344,7 @@ def main() -> int:
             if args.check else None
         )
         return report_focused(
-            by_type,
+            by_type, lifecycle,
             only_type=args.only_type,
             check_list=check_list,
             raw=args.raw,
@@ -354,7 +354,7 @@ def main() -> int:
     # Whole-tree gate.
     multidef = _multidef_names(args.functions_csv)
     findings = run_gate(
-        by_type, args.analysis_root, multidef=multidef,
+        by_type, args.analysis_root, multidef=multidef, lifecycle=lifecycle,
     )
 
     errors = [f for f in findings if f.severity == "error"]

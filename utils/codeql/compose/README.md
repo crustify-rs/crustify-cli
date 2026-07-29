@@ -132,33 +132,7 @@ At a glance:
 | `fields[]` + `used_by`          | ✓        |       |
 | `fields[].type` (non-scalar) — sourced from `entities/fields.ql` | ✓ | |
 | `opaque_in` (functions using opaquely) | ✓ | |
-| `ops` / `ctors` / `dtor` `{storage, fields}` / `up_ref` / `clone` |  | ✓ (lifecycle role) |
-| `locking` / `conditional_drop`  |          | ✓     |
-| `generic_type` / `generic_instance` / `string_system` / `array_system` entries | | ✓ (synthetic clusters) |
-
-### Macro-kind convention
-
-The composer can't tell macro kind apart (it needs body inspection).
-Macro entries arrive at the agent with:
-
-- `kind: null` — agent fills based on body.
-- `called_by.call`: raw port-side expansion sites (function-body
-  enclosing names AND file-scope invocation file paths
-  concatenated).
-- `called_by.ref`: empty list.
-
-The agent's first transformation per macro is:
-
-- `macro_symbol` / `macro_typegen` → keep `call` as-is. For
-  `macro_typegen`, `call` will contain file paths (file-scope
-  invocations); for `macro_symbol`, fn names (function-body
-  invocations). Both shapes coexist in the raw list and the agent
-  partitions them by inspecting which side wins.
-- `macro_constant` / `macro_misc` → move `call` → `ref` and set
-  `call = null`.
-
-This convention is documented in the manifest's `_comment` header
-so the agent doesn't have to guess.
+| `fields[].locked_by`            |          | ✓     |
 
 ### Wrap-scope inclusion gate
 

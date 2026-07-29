@@ -63,9 +63,9 @@ _ALLOW_AGENT_END = "// crustify:allowlist-agent:end"
 _USE_START = "// crustify:foreign-use:start"
 _USE_END = "// crustify:foreign-use:end"
 
-# Real C types bindgen can emit (others are analyzer-synthetic pseudo-kinds).
-# A `callback` is NOT here — it is a SYMBOL (function-pointer typedef in
-# syms.json), allowlisted via the symbol loop below.
+# Real C types bindgen can emit. A `callback` is NOT here — it is a SYMBOL
+# (function-pointer typedef in syms.json), allowlisted via the symbol loop
+# below; scalar/primitive typedefs lower to Rust primitives.
 _BINDABLE_TYPE_KINDS = frozenset({"struct", "union", "enum"})
 # Sym kinds → routing.
 _BINDABLE_FUNCS = frozenset({"function_exported"})
@@ -170,10 +170,8 @@ def _load_inscope_annotated(
     identities, grouped by dir). Scope membership is read from ``scope.json``
     (the authoritative, deduped closure) as ``keys`` — the origin-keyed set from
     :func:`scope.scope_membership` — keep an entry iff its
-    ``scope.origin_key(id, defined_in, declared_in)`` is in ``keys``. ``keys`` is
-    built ``synthetic=False`` for the FFI surface (bindgen binds real C entities
-    only — never the string/array synthetics). ``None`` keeps every
-    in-scope-by-dir entry.
+    ``scope.origin_key(id, defined_in, declared_in)`` is in ``keys``. ``None``
+    keeps every in-scope-by-dir entry.
     """
     out: list[dict] = []
     for mdir, entries in by_dir.items():
@@ -299,16 +297,14 @@ def compose(
     syms_by_dir, _syms_scope, _ = syms_compose(csv_dir_t1, csv_dir_t2, filter_spec)
     types_by_dir, _types_scope, _ = types_compose(csv_dir_t1, csv_dir_t2, filter_spec)
 
-    # FFI surface = the WRAP closure from scope.json (authoritative, deduped),
-    # EXCLUDING synthetics (string/array clusters are Rust abstractions, not
-    # C entities bindgen can bind). Keyed (name|type, defined_in); sym and type
-    # buckets resolved separately so a name can't cross-match the wrong kind.
+    # FFI surface = the WRAP closure from scope.json (authoritative, deduped).
+    # Keyed (name|type, defined_in); sym and type buckets resolved separately so
+    # a name can't cross-match the wrong kind.
     sj = filter_spec.scope_json_path
     wrap_sym_keys = (scope.scope_membership(
-        sj, "wrap", kinds=("functions", "globals", "macros"), synthetic=False)
-        if sj else None)
+        sj, "wrap", kinds=("functions", "globals", "macros")) if sj else None)
     wrap_type_keys = (scope.scope_membership(
-        sj, "wrap", kinds=("types",), synthetic=False) if sj else None)
+        sj, "wrap", kinds=("types",)) if sj else None)
     wrap_syms = _load_inscope_annotated(
         syms_by_dir, analysis_root, "syms.json", "symbols", "name",
         keys=wrap_sym_keys,
@@ -443,42 +439,6 @@ def compose(
         pr = s.get("ptr_ret")
         if pr:
             note_foreign(lp, pr.get("type"))
-
-    # ---- synthetic clusters → their member C functions ----
-    # A string/array cluster's TYPE is a Rust abstraction (`CStr`/`CVec`) bindgen
-    # never binds — so it is correctly excluded from the wrap-type seed above. But
-    # its `ctors`/`dtor`/`ops` are REAL C functions the wrapper calls through
-    # `ffi::`, and the wrap-FUNCTION seed (synthetic=False) only catches those that
-    # are ALSO independent wrap-scope functions. A cluster op reachable *only* via
-    # the cluster (e.g. `git__strndup` / `git__substrdup`, members of
-    # `git__strdup_string` but not standalone wrap functions) would otherwise be
-    # absent from ALLOWED_FUNCTIONS and bindgen would never emit it, leaving the
-    # wrapper's ctor unbindable. The clusters aren't in scope.json (a dag/analysis
-    # concept) and are always wrap-scope, so source them straight from the
-    # analysis types tree and allowlist their member functions + declaring headers.
-    for tj in sorted(analysis_root.rglob("types.json")):
-        try:
-            doc = json.loads(tj.read_text())
-        except (OSError, ValueError):
-            continue
-        for c in doc.get("types") or []:
-            if c.get("kind") not in scope.SYNTHETIC_KINDS:
-                continue
-            lib = _lib_of(crate_idx, c.get("name") or c["type"], c.get("defined_in"),
-                          c.get("declared_in"), c.get("linked_in"))
-            if not lib:
-                continue
-            lp = plan_for(lib)
-            if lp is None:
-                continue
-            lc = scope.lifetime(c)
-            fns = set(scope.alloc_fns(lc)) | set(c.get("ops") or [])
-            fns |= set(scope.drop_op_names(lc.get("drop")))
-            lp.allow_funcs |= fns
-            # The cluster's declaring header(s) hold these functions' prototypes.
-            for h in c.get("declared_in") or []:
-                _add_header(lp, h)
-            _add_header(lp, c.get("defined_in"))
 
     # NOTE: no explicit "layout closure" is needed. bindgen's allowlist is
     # transitive — allowlisting a struct pulls in (and lays out, from the

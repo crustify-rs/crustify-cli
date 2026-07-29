@@ -4,12 +4,11 @@ bin: crustify
 roles: [translator, orchestrator, analyzer]
 description: >-
   The crustify analysis oracle for C symbols and types. Query a record /
-  signature, its emitted Rust module, its dependency closure, the schema, the
-  synthetic string/array clusters, and the unsafe surface of ported code -- and,
-  for the analyzers, submit findings back through it. Both read and write go
-  THROUGH the oracle (`query` syms/types/dag/files, `--schema`, `--update` /
-  `--create`; `scaffold --name`; `audit`), never by touching a manifest file
-  directly (risk of concurrent race).
+  signature, its emitted Rust module, its dependency closure, the schema, and
+  the unsafe surface of ported code -- and, for the analyzers, submit findings
+  back through it. Both read and write go THROUGH the oracle (`query`
+  syms/types/dag/files, `--schema`, `--update`; `scaffold --name`; `audit`),
+  never by touching a manifest file directly (risk of concurrent race).
 ---
 
 # The crustify analysis oracle (`query` / `scaffold` / `audit`)
@@ -30,7 +29,7 @@ plus the idioms `--help` can't tell you.
 > a `scope.json` (e.g. `src/libgit2`) for scope-aware commands; add `--unscoped`
 for a repo-wide, scope-blind pass.
 
-## `query types` -- type records, type-analyzer discover + submit, buffer clusters
+## `query types` -- type records, type-analyzer discover + submit
 
 | you need | invocation |
 |----------|------------|
@@ -39,10 +38,8 @@ for a repo-wide, scope-blind pass.
 | the declared **fields** to analyze (+ each pointer's `ptr` block); `--range A:B` windows a batch of them | `query types --name <tag> --file <file> --fields [--range A:B]` |
 | the lifecycle **candidate pool** (complete footprint) | `query types --name <tag> --file <file> --methods` |
 | which fn **touches** each field (complete footprint) | `query types --name <tag> --file <file> --field-touchers` |
-| the synthetic **array** / **string** clusters | `query types --arrays` / `--strings` |
 | enumerate by scope (then `xargs` a stage) | `query types --wrap-only` / `--port-only` |
 | **submit** type findings (WRITE) | `query types --name <tag> --file <file> --update <file>` (or `--update -`) |
-| **create** a synthetic string/array cluster (WRITE) | `query types --create <cluster.json>` |
 
 ## `query symbols` -- symbol records, symbol-analyzer discover + submit
 
@@ -51,8 +48,7 @@ for a repo-wide, scope-blind pass.
 | you need | invocation |
 |----------|------------|
 | a symbol's record (signature, pointer analysis, type/sym deps) | `query symbols --name <name>` |
-| the **type-generator** primitives (`DEFINE_*` / `DECLARE_*` macro families, `macro.typegen`) | `query symbols --typegens` |
-| a type's lifecycle **roles** -- READ what the analyzer already flagged, grouped into `dropped_by`/`fields_disposed_by`/`cloned_by` | `query symbols --lifetime-for <SPEC> [--array]` |
+| a type's lifecycle **roles** -- READ the `lifetime` blocks already submitted, grouped into `dropped_by`/`fields_disposed_by`/`cloned_by` (a type stores none itself) | `query symbols --lifetime-for <SPEC> [--array]` |
 | lifecycle **candidates** -- DISCOVER the pool to triage (the inverse); `--calling` keeps only those reaching a known primitive | `query symbols --taking <SPEC> [--calling FN,...] [--hops N] [--array]` |
 | **submit** symbol findings (WRITE) | `query symbols --name <name> --file <file> --update <file>` |
 

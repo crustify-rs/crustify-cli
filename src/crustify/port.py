@@ -228,7 +228,7 @@ def port(
     named, _unknown = S.resolve_names(
         sel_names, by_key, by_name, lambda n: _file_match(n))
 
-    # A wrapped type's lifecycle ops (ctors/dtor/up_ref/clones/locking) are
+    # A wrapped type's lifecycle ops (its droppers/disposers/cloners) are
     # normally wrap's to emit. But wrap has no constructor mechanism and can't
     # express ops whose C signature doesn't fit a `&self` method, so the
     # **port-scope** ones sit as `// crustify:todo` stubs (the blind spot). When

@@ -142,7 +142,7 @@ class CrustifyAgent:
         self.target_rel = self.layout.rel_target(self.target)
         # Target-tier store: crustify/targets/<rel>/ (logs, scope, config).
         self.target_store = ArtifactStore(self.layout.target_dir(self.target))
-        # Repo-root-tier store: crustify/ (analysis, build.json, alloc.json).
+        # Repo-root-tier store: crustify/ (analysis, build.json).
         self.root_store = ArtifactStore(self.layout.root)
         # Convenience alias for the tier this agent's output belongs to.
         self.store = self.root_store if self.tier == "repo_root" else self.target_store

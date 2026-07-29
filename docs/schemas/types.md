@@ -1,11 +1,18 @@
 # types.json schema
 
-Field and lifecycle-slot meaning for the per-stem `types.json` manifests
-produced by `compose/types_manifest.py`. This file is the single source of
-field semantics.
+Field meaning for the per-stem `types.json` manifests produced by
+`compose/types_manifest.py`. This file is the single source of field semantics.
 
-Each `## <field>` section documents one record field or lifecycle slot; the
-heading name is the field key. 
+Each `## <field>` section documents one record field; the heading name is the
+field key.
+
+A type stores **no lifecycle of its own**. Which routines drop, dispose or
+clone it is recorded once on the acting SYMBOL — `syms.json`'s entry-level
+`lifetime` block, which names its subject arg (see
+[syms.md](syms.md#lifetime)) — and read back by reverse lookup:
+`crustify query symbols --lifetime-for <TAG>` groups every such symbol into
+this type's `dropped_by` / `fields_disposed_by` / `cloned_by` candidates. One
+fact, one home: a routine can never disagree with the type it acts on.
 
 ## name
 
@@ -30,42 +37,6 @@ for composer-emitted types.
 
 Repo-root-relative path to the file holding the definition; nullable.
 Composer-filled.
-
-## dropped_by
-
-Agent-filled list of destructor/releaser function names (`[]` when none) mapping
-to `impl Drop`. A type may have several. On a type with a `refcount` field the
-destructor is the down-ref; with no refcount it is the plain `*_free`. Either
-way it backs `CDropped::c_free` on a `CBox` -- the wrapper is the same, only the
-registered routine differs.
-
-## cloned_by
-
-Agent-filled `{deep, upref}`, each a LIST of clone routines (`[]` when
-none) -- the routines behind Rust `Clone`.
-
-- **`deep`** -- routines that produce a fresh allocation (the `dup`s). On a type
-  with no `refcount` field -> `CCloned::c_clone` / `Clone for CBox`
-  (`impl_cloned!`). On a refcounted type `Clone` is already the up_ref, so these
-  stay plain methods.
-- **`upref`** -- refcount bumps (the `up_ref`s) -> `CCloned::c_clone` /
-  `Clone for CBox` (`impl_cloned_upref!`, which returns the SAME pointer). At
-  most one; `[]` when the type carries a `refcount` field but exposes no up_ref
-  routine (the wrapper shims `CRYPTO_UP_REF` on the field).
-
-Both feed the same trait: `CCloned` spans deep copy and refcount bump, so
-`refcount` decides which ROUTINE backs `Clone`, not which wrapper type.
-
-Both may be set: a refcounted type is often also deep-copyable.
-
-## fields_disposed_by
-
-Agent-filled list of teardown routines that dispose its fields -- i.e. whose
-body calls the destructors of its fields when the type is dropped. Usually just
-the type's destructor; a field released in a distinct `*_dispose`/`*_cleanup`
-adds that method. Types embedded or stack-allocated by-value with no storage of
-their own / dropper may have this field set too, as they may have fields that
-are disposed. 
 
 ## casted
 
@@ -101,6 +72,20 @@ Per-field records:
 singles. `array` is `{size:N}` (fixed) / `{size:null}` (flexible/incomplete
 member), omitted when not an array.
 
+`ref` is decided by the field's true pointer depth (CodeQL `ptr_depth`), not by
+looking for a `*` in `type`. C hides the star behind a name in two shapes the
+string cannot show, both of which used to collapse to a bare scalar with no
+`ptr` block -- an **object-pointer typedef** (`typedef struct _filesec
+*filesec_t;`) and a **bare function pointer** (`int (*ctrl)(BIO *, int)`).
+
+- **`sig_types`** -- composer-filled, present ONLY when `type` is a string that
+  names nothing: a bare function pointer (`..(*)(..)`) or an anonymous
+  aggregate. It lists the user types named inside that type -- for a function
+  pointer, its signature (`int (*ctrl)(BIO *, …)` -> `["BIO"]`). Without it a
+  vtable struct is a dependency LEAF: every slot renders `..(*)(..)`, so the
+  DAG sees no edge and would schedule the struct before the types its function
+  pointers traffic in. An ordinary `T *` field needs no help and carries none.
+
 Three agent-fillable keys ride on a field record:
 
 - **`ptr`** -- the ownership block (see [`## ptr`](#ptr)); pointer fields only.
@@ -119,7 +104,10 @@ Three agent-fillable keys ride on a field record:
 
 ## ptr
 
-Per pointer field. Composer emits a null skeleton; the agent fills it. 
+Per pointer field. The composer emits `ptr: null`, so **`null` means
+unanalyzed** — whether a field has been through the analyzer is a null check on
+one key. A submitted block replaces the prior WHOLESALE and must be complete,
+so there is nothing to patch into a skeleton. Once filled: 
 
 - **`scalar`** -- Is there any execution path where this pointer references a
   SINGLE pointee? If not, `null`; otherwise `{by_val: true}` (points at one inline

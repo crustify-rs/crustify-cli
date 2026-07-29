@@ -101,7 +101,7 @@ def _add_analyze_filter_flags(p: argparse.ArgumentParser) -> None:
         "--compose-only", action="store_true", dest="compose_only",
         help="Run only the deterministic composer (emit/merge the manifest "
              "skeletons) and skip the analyzer agent — a fresh analysis tree "
-             "with no LLM spend. For types this also skips the buffer pass.",
+             "with no LLM spend.",
     )
     p.add_argument(
         "--out-suffix", dest="out_suffix", default=None, metavar="SUFFIX",
@@ -122,7 +122,6 @@ def _add_subject_scope_flags(
     *,
     include_names: bool = True,
     include_files: bool = True,
-    include_strings_arrays: bool = False,
     include_scope: bool = True,
     include_libraries: bool = True,
 ) -> None:
@@ -134,8 +133,6 @@ def _add_subject_scope_flags(
       ``--all``     — all matching entries
       ``--names``   — entries by name
       ``--files``   — entries defined/declared in specific files
-      ``--strings`` — synthetic ``string_system`` clusters (types only)
-      ``--arrays``  — synthetic ``array_system`` clusters (types only)
 
     Scope filter group (mutually exclusive; defaults to both scopes):
 
@@ -167,15 +164,6 @@ def _add_subject_scope_flags(
         subject.add_argument(
             "--files", nargs="+", metavar="FILE",
             help="Match entries defined or declared in these files.",
-        )
-    if include_strings_arrays:
-        subject.add_argument(
-            "--strings", action="store_true",
-            help="Match synthetic string_system clusters.",
-        )
-        subject.add_argument(
-            "--arrays", action="store_true",
-            help="Match synthetic array_system clusters.",
         )
 
     if include_scope:
@@ -216,13 +204,6 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
                          "--ops/--methods → port-scope functions; --fields/--field-touchers "
                          "→ fields touched by port-scope code. (Facets are complete "
                          "by default.)")
-    p.add_argument("--arrays", action="store_true",
-                   help="Synthetic array clusters.")
-    p.add_argument("--strings", action="store_true",
-                   help="Synthetic string clusters.")
-    p.add_argument("--typegens", action="store_true",
-                   help="(symbols) Type-generator macro primitives (macro.typegen) "
-                        "— the DEFINE_*/DECLARE_* families that generate types.")
     p.add_argument("--name", nargs="+", action="extend", default=None, metavar="NAME",
                    help="No --name → enumerate; one → introspect; several → batch records.")
     p.add_argument("--file", nargs="+", default=None, metavar="FILE",
@@ -237,9 +218,9 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
                        help="Ingest an agent findings JSON (path or '-' for stdin) "
                             "into the named entry: validate (hard-reject only), then "
                             "partial-merge under a lock. types: lifecycle + per-field "
-                            "ptr. syms: macro kind + per-arg/return "
-                            "ownership (ptr_args/ptr_ret). The agent never edits the "
-                            "manifest directly.")
+                            "ptr. syms: macro kind, per-arg/return ownership "
+                            "(ptr_args/ptr_ret), and the symbol's lifecycle role "
+                            "(lifetime). The agent never edits the manifest directly.")
     facet.add_argument("--update-help", action="store_true", dest="update_help",
                        help="Print the findings JSON schema that --update expects "
                             "for this subject (types vs syms), then exit. No --name "
@@ -271,27 +252,23 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
                                 "narrow the FIELDS to that scope's touched subset); "
                                 "each field's toucher set is the COMPLETE, unfiltered "
                                 "set of functions that access it.")
-        facet.add_argument("--create", default=None, metavar="ENTRY",
-                           help="Ingest a WHOLE synthetic string/array cluster entry "
-                                "(JSON path or '-' for stdin) — the buffer pass's "
-                                "create path: validate, home it by `defined_in`, write "
-                                "under a lock. The agent never edits types.json.")
         p.add_argument("--range", default=None, metavar="A:B", dest="rng",
                        help="Window the --fields/--ops/--methods list to [A:B).")
     else:
         # Symbols-only REVERSE lifecycle lookup, parameterized by a TYPE (no
         # --name). Feeds the type analyzer: which symbols realize TYPE's Drop /
-        # dispose / Clone, read off the arg-level lifetime flags.
+        # dispose / Clone, read off each symbol's entry-level lifetime block.
         facet.add_argument(
             "--lifetime-for", default=None, metavar="SPEC", dest="lifetime_for",
-            help="Reverse lifecycle lookup (READ: flags that already exist): "
-                 "every symbol with an ARG matching SPEC whose ptr carries a "
-                 "lifetime flag (is_dropped/is_disposed/is_cloned), grouped into "
-                 "the type's dropped_by / fields_disposed_by / cloned_by. SPEC is "
+            help="Reverse lifecycle lookup (READ: roles that already exist): "
+                 "every symbol whose `lifetime` block (is_dropper/is_disposer/"
+                 "is_cloner) acts on an arg matching SPEC, grouped into the "
+                 "type's dropped_by / fields_disposed_by / cloned_by. SPEC is "
                  "a struct tag / typedef, or the keyword `void` (raw byte-level, "
                  "untyped) or `string` (NUL-terminated; the char family or the "
-                 "analyzer's own ptr.string verdict). Lifetime flags are arg-only, "
-                 "so returns are not scanned. No --name needed.")
+                 "analyzer's own ptr.string verdict). The subject arg is the one "
+                 "named by `lifetime.for`, so a symbol that merely TAKES a SPEC "
+                 "arg without acting on it is not listed. No --name needed.")
         facet.add_argument(
             "--taking", default=None, metavar="SPEC", dest="taking",
             help="CANDIDATE discovery (the inverse of --lifetime-for, which reads "
@@ -324,9 +301,7 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
     no subject split). Wrap is **scope-blind by default**
     — a named entity wraps regardless of port/wrap scope (no refusal).
     `--wrap-only` / `--port-only` are opt-in *narrowing* filters, and `--file`
-    restricts to a defining file (disambiguating a `--name` collision). The
-    synthetic selectors (`--strings`/`--arrays`) build the working
-    set from cluster kinds.
+    restricts to a defining file (disambiguating a `--name` collision).
 
     A per-agent **effort budget** (`--max-fields` / `--max-ops`) caps each
     type's workload so a "god object" can't blow one agent's context; the
@@ -354,14 +329,6 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
     _wrap_scope.add_argument(
         "--port-only", action="store_true", dest="port_only",
         help="Narrow the selection to port-scope entities.",
-    )
-    p.add_argument(
-        "--strings", action="store_true",
-        help="Narrow to synthetic `string` clusters (wrapped first; see §4.7).",
-    )
-    p.add_argument(
-        "--arrays", action="store_true",
-        help="Narrow to synthetic `array` clusters (wrapped first; see §4.7).",
     )
     p.add_argument(
         "--max-fields", type=int, default=None, metavar="N", dest="max_fields",
@@ -484,7 +451,6 @@ def main() -> None:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("alloc", help="Produce alloc.json — the allocator-surface catalogue.")
 
     audit_p = sub.add_parser(
         "audit",
@@ -584,8 +550,9 @@ def main() -> None:
              "SPEC's lifecycle primitives. There is no composed worklist -- the "
              "agent discovers candidates itself (`query symbols --taking SPEC "
              "--calling ... --hops N`), triages them to the routines that really "
-             "drop/dispose/clone SPEC, and submits their arg-level lifetime "
-             "flags; `query symbols --lifetime-for SPEC` then reverse-derives the "
+             "drop/dispose/clone SPEC, and submits each one's `lifetime` block "
+             "(naming its subject arg in `for`); "
+             "`query symbols --lifetime-for SPEC` then reverse-derives the "
              "type's roles. SPEC is a struct tag / typedef (its types.json entry "
              "is composed first), or the keyword `void` (raw byte-level) / "
              "`string` (NUL-terminated) -- the untyped tiers, which have no entry. "
@@ -598,15 +565,6 @@ def main() -> None:
         help="Run the types composer skeleton + type analyzer agent.",
     )
     _add_analyze_filter_flags(analyze_types_p)
-    # Cross-cutting synthesis passes, runnable standalone (each a single
-    # whole-tree agent run). Without these, the full `analyze types`
-    # runs the per-dir pass and then both synthesis passes.
-    analyze_types_synth = analyze_types_p.add_mutually_exclusive_group()
-    analyze_types_synth.add_argument(
-        "--buffers", action="store_true",
-        help="Run ONLY the buffer pass: synthesize string/array allocator "
-             "clusters (requires alloc.json). Skips the per-dir struct pass.",
-    )
 
     analyze_sub.add_parser(
         "dag",
@@ -784,10 +742,10 @@ def main() -> None:
         help=(
             "Wrap stage: emit Rust wrappers for the selected wrap-scope "
             "units (types AND free symbols) in dependency-layer order. "
-            "Select with --name / --strings / --arrays. One unified "
-            "scheduler dispatches each unit to its wrapper (type / string / "
-            "array / symbol); no subject split. Requires the scaffold + "
-            "bindgen stages to have run for each library being wrapped."
+            "Select with --name. One unified scheduler dispatches each unit "
+            "to its wrapper (type / symbol); no subject split. Requires the "
+            "scaffold + bindgen stages to have run for each library being "
+            "wrapped."
         ),
     )
     _add_wrap_filter_flags(wrap_p)
@@ -888,10 +846,6 @@ def main() -> None:
                names=getattr(args, "name", None),
                crate=getattr(args, "crate", None), mod=getattr(args, "mod", None),
                dir=getattr(args, "dir", None), file=getattr(args, "file", None))
-
-    elif args.command == "alloc":
-        from crustify.agents.analyzer import CrustifyAllocAnalyzer
-        CrustifyAllocAnalyzer(target).run()
 
     elif args.command == "analyze":
         _handle_analyze(args, target)
@@ -1015,10 +969,6 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
         return
 
     if subject == "types":
-        # Standalone cross-cutting synthesis passes.
-        if getattr(args, "buffers", False):
-            analyze_mod.run_buffer_pass(target)
-            return
         if getattr(args, "reset", False):
             analyze_mod.reset_types(
                 target,
@@ -1045,10 +995,6 @@ def _validate_narrowing(args: argparse.Namespace) -> None:
     --port-only / --wrap-only may combine with either --all or seed
     selectors — they're orthogonal post-emission filters.
     """
-    # The standalone cross-cutting buffer pass (types --buffers) runs over the
-    # whole tree and takes no narrowing selection.
-    if getattr(args, "buffers", False):
-        return
     # `symbols --lifetime-for SPEC` IS its own selector: the SPEC names the
     # discovery target and the agent finds the worklist itself, so the seed
     # flags don't apply.
@@ -1277,9 +1223,6 @@ def _handle_query(args: argparse.Namespace, target: Path) -> None:
         files=getattr(args, "files", None),
         wrap_only=bool(getattr(args, "wrap_only", False)),
         port_only=bool(getattr(args, "port_only", False)),
-        strings=bool(getattr(args, "strings", False)),
-        arrays=bool(getattr(args, "arrays", False)),
-        typegens=bool(getattr(args, "typegens", False)),
         fields=bool(getattr(args, "fields", False)),
         ops=bool(getattr(args, "ops", False)),
         methods=bool(getattr(args, "methods", False)),
@@ -1301,7 +1244,7 @@ def _handle_query(args: argparse.Namespace, target: Path) -> None:
 # -- wrap dispatch --------------------------------------------------------
 
 def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
-    """Run the unified wrap stage over the --name / --strings / --arrays
+    """Run the unified wrap stage over the --name
     selection. One scheduler emits type, string, array, and free-symbol
     wrappers alike — no subject split (the scheduler routes each unit to its
     wrapper prompt by kind)."""
@@ -1312,8 +1255,6 @@ def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
         files=getattr(args, "files", None),
         wrap_only=bool(getattr(args, "wrap_only", False)),
         port_only=bool(getattr(args, "port_only", False)),
-        strings=bool(getattr(args, "strings", False)),
-        arrays=bool(getattr(args, "arrays", False)),
         dag_layer=getattr(args, "dag_layer", None),
         skip=getattr(args, "skip", None),
         parallel=bool(getattr(args, "parallel", False)),

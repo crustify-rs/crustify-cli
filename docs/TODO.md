@@ -420,7 +420,7 @@ pointer either.
 
 **Why it matters.** The lifecycle subsumed-vs-standalone discriminant is
 caller-based: "reached only via the dtor -> fold into `Drop`; reached from
-re-init too -> a genuine manual `is_disposed`." An incomplete `used_by` (a) can
+re-init too -> a genuine manual `is_disposer`." An incomplete `used_by` (a) can
 hide a re-init caller and wrongly mark a real disposer subsumed -- silently
 dropping a manual method a FIPS/deprecated build needs; (b) can't disambiguate
 the vtable case at all. It also under-reports the wrap surface (dispatched

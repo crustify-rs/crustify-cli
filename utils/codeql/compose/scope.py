@@ -275,7 +275,7 @@ def origin_key(name: str, defined_in: str | None, declared_in) -> tuple[str, str
 
 def scope_membership(
     scope_json: Path, which: str, *,
-    kinds: tuple[str, ...] = _SCOPE_KINDS, synthetic: bool | None = None,
+    kinds: tuple[str, ...] = _SCOPE_KINDS,
 ) -> set[tuple[str, str]]:
     """Unified scope-membership key set for ``which`` (``"port"`` | ``"wrap"``):
     ``{(name, origin)}`` via :func:`origin_key`, so a candidate is in scope iff
@@ -285,62 +285,16 @@ def scope_membership(
     ``name`` (syms).
 
     ``kinds`` restricts the buckets unioned (a type query passes ``("types",)``;
-    a symbol query the three sym buckets). ``synthetic``: ``None`` = all,
-    ``True`` = only augment-added synthetics, ``False`` = exclude them (bindgen
-    binds real C entities only, never synthetics)."""
+    a symbol query the three sym buckets). Every entry is a real C entity: the
+    scope sections are anchored on the CodeQL T1 tables, so there is nothing
+    synthesized to filter out."""
     sec = json.loads(scope_json.read_text()).get(which, {})
     keys: set[tuple[str, str]] = set()
     for kind in kinds:
         for e in sec.get(kind, []):
-            if synthetic is not None and bool(e.get("synthetic")) != synthetic:
-                continue
             nm = entry_tag(e)
             keys.add(origin_key(nm, e.get("defined_in"), e.get("declared_in")))
     return keys
-
-
-SYNTHETIC_KINDS = ("string", "array")  # buffer-pass clusters
-
-
-# Destructor role keys of a synthetic buffer cluster's `drop` block: `shared`
-# (refcount-decrementing free, pairs with an up_ref), `exclusive` (sole-owner
-# plain free), `fields` (the by-value POD disposer, *_dispose / *_cleanup ->
-# CVal). `shared` and `exclusive` both back `CDropped::c_free` on a `CBox`; the
-# role records which C mechanism it is. A struct's `dropped_by` carries no roles.
-_DROP_ROLE_KEYS = ("shared", "exclusive", "fields")
-
-
-def drop_op_names(d) -> list[str]:
-    """Destructor op function names from a struct's ``dropped_by`` or a
-    cluster's ``drop``.
-
-    A struct's ``dropped_by`` is a flat LIST of that type's destructors. A
-    cluster's ``drop`` is a ``{shared, exclusive, fields}`` block, each role a
-    LIST (a role may hold several distinct destructors of the same kind, e.g. a
-    container's shallow free plus its deep element-owning free); a scalar string
-    per role is accepted. Returns the non-null names, deduped — so a type's
-    `*_free` / `*_dispose` folds into its lifecycle either way. This is the
-    single drop-extraction primitive the dag / scope / consistency stages share,
-    so the multi-drop split lands uniformly.
-    """
-    seen: set[str] = set()
-    out: list[str] = []
-    names: list = []
-    if isinstance(d, dict):
-        for k in _DROP_ROLE_KEYS:
-            v = d.get(k)
-            if v is None:
-                continue
-            names.extend(v if isinstance(v, list) else [v])
-    elif isinstance(d, list):
-        names = d
-    else:
-        return [d] if d else []
-    for name in names:
-        if name and name not in seen:
-            seen.add(name)
-            out.append(name)
-    return out
 
 
 def entry_tag(e: dict):
@@ -352,38 +306,18 @@ def entry_tag(e: dict):
     return e.get("name") or e.get("type")
 
 
-def locking_op_names(locking) -> list[str]:
-    """acquire/release fn names from a ``locking`` value, schema-tolerant.
-
-    New schema: a LIST of ``{acquire, release, locks, locked_fields}``
-    disciplines (a type may guard different field sets with different locks).
-    Legacy: a single such dict. ``null`` / ``[]`` -> ``[]``. This is the single
-    locking-extraction primitive the dag / scope / consistency / schedule stages
-    share, so the multi-lock split lands uniformly."""
-    if not locking:
-        return []
-    disciplines = locking if isinstance(locking, list) else [locking]
-    out: list[str] = []
-    for d in disciplines:
-        if isinstance(d, dict):
-            out += [v for v in (d.get("acquire"), d.get("release")) if v]
-    return out
-
-
 def clone_op_names(cloned_by) -> list[str]:
-    """Clone fn names from a `cloned_by` block.
+    """Flatten a `cloned_by` block to fn names.
 
-    A struct's ``cloned_by = {deep: [...], upref: [...]}`` — `deep` duplicators
-    produce a fresh allocation, `upref`s bump the refcount; a fn that branches
-    between the two appears in both, so the modes are unioned and deduped. A
-    synthetic buffer cluster's ``clone`` block carries ``{shared, exclusive}``,
-    either role a scalar or a LIST. This is the single clone-extraction
-    primitive the dag / scope / consistency / schedule stages share; callers pass
-    ``type_cloned_by(entry)``."""
+    ``cloned_by = {deep: [...], upref: [...]}`` — `deep` duplicators produce a
+    fresh allocation, `upref`s bump the refcount; a fn that branches between the
+    two appears in both, so the modes are unioned and deduped. This is the
+    single clone-extraction primitive the dag / scope / consistency / schedule
+    stages share; callers pass ``type_cloned_by(entry, lifecycle)``."""
     if not isinstance(cloned_by, dict):
         return []
     out: list[str] = []
-    for role in ("deep", "upref", "exclusive", "shared"):
+    for role in ("deep", "upref"):
         v = cloned_by.get(role)
         if v:
             out += (v if isinstance(v, list) else [v])
@@ -391,75 +325,153 @@ def clone_op_names(cloned_by) -> list[str]:
     return [x for x in out if not (x in seen or seen.add(x))]
 
 
-def type_dropped_by(entry: dict):
-    """The type's destructors: TOP-LEVEL ``dropped_by`` — a flat LIST on a struct
-    record — falling back to a synthetic buffer cluster's ``lifetime.drop`` role
-    block. Pass the result to :func:`drop_op_names`, which reads either shape."""
-    d = entry.get("dropped_by")
-    return d if d is not None else (lifetime(entry).get("drop") or {})
+def _empty_lifecycle() -> dict:
+    return {"dropped_by": [], "cloned_by": {"deep": [], "upref": []},
+            "fields_disposed_by": []}
 
 
-def type_cloned_by(entry: dict) -> dict:
-    """The type's ``{deep, upref}`` clone block: TOP-LEVEL ``cloned_by`` (struct
-    records), falling back to a synthetic buffer cluster's ``lifetime.clone``."""
-    c = entry.get("cloned_by")
-    return c if c is not None else (lifetime(entry).get("clone") or {})
+def build_lifecycle_index(analysis_root) -> dict[str, dict]:
+    """Reverse-derive every type's lifecycle roles from the SYMS tree.
+
+    A concrete type stores no lifecycle of its own. The fact lives once, on the
+    acting symbol: ``syms.json``'s entry-level ``lifetime``
+    ``{for, is_dropper, is_disposer, is_cloner}`` (see docs/schemas/syms.md).
+    This inverts that relation — the composer-side equivalent of
+    ``query symbols --lifetime-for`` — so the dag / consistency / schedule
+    stages read one derived index instead of a field that could drift from the
+    symbol that actually implements the role.
+
+    Returns ``tag -> {dropped_by: [fn], cloned_by: {deep: [fn], upref: [fn]},
+    fields_disposed_by: [fn]}``, keyed by the CANONICAL type tag: a symbol's arg
+    records its pointee type as written (``SSL``), which is resolved through the
+    types tree's ``typedef`` aliases to the struct tag (``ssl_st``) so both
+    spellings land on one entry. Types with no role are absent, not empty.
+    """
+    root = Path(analysis_root)
+
+    # alias -> canonical tag. `name` is the canonical spelling; every `typedef`
+    # alias resolves to it. setdefault, not assignment: a canonical name always
+    # wins over an alias of the same string.
+    canon: dict[str, str] = {}
+    for tj in sorted(root.rglob("types.json")):
+        try:
+            doc = json.loads(tj.read_text())
+        except (OSError, ValueError):
+            continue
+        for t in doc.get("types") or []:
+            tag = entry_tag(t)
+            if not tag:
+                continue
+            canon[tag] = tag
+            td = t.get("typedef")
+            for alias in (td if isinstance(td, list) else [td] if td else []):
+                if alias:
+                    canon.setdefault(alias, tag)
+
+    out: dict[str, dict] = {}
+    for sj in sorted(root.rglob("syms.json")):
+        try:
+            doc = json.loads(sj.read_text())
+        except (OSError, ValueError):
+            continue
+        for s in doc.get("symbols") or []:
+            lf = s.get("lifetime")
+            if not isinstance(lf, dict):
+                continue
+            arg = next((a for a in s.get("ptr_args") or []
+                        if a.get("name") == lf.get("for")), None)
+            fn = s.get("name")
+            if arg is None or not fn:
+                continue
+            tag = canon.get(arg.get("type")) or arg.get("type")
+            if not tag:
+                continue
+            rec = out.setdefault(tag, _empty_lifecycle())
+            if lf.get("is_dropper") is True:
+                rec["dropped_by"].append(fn)
+            if lf.get("is_disposer") is True:
+                rec["fields_disposed_by"].append(fn)
+            cl = lf.get("is_cloner")
+            if isinstance(cl, dict):
+                for mode in ("deep", "upref"):
+                    if cl.get(mode):
+                        rec["cloned_by"][mode].append(fn)
+
+    def _dedup(xs):
+        seen: set[str] = set()
+        return sorted(x for x in xs if not (x in seen or seen.add(x)))
+
+    for rec in out.values():
+        rec["dropped_by"] = _dedup(rec["dropped_by"])
+        rec["fields_disposed_by"] = _dedup(rec["fields_disposed_by"])
+        for mode in ("deep", "upref"):
+            rec["cloned_by"][mode] = _dedup(rec["cloned_by"][mode])
+    return out
 
 
-def lifetime(rec: dict) -> dict:
-    """The lifecycle sub-record — ``ctors``/``up_ref``/``dtor``/``clones``/
-    ``locking``/``conditional_drop``. The current schema nests these
-    under ``rec["lifetime"]``; this returns that **mutable** dict, falling back
-    to ``rec`` itself for un-migrated flat records — so both the reads here and
-    the partial-merge write target in ``query`` stay correct across migration.
-    `kind`, `ops`, `fields`, `casted` stay at the record top level."""
-    lc = rec.get("lifetime")
-    return lc if isinstance(lc, dict) else rec
+def _lifecycle_of(entry: dict, lifecycle) -> dict:
+    """This entry's roles from a :func:`build_lifecycle_index` result.
+
+    ``lifecycle`` is optional only so a caller holding no index still gets a
+    well-formed empty record rather than a crash; omitting it yields NO roles,
+    so every caller that walks real type records must pass the index it built.
+    """
+    if not isinstance(lifecycle, dict):
+        return _empty_lifecycle()
+    return lifecycle.get(entry_tag(entry)) or _empty_lifecycle()
 
 
-def alloc_fns(lc: dict) -> list[str]:
-    """The byte-level allocator routines (`allocs`) — the raw-T-producing
-    primitives bound to the type. Back-compat: falls back to the pre-refactor
-    `ctors` key for un-migrated records (higher-level construction logic is now
-    a free function; only the allocation primitive is bound)."""
-    v = lc.get("allocs")
-    return list(v if v is not None else (lc.get("ctors") or []))
+def type_dropped_by(entry: dict, lifecycle=None) -> list:
+    """The type's destructors: a flat LIST, reverse-derived from the symbols
+    whose ``lifetime.is_dropper`` acts on an arg of this type."""
+    return _lifecycle_of(entry, lifecycle)["dropped_by"]
 
 
-def type_method_syms(entry: dict) -> list[str]:
+def type_cloned_by(entry: dict, lifecycle=None) -> dict:
+    """The type's ``{deep, upref}`` clone block, reverse-derived from the
+    symbols whose ``lifetime.is_cloner`` acts on an arg of this type."""
+    return _lifecycle_of(entry, lifecycle)["cloned_by"]
+
+
+def type_fields_disposed_by(entry: dict, lifecycle=None) -> list:
+    """The type's field-teardown routines (``*_cleanup`` / ``*_dispose``),
+    reverse-derived from the symbols whose ``lifetime.is_disposer`` acts on an
+    arg of this type."""
+    return _lifecycle_of(entry, lifecycle)["fields_disposed_by"]
+
+
+def type_method_syms(entry: dict, lifecycle=None) -> list[str]:
     """The C function names that are this type's methods — its method surface,
     deduped, lifecycle-first.
 
-    For a concrete type (struct/union/enum) this is DERIVED, not stored: its
-    **lifecycle** (drop.{shared,exclusive,fields} ∪ clone.{shared,exclusive}).
-    (`allocs` and type-level `locking` were retired in Phase 2 -- allocators
-    derive from constructor bindings, and lock ops now live on per-field
-    `locked_by`, referenced via the normal call graph rather than bundled here.)
-    Field accessors are NOT part of the surface -- the wrapper derives per-field
-    accessors from the field layout directly, so a C field-accessor function is an
-    ordinary free function here. There is no `ops` list on a concrete type -- the
-    deps DAG and the consistency gate call this to recover the lifecycle set.
-
-    For the fieldless synthetic clusters (kind ``string``/``array``) the method
-    surface is their explicit ``ops`` list (realloc/cleanse have no field
-    analog), returned verbatim.
+    Wholly DERIVED, never stored: the type's lifecycle (``dropped_by`` ∪
+    ``cloned_by.{deep,upref}`` ∪ ``fields_disposed_by``), reverse-derived from
+    the acting symbols via ``lifecycle``. Field accessors are NOT part of the
+    surface -- the wrapper derives per-field accessors from the field layout
+    directly, so a C field-accessor function is an ordinary free function here.
     """
-    if entry.get("kind") in SYNTHETIC_KINDS:
-        return list(entry.get("ops") or [])
-    out: list[str] = list(drop_op_names(type_dropped_by(entry)))
-    out += clone_op_names(type_cloned_by(entry))
+    lc = _lifecycle_of(entry, lifecycle)
+    out: list[str] = list(lc["dropped_by"])
+    out += clone_op_names(lc["cloned_by"])
+    out += lc["fields_disposed_by"]
     seen: set[str] = set()
     return [x for x in out if not (x in seen or seen.add(x))]
 
 
-def type_method_fns(analysis_root: Path) -> set[str]:
+def type_method_fns(analysis_root: Path, lifecycle=None) -> set[str]:
     """Union of every type's method surface (lifecycle ops) across the analysis
     tree. These are **folded** into their owning type's wrap unit (emitted by
     `wrap types` at the *type's* layer), so they must never be selected as
     standalone sym units — the wrap/port layer-slice selection subtracts this
-    set, and the port stage uses it as its lifecycle filter."""
+    set, and the port stage uses it as its lifecycle filter.
+
+    Builds the lifecycle index itself when not handed one, since it already
+    walks the same tree."""
+    root = Path(analysis_root)
+    if lifecycle is None:
+        lifecycle = build_lifecycle_index(root)
     fns: set[str] = set()
-    for tj in Path(analysis_root).rglob("types.json"):
+    for tj in root.rglob("types.json"):
         try:
             doc = json.loads(tj.read_text())
         except (OSError, ValueError):
@@ -467,25 +479,19 @@ def type_method_fns(analysis_root: Path) -> set[str]:
         recs = doc if isinstance(doc, list) else (doc.get("types") or [])
         for rec in recs:
             if isinstance(rec, dict):
-                fns.update(type_method_syms(rec))
+                fns.update(type_method_syms(rec, lifecycle))
     return fns
 
 
 def in_scope_pred(scope_json: Path, which: str, **kw):
     """A predicate ``pred(node) -> bool`` over a dag Node, backed by
     :func:`scope_membership`. ``Node.defined_in`` is already the node's
-    ``origin()`` (defined_in or canonical decl), so it keys directly.
-
-    Synthetic-kind nodes (``string`` / ``array`` buffer clusters) are
-    **always wrap, never port** — they live outside scope.json, so this rule
-    is applied here so every node-path stage (wrap/port) classifies them
-    uniformly. This is the single scope-classification primitive those stages
+    ``origin()`` (defined_in or canonical decl), so it keys directly. This is
+    the single scope-classification primitive the node-path stages (wrap/port)
     share."""
     keys = scope_membership(scope_json, which, **kw)
 
     def pred(n) -> bool:
-        if (getattr(n, "subkind", "") or "") in SYNTHETIC_KINDS:
-            return which == "wrap"
         return (n.id, n.defined_in or "") in keys
 
     return pred

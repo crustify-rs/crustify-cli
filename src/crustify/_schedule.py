@@ -64,10 +64,6 @@ class Node:
     # raw and should switch to its wrapper once it lands.
     fallback: list[str] = field(default_factory=list)
     back_fill: list[str] = field(default_factory=list)
-    # A type's ctor symbol names (a subset of `ops` for most types, but NOT for
-    # the synthetic allocator-array clusters whose ctor is its allocator). Kept
-    # alongside `ops` so an op-count unions both.
-    ctors: list[str] = field(default_factory=list)
     # Per-symbol lines-of-code (CodeQL body span; global=1, macro=0, 0 when the
     # `loc` column is absent — for a type node it is the struct field count).
     # Summed per batch against the port LoC budget.
@@ -98,7 +94,6 @@ def load_nodes(dag: dict) -> tuple[dict[SymKey, Node], dict[str, list[SymKey]]]:
             defined_in=rec.get("defined_in"),
             layer=layer,
             ops=[(o["name"], o.get("defined_in")) for o in rec.get("ops") or []],
-            ctors=list(rec.get("ctors") or []),
             dep_types=list(deps.get("types") or []),
             dep_syms=[(d["name"], d.get("defined_in")) for d in deps.get("syms") or []],
             fallback=list((rec.get("fallback") or {}).get("types") or []),
@@ -193,7 +188,7 @@ def form_units(
 ) -> list[Unit]:
     """Type → type-unit (type + its **in-scope** ops + field names); non-type →
     atomic unit. Ops are scope-filtered so wrap and port partition a type's ops,
-    and ordered **lifecycle-first** (ctors/dtor/up_ref/clones/locking) so the
+    and ordered **lifecycle-first** (droppers/disposers/cloners) so the
     shape-bearing surface always lands in the first, type-def-bearing batch.
 
     A **callback** (a function-pointer typedef, `subkind == "callback"`) is a
@@ -216,8 +211,8 @@ def form_units(
 def ordered_ops(node: Node, by_key: dict[SymKey, Node], lifecycle: set[str],
                 in_scope: Callable[[Node], bool]) -> list[Node]:
     """A type's ops as the **canonical, windowable list**: those resolvable to a
-    node and ``in_scope``, ordered **lifecycle-first** (ctors/dtor/up_ref/clones/
-    locking) then alphabetical. This is the single ordering both the scheduler
+    node and ``in_scope``, ordered **lifecycle-first** (droppers/disposers/
+    cloners) then alphabetical. This is the single ordering both the scheduler
     (for ``--range`` windows) and ``query types --name T --ops`` consume, so a window
     ``[A:B]`` means the same slice to both."""
     ops = [by_key[k] for k in node.ops if k in by_key and in_scope(by_key[k])]
@@ -253,12 +248,19 @@ def resolve_path(node: Node, doc: dict, layout) -> Path | None:
 
 def load_type_meta(analysis_root: Path) -> dict[str, tuple[list[str], set[str]]]:
     """type tag -> (field names, lifecycle op names). Fields drive the
-    ``max_fields`` accessor budget; the lifecycle set (ctors / dtor / up_ref /
-    clones / locking.{acquire,release}) lets the packer hoist the shape-bearing
-    ops into the first batch."""
+    ``max_fields`` accessor budget; the lifecycle set lets the packer hoist the
+    shape-bearing ops into the first batch.
+
+    A type stores no lifecycle of its own — it is reverse-derived from the
+    symbols whose ``lifetime`` acts on an arg of that type (droppers, cloners,
+    field-disposers). Allocators and locking fns are deliberately not bundled;
+    they reach the wrap set through the normal call graph."""
+    from compose.scope import build_lifecycle_index, type_method_syms
+
     meta: dict[str, tuple[list[str], set[str]]] = {}
     if not analysis_root.is_dir():
         return meta
+    lifecycle = build_lifecycle_index(analysis_root)
     for f in analysis_root.rglob("types.json"):
         try:
             doc = json.loads(f.read_text())
@@ -269,159 +271,8 @@ def load_type_meta(analysis_root: Path) -> dict[str, tuple[list[str], set[str]]]
             if not tag or tag in meta:
                 continue
             fields = [x["name"] for x in (e.get("fields") or []) if x.get("name")]
-            from compose.scope import drop_op_names as _drop_op_names
-            from compose.scope import clone_op_names as _clone_op_names
-            from compose.scope import type_dropped_by, type_cloned_by
-            # Top-level `dropped_by`/`cloned_by` = {exclusive, shared} fn lists
-            # (the bridge falls back to a cluster's lifetime.{drop,clone}).
-            # (allocs + type-level locking retired in Phase 2; their fns reach the
-            # wrap set via the normal call graph, not lifecycle bundling.)
-            lc = set(_drop_op_names(type_dropped_by(e)))
-            lc |= set(_clone_op_names(type_cloned_by(e)))
-            meta[tag] = (fields, lc)
+            meta[tag] = (fields, set(type_method_syms(e, lifecycle)))
     return meta
-
-
-# ------------------------------------------------- polymorphic families (typegens)
-
-def load_polymorphic(analysis_root: Path) -> dict[str, dict]:
-    """type tag -> its ``polymorphic`` record ``{base, derived}``.
-
-    For typegens this is the generator **specialization tree** (e.g.
-    ``GIT_HASHMAP_STR.base == GIT_HASHMAP``). It lets the scheduler co-schedule a
-    whole generator family — base + derived specializations — into a single
-    wrapper agent, so one consistent representation is emitted instead of each
-    member being reimplemented divergently by a separate agent."""
-    poly: dict[str, dict] = {}
-    inst_gen: dict[str, str] = {}   # typegen_instance -> its generator
-    if not analysis_root.is_dir():
-        return poly
-    for f in analysis_root.rglob("types.json"):
-        try:
-            doc = json.loads(f.read_text())
-        except (OSError, ValueError):
-            continue
-        for e in doc.get("types", []):
-            tag = e.get("name") or e.get("type")
-            if not tag:
-                continue
-            p = e.get("polymorphic")
-            if e.get("kind") == "typegen" and tag not in poly and isinstance(p, dict):
-                poly[tag] = {"base": p.get("base"),
-                             "derived": list(p.get("derived") or [])}
-            gen = e.get("generator")
-            if e.get("kind") == "typegen_instance" and gen and tag not in inst_gen:
-                inst_gen[tag] = gen
-    # Fold the instance<->generator relation into the same family tree: an
-    # instance's `base` is its generator, and the generator lists its instances
-    # in `derived`. So selecting either an instance or any generator co-schedules
-    # the whole reachable family (scope-bounded at the stage filter).
-    for inst, gen in inst_gen.items():
-        rec = poly.setdefault(inst, {"base": None, "derived": []})
-        if not rec.get("base"):
-            rec["base"] = gen
-        g = poly.setdefault(gen, {"base": None, "derived": []})
-        if inst not in g["derived"]:
-            g["derived"].append(inst)
-    return poly
-
-
-def _family_root(tag: str, poly: dict[str, dict]) -> str:
-    """Walk ``base`` links to the family root (cycle-safe)."""
-    seen = {tag}
-    cur = tag
-    while True:
-        base = (poly.get(cur) or {}).get("base")
-        if not base or base in seen:
-            return cur
-        seen.add(base)
-        cur = base
-
-
-def family_members(tag: str, poly: dict[str, dict]) -> set[str]:
-    """Every tag in ``tag``'s polymorphic family: the root plus its transitive
-    ``derived``. Bidirectional — selecting any member yields the whole family."""
-    out: set[str] = set()
-    stack = [_family_root(tag, poly)]
-    while stack:
-        t = stack.pop()
-        if t in out:
-            continue
-        out.add(t)
-        stack.extend((poly.get(t) or {}).get("derived") or [])
-    return out
-
-
-def expand_polymorphic(
-    nodes: list[Node],
-    by_name: dict[str, list[SymKey]],
-    by_key: dict[SymKey, Node],
-    in_scope: Callable[[Node], bool],
-    poly: dict[str, dict],
-    doc: dict | None = None,
-    layout=None,
-) -> list[Node]:
-    """Expand a selected node set along polymorphic families so a generator base
-    and its derived specializations / instances co-schedule. Bounded by
-    ``in_scope`` (the stage's wrap/port filter) — cross-scope family members drop
-    out naturally.
-
-    Auto-pulled family members that are **not yet scaffolded** (no crates.json
-    home on disk) are skipped with a note rather than co-scheduled — they join the
-    family once their file is scaffolded. User-*selected* names are never dropped
-    here; a genuinely unplaced one is still caught by the plan-time placement
-    check in :func:`schedule`."""
-    if not poly:
-        return nodes
-    out = list(nodes)
-    seen = {n.key for n in nodes}
-    skipped: list[str] = []
-    for n in list(nodes):
-        if n.id not in poly:
-            continue
-        for fam in family_members(n.id, poly):
-            for k in by_name.get(fam, []):
-                nb = by_key[k]
-                if nb.key in seen or not in_scope(nb):
-                    continue
-                if doc is not None and resolve_path(nb, doc, layout) is None:
-                    skipped.append(nb.id)
-                    continue
-                seen.add(nb.key)
-                out.append(nb)
-    if skipped:
-        print(f"schedule: deferred {len(skipped)} unscaffolded family member(s): "
-              f"{', '.join(sorted(set(skipped)))} (scaffold their files to include "
-              f"them).", file=sys.stderr)
-    return out
-
-
-def group_polymorphic_batches(
-    batches: list["Batch"], poly: dict[str, dict],
-) -> list["Batch"]:
-    """Merge type-batches of one polymorphic family into a single batch so they
-    ride one agent. Non-family batches pass through unchanged."""
-    if not poly:
-        return batches
-    fam: dict[str, list[Batch]] = {}
-    rest: list[Batch] = []
-    for b in batches:
-        prim = next((u.node.id for u in b.units if u.kind == "type"), None)
-        if prim and prim in poly:
-            fam.setdefault(_family_root(prim, poly), []).append(b)
-        else:
-            rest.append(b)
-    for bs in fam.values():
-        if len(bs) == 1:
-            rest.append(bs[0])
-            continue
-        m = Batch(file=bs[0].file, units=[], members=[], fields=[])
-        for b in bs:
-            m.units.extend(b.units)
-            m.members.extend(b.members)
-            m.fields.extend(b.fields)
-        rest.append(m)
-    return rest
 
 
 # ----------------------------------------------------------------- packing
@@ -434,7 +285,7 @@ class Batch:
     fields: list[str] = field(default_factory=list)     # pending field-accessor slice
     # Static-tiling windows for a single struct/union/enum batch (the
     # ``type_wrapper`` pull path): half-open [lo:hi) into the type's canonical
-    # field / op lists. ``None`` for synthetic/family/sym batches (push path).
+    # field / op lists. ``None`` for family/sym batches (push path).
     op_range: tuple[int, int] | None = None
     field_range: tuple[int, int] | None = None
 
@@ -502,7 +353,7 @@ def pack(
                 b.fields = win_fields
                 batches.append(b)
         elif u.kind == "type":
-            # Push path (typegen / string / array) — budget-chunked.
+            # Push path — budget-chunked.
             ops, fields = list(u.ops), list(u.fields)
             op_chunks = _chunk(ops, max_syms) or [[]]
             field_chunks = _chunk(fields, max_fields) or [[]]
@@ -853,11 +704,6 @@ def schedule(
     if not nodes:
         raise SystemExit("schedule: nothing selected in scope.")
 
-    # Typegen specialization order is now modelled in the dag itself — a derived
-    # `polymorphic.base` is a dep edge, and instances depend on their generator —
-    # so base < derived < instance is dependency-ordered and each is an ordinary
-    # single-tag job (the derived/instance agent reuses its base's wrapper as a
-    # dep). No family co-scheduling.
     bare_gate(nodes)
     type_meta = load_type_meta(analysis_root)
     # Type selection uses `in_scope`; op-facading uses `op_in_scope` (a type may

@@ -278,7 +278,7 @@ class Reach:
         # Raw struct<->struct cast graph (edges/casts.ql). Keyed by tag:
         #   forward: from_tag -> set of to_tags  (the type's `casted.to`)
         #   inverse: to_tag   -> set of from_tags (the type's `casted.from`)
-        # No classification — typegen erasure, polymorphic downcast and ASN1
+        # No classification — engine erasure, downcast and ASN1
         # ITEM punning all coexist here; consumers disambiguate.
         self._cast_to: dict[str, set[str]] = defaultdict(set)
         self._cast_from: dict[str, set[str]] = defaultdict(set)
@@ -417,9 +417,9 @@ class Reach:
 
     def port_macro_file_sites(self, macro_name: str, macro_def_file: str) -> set[str]:
         """Port-side FILE PATHS that contain a file-scope expansion
-        of this macro. Drives `called_by.call` for
-        `macro_typegen` kind (typegens expand at file scope, not
-        from a function body).
+        of this macro. Drives `called_by.call` for a macro whose
+        expansion lands at file scope rather than inside a function
+        body.
         """
         return {
             inv_file for enc, inv_file in self._me_inverse.get((macro_name, macro_def_file), set())
@@ -623,34 +623,36 @@ class Reach:
     def _build_field_metadata_indexes(self, path: Path) -> None:
         """Load `entities/fields.csv` into two indexes:
 
-          - `(struct, field) → (field_type, is_scalar)` point lookup
-            (`field_type_of`).
-          - `(struct, def_file) → [(field, field_type, is_scalar)]`
+          - `(struct, field) → (field_type, is_scalar, ptr_depth)` point
+            lookup (`field_type_of`).
+          - `(struct, def_file) → [(field, field_type, is_scalar, ptr_depth)]`
             ordered list of ALL declared fields (`struct_fields`),
             used to compose the full layout for port-scope types.
 
-        `is_scalar` is parsed to bool at load time. The list preserves
+        `is_scalar` is parsed to bool at load time; `ptr_depth` to int
+        (0 when the column is absent — a pre-`ptr_depth` extraction). The list preserves
         the CSV row order (CodeQL `Field` iteration order), which is
         not guaranteed to match declaration order — layout-faithful
         ordering needs a fields.ql ordinal column (see docs/TODO.md).
         """
-        self._field_metadata: dict[tuple[str, str, str], tuple[str, bool]] = {}
-        self._struct_field_list: dict[tuple[str, str], list[tuple[str, str, bool]]] = defaultdict(list)
+        self._field_metadata: dict[tuple[str, str, str], tuple[str, bool, int]] = {}
+        self._struct_field_list: dict[tuple[str, str], list[tuple[str, str, bool, int]]] = defaultdict(list)
         if not path.exists():
             return
         for r in _load_csv(path):
             scalar = r["is_scalar"] == "true"
+            depth = int(r.get("ptr_depth") or 0)
             self._field_metadata[(r["struct_name"], r["struct_def_file"], r["field_name"])] = (
-                r["field_type"], scalar,
+                r["field_type"], scalar, depth,
             )
             self._struct_field_list[(r["struct_name"], r["struct_def_file"])].append(
-                (r["field_name"], r["field_type"], scalar)
+                (r["field_name"], r["field_type"], scalar, depth)
             )
 
     def field_type_of(
         self, struct_name: str, struct_def_file: str, field_name: str
-    ) -> tuple[str, bool] | None:
-        """Return (field_type_string, is_scalar) for the given
+    ) -> tuple[str, bool, int] | None:
+        """Return (field_type_string, is_scalar, ptr_depth) for the given
         (struct, field). None when the field isn't in the
         entities/fields.csv index — either fields.csv wasn't
         provided at construction, or the declaring struct is
@@ -660,9 +662,9 @@ class Reach:
 
     def struct_fields(
         self, struct_name: str, struct_def_file: str
-    ) -> list[tuple[str, str, bool]]:
+    ) -> list[tuple[str, str, bool, int]]:
         """All declared fields of a struct as ordered
-        `(field_name, field_type, is_scalar)` tuples. Empty when the
+        `(field_name, field_type, is_scalar, ptr_depth)` tuples. Empty when the
         struct isn't in fields.csv (no full-body definition, or
         anonymous declaring type). Used to compose the full field
         layout for port-scope types (vs the access-narrowed subset

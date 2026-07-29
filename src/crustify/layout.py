@@ -7,7 +7,7 @@ walking the filesystem — and its artifacts live at ``repo_root/crustify/``:
 
     <repo_root>/
       crustify/
-        build.json   alloc.json                  # repo-tier, project-wide
+        build.json                                # repo-tier, project-wide
         analysis/    codeql/{t1,t2,db}/
         targets/<repo-relative-target>/           # per-target invocation state
           config.json   scope.json   logs/
@@ -105,10 +105,6 @@ class Layout:
     @property
     def crates_json(self) -> Path:
         return self.root / "crates.json"
-
-    @property
-    def alloc_json(self) -> Path:
-        return self.root / "alloc.json"
 
     @property
     def rust(self) -> Path:

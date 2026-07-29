@@ -27,13 +27,11 @@ from pathlib import Path
 
 from crustify.agents.base import CrustifyAgent, _PKG_ROOT
 
-# struct/union/enum share the type recipe; synthetic clusters have their own.
+# struct/union/enum share the type recipe.
 _PROMPT_BY_KIND: dict[str, str] = {
     "struct":           "type_wrapper.md",
     "union":            "type_wrapper.md",
     "enum":             "type_wrapper.md",
-    "string":           "strings_wrapper.md",
-    "array":            "arrays_wrapper.md",
 }
 # Type kinds with no wrapper codegen yet. Callbacks are NOT here: they route as
 # sym-units (see _schedule.form_units) to symbol_wrapper.md §3.
@@ -54,9 +52,7 @@ class CrustifyWrap(CrustifyAgent):
         *,
         batch_kind: str,                       # "type" | "syms"
         deps: list[str] | None = None,         # push path only; pull path discovers deps itself
-        # type batch — parallel lists over the batch's type(s). Usually one type;
-        # a co-scheduled polymorphic generator family carries several (base +
-        # derived specializations) so ONE agent emits a single consistent shape.
+        # type batch — parallel lists over the batch's type(s).
         tags: list[str] | None = None,
         kinds: list[str] | None = None,
         entry_files: list[str] | None = None,
@@ -65,7 +61,6 @@ class CrustifyWrap(CrustifyAgent):
         fields_per: list[list[str]] | None = None,      # parallel to tags
         ops_per: list[list[str]] | None = None,         # parallel to tags
         op_rs_outs_per: list[list[str]] | None = None,  # parallel to ops_per
-        polymorphic: dict | None = None,                # tag -> {base, derived}
         fallback_deps: list[str] | None = None,         # deps not wrapped yet → raw ffi::T
         naked_users: list[str] | None = None,           # users to switch onto this wrapper
         # pull path (single struct/union/enum): the agent discovers everything via
@@ -86,11 +81,9 @@ class CrustifyWrap(CrustifyAgent):
         self._linked_in = list(linked_in or [])
         self._fields_per = list(fields_per or [])
         self._ops_per = list(ops_per or [])
-        # Per-op output file, parallel to ``ops_per``. A synthetic cluster's ops
-        # live in their own ``declared_in`` module (not the cluster's type file),
-        # so the agent emits each op's ``impl <Cluster>`` block there.
+        # Per-op output file, parallel to ``ops_per``. An op whose module
+        # differs from its type's file gets its ``impl`` block emitted there.
         self._op_rs_outs_per = list(op_rs_outs_per or [])
-        self._polymorphic = polymorphic or {}
         self._fallback_deps = list(fallback_deps or [])
         self._naked_users = list(naked_users or [])
         self._fields_range = list(fields_range) if fields_range is not None else None
@@ -148,10 +141,9 @@ class CrustifyWrap(CrustifyAgent):
             common["syms"] = json.dumps(self._syms)
             return common
         # type_wrapper.md handles a single struct / union / enum: one tag + its
-        # field-accessor window. Lifecycle (ctors/dtor/up_ref/clones/locking) and
-        # the cast graph are pulled from the record; field accessors are the only
-        # windowed surface. Cluster (string/array) jobs carry no field window and
-        # fall through to the family payload below.
+        # field-accessor window. The lifecycle (reverse-derived droppers /
+        # disposers / cloners) and the cast graph are pulled from the record;
+        # field accessors are the only windowed surface.
         if self._fields_range is not None:
             common.update({
                 "tag":          self._tags[0],
@@ -159,7 +151,6 @@ class CrustifyWrap(CrustifyAgent):
                 "fields_range": f"{self._fields_range[0]}:{self._fields_range[1]}",
             })
             return common
-        # array / string clusters → arrays_wrapper.md / strings_wrapper.md.
         common.update({
             "tags": json.dumps(self._tags),
             "kind": self._kind,

@@ -32,9 +32,6 @@ _COMPOSE_PARENT = _CRUSTIFY_ROOT / "utils" / "codeql"
 if str(_COMPOSE_PARENT) not in sys.path:
     sys.path.insert(0, str(_COMPOSE_PARENT))
 
-_SYNTH = ("string", "array")
-
-
 def query(
     target: Path,
     *,
@@ -43,9 +40,6 @@ def query(
     files: list[str] | None = None,
     wrap_only: bool = False,
     port_only: bool = False,
-    strings: bool = False,
-    arrays: bool = False,
-    typegens: bool = False,
     fields: bool = False,
     ops: bool = False,
     methods: bool = False,
@@ -88,7 +82,8 @@ def query(
         print(_schema(kind))
         return
     # --lifetime-for: REVERSE lifecycle lookup, parameterized by a TYPE (no
-    # --name). Symbols-only; scans arg-level lifetime flags.
+    # --name). Symbols-only; scans each symbol's entry-level `lifetime` block,
+    # resolved to the arg it names in `for`.
     if lifetime_for is not None:
         if subject != "symbols":
             raise SystemExit("query: --lifetime-for applies to symbols only.")
@@ -100,20 +95,9 @@ def query(
         _taking(target, taking, calling, hops, array)
         return
     name_list = list(names or [])
-    # --create homes a WHOLE synthetic cluster (its name is IN the entry), so it
-    # takes no --name and bypasses resolution.
-    if create is not None:
-        if subject != "types":
-            raise SystemExit(
-                "query: --create applies to types only (synthetic clusters).")
-        from crustify.layout import Layout
-        _create_type(Layout.discover(target), target, create)
-        return
     type_facets = fields or ops or methods or field_touchers
     if type_facets and kind != "type":
         raise SystemExit("query symbols: --fields/--ops/--methods/--field-touchers apply to types only.")
-    if typegens and kind != "symbol":
-        raise SystemExit("query types: --typegens applies to symbols only (macros with macro.typegen).")
     if (type_facets or manifest or update is not None) and len(name_list) != 1:
         raise SystemExit(
             f"query {subject}: facets / --manifest / --update need exactly one --name.")
@@ -124,12 +108,11 @@ def query(
                     rng=rng, wrap_only=wrap_only, port_only=port_only)
     else:
         _enumerate(target, kind=kind, files=files,
-                   wrap_only=wrap_only, port_only=port_only,
-                   strings=strings, arrays=arrays, typegens=typegens)
+                   wrap_only=wrap_only, port_only=port_only)
 
 
-# A type SPEC is a struct tag / typedef, or one of two keywords naming the
-# untyped lifecycle tiers the type manifest models as synthetic clusters:
+# A type SPEC is a struct tag / typedef, or one of two keywords naming an
+# UNTYPED lifecycle tier (no types.json entry of its own):
 #   `void`   -- raw, byte-level objects (the untyped tier; CRYPTO_free/memdup).
 #   `string` -- NUL-terminated strings (CRYPTO_strdup); matched by the char
 #               family OR the analyzer's own `ptr.string` verdict.
@@ -224,9 +207,9 @@ def _type_aliases(layout, type_name: str) -> set:
     return {type_name}
 
 
-_LIFETIME_FIELD = {"is_dropped": "dropped_by",
-                   "is_disposed": "fields_disposed_by",
-                   "is_cloned": "cloned_by"}
+_LIFETIME_FIELD = {"is_dropper": "dropped_by",
+                   "is_disposer": "fields_disposed_by",
+                   "is_cloner": "cloned_by"}
 
 
 def _taking(target: Path, spec: str, calling: str | None,
@@ -283,14 +266,19 @@ def _taking(target: Path, spec: str, calling: str | None,
 
 
 def _lifetime_for(target: Path, type_name: str, array_only: bool = False) -> None:
-    """Reverse lifecycle lookup for a type: every symbol with an ARG of that type
-    whose ptr carries a lifetime flag, grouped into the type's dropped_by /
-    fields_disposed_by / cloned_by candidates (from is_dropped / is_disposed /
-    is_cloned). These are the Drop / dispose / Clone routines the type analyzer
-    records. Lifetime flags are arg-only, so returns are not scanned. Prints JSON
-    ``{type, matched_aliases, dropped_by:[{symbol,arg,arg_name,arg_type,role,
-    defined_in}], fields_disposed_by:[...], cloned_by:[...]}``."""
-    import re as _re
+    """Reverse lifecycle lookup for a type: every symbol whose entry-level
+    `lifetime` acts on an ARG of that type, grouped into the type's dropped_by /
+    fields_disposed_by / cloned_by candidates (from is_dropper / is_disposer /
+    is_cloner). These are the Drop / dispose / Clone routines the type analyzer
+    records.
+
+    The role is SYMBOL-level and names its subject arg in `lifetime.for`, so the
+    scan is one block per symbol resolved to that one arg — a symbol whose
+    `lifetime.for` names an arg of a DIFFERENT type is not a candidate for this
+    type, even though it may take one. Returns are never subjects (a return is
+    produced, not acted on). Prints JSON ``{type, matched_aliases,
+    dropped_by:[{symbol,arg,arg_name,arg_type,defined_in,mode?}],
+    fields_disposed_by:[...], cloned_by:[...]}``."""
     from crustify.layout import Layout
 
     layout = Layout.discover(target)
@@ -306,42 +294,47 @@ def _lifetime_for(target: Path, type_name: str, array_only: bool = False) -> Non
         except (OSError, ValueError):
             continue
         for s in doc.get("symbols", []):
-            for a in s.get("ptr_args") or []:
-                if not _arg_matches_spec(a, type_name, aliases,
-                                         structural_string=False):
-                    continue
-                if array_only and not _arg_is_array(a):
-                    continue
-                lf = (a.get("ptr") or {}).get("lifetime")
-                if not isinstance(lf, dict):
-                    continue
-                for flag, field in _LIFETIME_FIELD.items():
-                    v = lf.get(flag)
-                    # `is_cloned` carries its {deep, upref} modes; is_dropped /
-                    # is_disposed are bare bools.
-                    if flag == "is_cloned":
-                        if not (isinstance(v, dict)
-                                and (v.get("deep") or v.get("upref"))):
-                            continue
-                        modes = [m for m in ("deep", "upref") if v.get(m)]
-                    else:
-                        if v is not True:
-                            continue
-                        modes = None
-                    key = (field, s.get("name"), s.get("defined_in"), a.get("position"))
-                    if key in seen:
+            lf = s.get("lifetime")
+            if not isinstance(lf, dict):
+                continue
+            subject = lf.get("for")
+            a = next((x for x in s.get("ptr_args") or []
+                      if x.get("name") == subject), None)
+            if a is None:
+                continue
+            if not _arg_matches_spec(a, type_name, aliases,
+                                     structural_string=False):
+                continue
+            if array_only and not _arg_is_array(a):
+                continue
+            for flag, field in _LIFETIME_FIELD.items():
+                v = lf.get(flag)
+                # `is_cloner` carries its {deep, upref} modes; is_dropper /
+                # is_disposer are bare bools.
+                if flag == "is_cloner":
+                    if not (isinstance(v, dict)
+                            and (v.get("deep") or v.get("upref"))):
                         continue
-                    seen.add(key)
-                    row = {
-                        "symbol": s.get("name"),
-                        "arg": a.get("position"),
-                        "arg_name": a.get("name"),
-                        "arg_type": a.get("type"),
-                        "defined_in": s.get("defined_in"),
-                    }
-                    if modes is not None:
-                        row["mode"] = modes
-                    result[field].append(row)
+                    modes = [m for m in ("deep", "upref") if v.get(m)]
+                else:
+                    if v is not True:
+                        continue
+                    modes = None
+                key = (field, s.get("name"), s.get("defined_in"),
+                       a.get("position"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                row = {
+                    "symbol": s.get("name"),
+                    "arg": a.get("position"),
+                    "arg_name": a.get("name"),
+                    "arg_type": a.get("type"),
+                    "defined_in": s.get("defined_in"),
+                }
+                if modes is not None:
+                    row["mode"] = modes
+                result[field].append(row)
     for field in ("dropped_by", "fields_disposed_by", "cloned_by"):
         result[field].sort(key=lambda r: (r["symbol"], r["arg"]))
     print(json.dumps(result, indent=2))
@@ -349,7 +342,6 @@ def _lifetime_for(target: Path, type_name: str, array_only: bool = False) -> Non
 
 def _enumerate(
     target: Path, *, kind: str, files, wrap_only, port_only,
-    strings, arrays, typegens=False,
 ) -> None:
     """List the (filtered) type/symbol entries straight from the manifest — one
     ``name<TAB>defined_in<TAB>declared_in`` line each (the placement provenance),
@@ -359,7 +351,6 @@ def _enumerate(
 
     layout = Layout.discover(target)
     sj = layout.scope(target)
-    synth_sel = {k for k, on in zip(_SYNTH, (strings, arrays)) if on}
     file_set = set(files or [])
     arr, tagkey = (("types", "name") if kind == "type"
                    else ("symbols", "name"))
@@ -393,26 +384,17 @@ def _enumerate(
             sk = str(e.get("kind") or "symbol")
             d = e.get("defined_in") or ""
             decls = e.get("declared_in")
-            # Synthetic types — string/array clusters — are always wrap-scope,
-            # never in scope.json, never port. Generated-container instances
-            # (kind: struct, concrete) are NOT synthetic: they flow through
-            # scope.json membership.
-            is_synth = sk in scope.SYNTHETIC_KINDS
             # Match this row's origin_key against the scope set. A type may be
             # listed by a typedef alias (EXT_RETURN) while the manifest uses its
             # tag (ext_return_en), so try the tag OR any typedef. (Anonymous
             # types have no placeable tag, are absent from the manifest, dropped.)
             cands = ((tag,) if kind != "type"
                      else (tag, *(e.get("typedef") or [])))
-            if wrap_only and not (is_synth or any(
-                    scope.origin_key(c, d, decls) in wrap_keys for c in cands)):
+            if wrap_only and not any(
+                    scope.origin_key(c, d, decls) in wrap_keys for c in cands):
                 continue
-            if port_only and (is_synth or not any(
-                    scope.origin_key(c, d, decls) in port_keys for c in cands)):
-                continue
-            if synth_sel and sk not in synth_sel:
-                continue
-            if typegens and not ((e.get("macro") or {}).get("typegen")):
+            if port_only and not any(
+                    scope.origin_key(c, d, decls) in port_keys for c in cands):
                 continue
             if file_set and d not in file_set:
                 continue
@@ -615,16 +597,12 @@ def _field_touchers(layout, target, tag: str, defined_in: str | None, *,
 
 # ----------------------------------------------------------- --update ingest
 
-# TOP-LEVEL type bindings. `dropped_by` is a flat LIST of this type's
-# destructors. `cloned_by` splits into `deep` (duplicators that produce a fresh
-# allocation) and `upref` (refcount bumps) -- the split the wrapper needs to pick
-# `Clone` (the upref for a refcounted type, the deep duplicator otherwise) from
-# the plain methods. `fields_disposed_by` is a flat LIST of this type's own
-# methods that dispose its fields (call the fields' destructors), NOT the leaf
-# frees. Sibling of dropped_by/cloned_by, not per-field.
-_TYPE_LIFECYCLE_KEYS = ("dropped_by", "cloned_by")
-_FINDINGS_TOP = set(_TYPE_LIFECYCLE_KEYS) | {
-    "fields", "fields_disposed_by", "_comment_agent"}
+# A type stores NO lifecycle of its own. Which routines drop / dispose / clone
+# it is recorded once, on the acting symbol (`syms.json`'s entry-level
+# `lifetime`), and read back by reverse lookup -- `query symbols --lifetime-for
+# <TAG>`, or `scope.build_lifecycle_index` composer-side. So the type findings
+# surface is the field layout only.
+_FINDINGS_TOP = {"fields", "_comment_agent"}
 # `refcount` marks the ONE field that stores the type's reference count (the
 # datum an up_ref bumps and a down-ref decrements). It is what makes the type
 # decides which ROUTINE backs the type's `CDropped`/`CCloned` impl (down-ref and
@@ -633,55 +611,33 @@ _FINDINGS_TOP = set(_TYPE_LIFECYCLE_KEYS) | {
 # exposes no up_ref function.
 _FIELD_AGENT_KEYS = {"ptr", "locked_by", "refcount"}
 
-# --create ingest (buffer pass): a whole synthetic string/array cluster entry.
-# A cluster records the CVec strategy family: its identity, the byte-level
-# `allocs` that produce the raw sized buffer, the `dtor` that drives the
-# CLenDropped release ZST, and (array-only) `elems` for the typed CVec<T> aliases.
-# It carries NO `ops` list: realloc/memdup/cleanse and the higher-level
-# duplicating constructors are ordinary FREE FUNCTIONS wrapped by the symbol
-# wrapper, never claimed by the cluster (the recorded `allocs` are metadata for
-# the strategy/aliases -- the allocator functions are still wrapped as free
-# syms). Length-aware teardown is read off the dtor's signature by the wrapper,
-# so there is no stored `len_aware_drop`.
-_SYNTH_CREATE_KINDS = {"string", "array"}
-_CREATE_TOP = {
-    "name", "type", "kind", "declared_in", "defined_in", "_comment_agent",
-    "allocs", "clone", "drop", "locking", "conditional_drop",
-    # ARRAY-only element surface: `elems` lists the concrete element types the
-    # buffer holds at call sites (rows {type, note}) for the wrapper's typed
-    # CVec<T> aliases. Element OWNERSHIP (drop-each-element) is a PORT concern
-    # (ptr.owned_elem), never here. A string carries no `elems` (single buffer).
-    "elems"}
-
 # Symbol findings (functions / callbacks / macros) — the agent-fillable surface.
-_SYM_FINDINGS_TOP = {"macro", "ptr_args", "ptr_ret", "forks", "ptr", "locked_by"}
+_SYM_FINDINGS_TOP = {"ptr_args", "ptr_ret", "lifetime", "forks", "ptr",
+                     "locked_by"}
 # Same structured ownership block as a struct field's `ptr` (see types.md#ptr):
 # `owned` is a bool, `borrowed` nests {lifetime}, `array` is
 # null|{by_val}|{by_ref:{owned,borrowed}}. A pointer at a call boundary and a
-# pointer in a struct extract identical properties, so returns/fields share the
-# base set; only ptr_args ADDITIONALLY carry the arg-only `lifetime` block (the
-# method's action on the arg: is_dropped/is_disposed/is_cloned).
-_PTR_RET_AGENT_KEYS = {"scalar", "array", "string", "owned", "borrowed",
-                       "nullable", "mutable", "note"}
-_PTR_ARG_AGENT_KEYS = _PTR_RET_AGENT_KEYS | {"lifetime"}
-# The arg-only lifetime block: which lifecycle-primitive role THIS method plays
-# on THIS arg. `is_dropped` (bool) = frees the arg's storage; `is_disposed`
-# (bool) = frees the arg's fields; `is_cloned` = null | {deep, upref} -- `deep`
-# copies it into a fresh allocation, `upref` bumps its refcount. The two clone
-# modes co-exist on a body that branches between them, and on an untyped `void *`
-# whose concrete element decides at runtime.
-_LIFETIME_KEYS = {"is_dropped", "is_disposed", "is_cloned"}
-_FORK_KEYS = {"ptr_args", "ptr_ret", "callsites"}
+# pointer in a struct extract identical properties, so args, returns, globals and
+# struct fields all carry the IDENTICAL key set -- the lifecycle role is not a
+# property of a pointer record but of the symbol (see `_LIFETIME_KEYS`).
+_PTR_AGENT_KEYS = {"scalar", "array", "string", "owned", "borrowed",
+                   "nullable", "mutable", "note"}
+# The SYMBOL-level lifetime block (functions / callbacks): which lifecycle-
+# primitive role this symbol plays, and on which arg. `for` names that arg BY
+# NAME -- the same vocabulary a borrowed pointer uses for its source
+# (`arg:<name>`), since both are arg-dependent facts. `is_dropper` (bool) = frees
+# the arg's own storage; `is_disposer` (bool) = frees the arg's fields but KEEPS
+# its storage -- MUTUALLY EXCLUSIVE, the storage is either released or retained.
+# `is_cloner` = null | {deep, upref} -- `deep` copies into a fresh allocation,
+# `upref` bumps a refcount; the two co-exist on a body that branches between
+# them, and on an untyped `void *` whose concrete element decides at runtime.
+_LIFETIME_KEYS = {"for", "is_dropper", "is_disposer", "is_cloner"}
+_FORK_KEYS = {"ptr_args", "ptr_ret", "lifetime", "callsites"}
 # The concurrency binding on a GLOBAL (or, in types.json, a struct field): the
 # lock object guarding the slot plus its acquire/release op lists. It sits at the
 # entry level (sibling of `ptr`), not inside `ptr`, because the guarded datum is
 # often a non-pointer (a refcount int, a flag).
 _LOCKED_BY_KEYS = {"lock", "lock_op", "unlock_op"}
-
-
-# `types.json` is shared with the synthetic string/array-cluster analyzers; the
-# struct type-analyzer's `--schema` excludes their cluster-only fields.
-_SYNTHETIC_SCHEMA_FIELDS = {"array_fields"}
 
 
 def _schema(kind: str) -> str:
@@ -691,10 +647,7 @@ def _schema(kind: str) -> str:
     *shape* + rules; meaning and shape are never duplicated.
 
     Primary source: ``docs/schemas/<types|syms>.md``, split on ``## <field>``
-    headings. The struct type-analyzer drops cluster-only sections (the
-    synthetic string/array ``array_fields``), self-identified by an in-body
-    ``*(cluster-only`` tag (with :data:`_SYNTHETIC_SCHEMA_FIELDS` as an explicit
-    backstop). Falls back to the template's legacy ``_comment_*`` blocks
+    headings. Falls back to the template's legacy ``_comment_*`` blocks
     (rendered as markdown) until a given kind's ``.md`` exists, so the migration
     off the templates is phased. Empty string if neither source is readable."""
     root = Path(__file__).resolve().parents[2]
@@ -708,10 +661,6 @@ def _schema(kind: str) -> str:
         preamble, sections = parts[0], list(zip(parts[1::2], parts[2::2]))
         keep = [preamble.rstrip()]
         for field, body in sections:
-            cluster_only = (kind == "type" and (field in _SYNTHETIC_SCHEMA_FIELDS
-                            or body.lstrip().startswith("*(cluster-only")))
-            if cluster_only:
-                continue
             keep.append(f"## {field}\n{body.rstrip()}")
         return "\n\n".join(s for s in keep if s).rstrip() + "\n"
     # Fallback: legacy template `_comment_*` blocks -> markdown, until <kind>.md.
@@ -725,8 +674,6 @@ def _schema(kind: str) -> str:
         if not k.startswith("_comment"):
             continue
         field = k[len("_comment_"):] or "overview"
-        if kind == "type" and field in _SYNTHETIC_SCHEMA_FIELDS:
-            continue
         body = " ".join(v) if isinstance(v, list) else v
         out.append(f"## {field}\n{body}")
     return "\n\n".join(out).rstrip() + "\n"
@@ -745,10 +692,10 @@ def _findings_schema(kind: str) -> dict:
         return {
             "_subject": "type",
             "_see": "query types --schema for field meaning + enforced invariants",
-            "dropped_by": ["<fn>"],
-            "cloned_by": {"deep": ["<fn>"], "upref": ["<fn>"]},
-            "fields_disposed_by": ["<this type's own method(s) that dispose its "
-                                   "fields>"],
+            "_lifecycle": ("NOT submitted here — which routines drop / dispose / "
+                           "clone this type is recorded on the acting SYMBOL "
+                           "(syms.json `lifetime`), and read back with "
+                           "`query symbols --lifetime-for <TAG>`."),
             "fields": {
                 "<field_name>": {
                     "refcount": "bool   (this field stores the type's refcount)",
@@ -773,7 +720,6 @@ def _findings_schema(kind: str) -> dict:
     return {
         "_subject": "symbol",
         "_see": "query syms --schema for facet meaning + enforced invariants",
-        "macro": {"alias": "bool", "const": "bool", "typegen": "bool"},
         "ptr_args": {
             "<position:int>": {
                 "ptr": {
@@ -784,32 +730,40 @@ def _findings_schema(kind: str) -> dict:
                     "string": "bool",
                     "owned": "bool",
                     "borrowed": "null | {lifetime: <source>}",
-                    "lifetime": ("null | {is_dropped: bool, is_disposed: bool, "
-                                 "is_cloned: {deep: bool, upref: bool}|null}   "
-                                 "(ARG-ONLY: this method's role on this arg)"),
                     "nullable": "bool", "mutable": "bool | null", "note": "<str>",
                 }
             }
         },
-        "ptr_ret": "{ptr: <same block as ptr_args[pos].ptr, WITHOUT lifetime>} | null",
-        "ptr": ("<same block as ptr_args[pos].ptr, WITHOUT lifetime> | null   "
-                "(globals only)"),
+        "ptr_ret": "{ptr: <same block as ptr_args[pos].ptr>} | null",
+        "lifetime": ("null | {for: <arg name>, is_dropper: bool, is_disposer: "
+                     "bool, is_cloner: {deep: bool, upref: bool}|null}   "
+                     "(functions/callbacks: THIS symbol's lifecycle role, on the "
+                     "arg named by `for`; null = no role)"),
+        "ptr": "<same block as ptr_args[pos].ptr> | null   (globals only)",
         "locked_by": ("null | {lock: <name>, lock_op: [<fn>], unlock_op: [<fn>]}"
                       "   (globals only)"),
         "forks": [{
             "ptr_args": "<as ptr_args>", "ptr_ret": "<as ptr_ret>",
-            "callsites": ["<callsite id>"],
+            "lifetime": "<as lifetime>", "callsites": ["<callsite id>"],
         }],
         "_valid_top_keys": sorted(_SYM_FINDINGS_TOP),
     }
-_MACRO_FLAGS = frozenset({"alias", "const", "typegen"})
+
 
 def _apply_ptr_agent(entry: dict, ptr_args_f: dict | None,
-                     ptr_ret_f: dict | None) -> None:
-    """Apply agent ptr findings (`ptr_args` keyed by position, `ptr_ret`) onto an
-    entry's structural records, in place. The agent-owned ownership block nests
-    under each record's `ptr` key (isolated from the composer's position/name/
-    type/const/depth), so it is replaced WHOLESALE -- like a struct field's ptr."""
+                     ptr_ret_f: dict | None, contract: dict | None = None,
+                     has_lifetime: bool = False) -> None:
+    """Apply one agent ownership contract onto an entry's structural records, in
+    place: `ptr_args` (keyed by position), `ptr_ret`, and the entry-level
+    `lifetime`. The agent-owned ownership block nests under each record's `ptr`
+    key (isolated from the composer's position/name/type/const/depth), so it is
+    replaced WHOLESALE -- like a struct field's ptr.
+
+    `lifetime` is applied only when the findings actually carry the key
+    (`has_lifetime`): omitting it leaves any prior role standing, while an
+    explicit `null` clears it. Taking the whole `contract` dict is what lets a
+    callback FORK carry its own role — a fork deep-copies the primary, so
+    without this it would silently inherit the primary's."""
     by_pos = {str(a.get("position")): a for a in entry.get("ptr_args") or []}
     for pos, rec in (ptr_args_f or {}).items():
         arg = by_pos.get(str(pos))
@@ -818,6 +772,8 @@ def _apply_ptr_agent(entry: dict, ptr_args_f: dict | None,
     if (ptr_ret_f is not None and isinstance(ptr_ret_f, dict)
             and "ptr" in ptr_ret_f and entry.get("ptr_ret") is not None):
         entry["ptr_ret"]["ptr"] = ptr_ret_f["ptr"]
+    if has_lifetime and contract is not None:
+        entry["lifetime"] = contract.get("lifetime")
 
 
 def _shape_slot_errors(label: str, slot, name: str) -> list[str]:
@@ -885,9 +841,10 @@ def _ptr_invariant_errors(field: str, ptr: dict, field_type: str) -> list[str]:
     if isinstance(borrowed, dict) and not borrowed.get("lifetime"):
         e.append(f"field {field!r}: borrowed set but lifetime unset")
     if "lifetime" in ptr:
-        e.append(f"field {field!r}: `lifetime` (is_dropped/is_disposed/is_cloned) "
-                 "is an ARG-only block -- a struct field's lifecycle derives from "
-                 "its field-type's record, not from the field")
+        e.append(f"field {field!r}: `lifetime` (is_dropper/is_disposer/is_cloner) "
+                 "is a SYMBOL-level block in syms.json -- a struct field's "
+                 "lifecycle derives from its field-type's record, not from the "
+                 "field")
     owned = ptr.get("owned")
     # `owned` is the ownership FACT -- reject a null left where false was meant.
     if not isinstance(owned, bool):
@@ -973,23 +930,6 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
         raise SystemExit(f"--update: no manifest file homes type {tag!r}.")
     path = Path(p)
 
-    # Real C symbol universe — the hallucination guard — split by kind. A
-    # lifecycle op must name a FUNCTION, never a macro: a macro that expands to a
-    # function should be recorded as that underlying function; a macro that does
-    # not expand to one is omitted (§2.3). So a lifecycle op that is a macro kind
-    # (and not also a real function) is hard-rejected below.
-    import csv as _csv
-    funcs: set[str] = set()
-    macros: set[str] = set()
-    for csv_name, bucket in (("functions.csv", funcs), ("macros.csv", macros)):
-        p_csv = layout.t1 / csv_name
-        if p_csv.exists():
-            with p_csv.open() as fh:
-                for r in _csv.DictReader(fh):
-                    if r.get("name"):
-                        bucket.add(r["name"])
-    universe = funcs | macros
-
     def _id_match(e: dict) -> bool:
         # Identity is `defined_in or canonical_decl(declared_in)`: an
         # anonymous-typedef struct (e.g. a STACK_OF instance) has a null
@@ -1011,52 +951,6 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
                          for fld in entry.get("fields") or []}
 
         errors: list[str] = []
-
-        def check_fn(fn: str, role: str) -> None:
-            if universe and fn not in universe:
-                errors.append(f"{role} {fn!r} is not a known function "
-                              f"(hallucination?)")
-            elif fn in macros and fn not in funcs:
-                errors.append(f"{role} {fn!r} is a macro, not a function — "
-                              f"record the underlying function it expands to, "
-                              f"or omit it (§2.3)")
-
-        # Top-level type bindings: `cloned_by` = {deep, upref}, each a LIST of
-        # function names; `dropped_by` = a flat LIST.
-        cl = f.get("cloned_by") or {}
-        if isinstance(cl, dict):
-            bad = set(cl) - {"deep", "upref"}
-            if bad:
-                errors.append(f"cloned_by unknown key(s) {sorted(bad)} "
-                              "(use deep / upref)")
-            # A body that branches between duplicating and ref-bumping fills BOTH
-            # modes, so they are NOT required to be disjoint -- only that each
-            # name is real.
-            for mode in ("deep", "upref"):
-                for fn in cl.get(mode) or []:
-                    if fn:
-                        check_fn(fn, f"cloned_by.{mode}")
-        elif cl:
-            errors.append("cloned_by must be {deep: [<fn>], upref: [<fn>]}")
-        dr = f.get("dropped_by")
-        if isinstance(dr, list):
-            for name in dr:
-                if name:
-                    check_fn(name, "dropped_by")
-        elif dr:
-            errors.append("dropped_by must be a flat list of function names")
-
-        # `fields_disposed_by`: TOP-LEVEL flat LIST of this type's own methods that
-        # dispose its fields (call the fields' destructors), or []. Not per-field.
-        fdb = f.get("fields_disposed_by")
-        if fdb is not None:
-            if not (isinstance(fdb, list) and all(isinstance(x, str) for x in fdb)):
-                errors.append("fields_disposed_by must be a list of this type's "
-                              "own method names (the field disposers)")
-            else:
-                for fn in fdb:
-                    if fn:
-                        check_fn(fn, "fields_disposed_by")
 
         # Per-field checks.
         for fname, fa in (f.get("fields") or {}).items():
@@ -1080,14 +974,7 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
                 "--update REJECTED — fix and re-run:\n  - "
                 + "\n  - ".join(errors))
 
-        # Merge (partial, idempotent): only the slots/fields mentioned.
-        # `dropped_by`/`cloned_by` are TOP-LEVEL type fields now (no `lifetime`).
-        for k in _TYPE_LIFECYCLE_KEYS:
-            if k in f:
-                entry[k] = f[k]
-                entry.pop("lifetime", None)  # drop any legacy nested block
-        if "fields_disposed_by" in f:
-            entry["fields_disposed_by"] = f["fields_disposed_by"]
+        # Merge (partial, idempotent): only the fields mentioned.
         if "_comment_agent" in f:
             entry["_comment_agent"] = f["_comment_agent"]
         for fname, fa in (f.get("fields") or {}).items():
@@ -1124,8 +1011,7 @@ def _borrow_arg_ref_errors(label: str, borrowed, valid_args) -> list[str]:
 
 
 def _sym_ptr_invariant_errors(label: str, blk: dict, const: bool,
-                              is_ret: bool, allow_lifetime: bool = False,
-                              arg_names=None) -> list[str]:
+                              is_ret: bool, arg_names=None) -> list[str]:
     """Hard-reject the IMPOSSIBLE shapes in one symbol `ptr_args[*].ptr` /
     `ptr_ret.ptr` (or a global `ptr`) block. These are the SAME structural
     invariants a struct field's `ptr` obeys (see check_types_consistency):
@@ -1179,65 +1065,120 @@ def _sym_ptr_invariant_errors(label: str, blk: dict, const: bool,
                 arg_names))
     if const and blk.get("mutable") is True:
         e.append(f"{label}: const pointee but mutable == true")
-    # `lifetime` (is_dropped/is_disposed/is_cloned) is ARG-only.
+    # The lifecycle role is a property of the SYMBOL, not of one of its pointer
+    # records — it lives on the entry's top-level `lifetime`, which names its
+    # subject arg in `for`.
     if "lifetime" in blk:
-        if allow_lifetime:
-            e.extend(_lifetime_errors(label, blk))
-        else:
-            e.append(f"{label}: `lifetime` is a ptr_args-only block (not on "
-                     "ptr_ret or a global ptr)")
+        e.append(f"{label}: `lifetime` (is_dropper/is_disposer/is_cloner) is a "
+                 "SYMBOL-level block, not a ptr key — submit it at the top level "
+                 "of the findings, naming this arg in `lifetime.for`")
     return e
 
 
-def _lifetime_errors(label: str, blk: dict) -> list[str]:
-    """Validate the ARG-ONLY `lifetime` block on a `ptr_args[*].ptr`: the
-    lifecycle-primitive role THIS method plays on THIS arg. `is_dropped` (frees
-    the arg's storage) and `is_disposed` (frees the arg's fields) are bools;
-    `is_cloned` is null | {deep, upref} -- `deep` copies the arg into a fresh
-    allocation, `upref` bumps its refcount. Both clone modes may be set at once:
-    a body that branches between them, or an untyped `void *` whose concrete
-    element decides at runtime.
+def _lifetime_errors(label: str, lf, arg_ptr_by_name: dict | None) -> list[str]:
+    """Validate a SYMBOL-level `lifetime` block: which lifecycle-primitive role
+    this function/callback plays, and on which arg.
 
-    Interaction rules with the arg's ownership:
-      - `is_dropped`  => the arg is `owned` (you free the storage of what you own).
-      - `is_cloned`   => the arg is `borrowed` (it reads the source to copy it).
-      - `is_disposed` => EITHER (a full dtor owns it; a `*_cleanup` borrows it).
+    `null` is both "no lifecycle role" and the composer's unprocessed state, so
+    it is always accepted. A non-null block is
+    ``{for, is_dropper, is_disposer, is_cloner}``:
+
+      - **`for`** -- the arg the role acts on, BY NAME. Same vocabulary as a
+        borrowed pointer's `arg:<name>` source, so every arg-dependent fact in
+        the schema references args one way; the positional form is rejected.
+      - **`is_dropper`** (bool) -- frees the arg's own STORAGE (a full dtor).
+      - **`is_disposer`** (bool) -- frees the storage of the arg's FIELDS but
+        KEEPS the arg's own storage (a teardown / `*_cleanup` / reset).
+      - **`is_cloner`** -- null | {deep, upref}: `deep` copies the arg into a
+        fresh allocation, `upref` bumps its refcount. Both modes may be set at
+        once: a body that branches between them, or an untyped `void *` whose
+        concrete element decides at runtime.
+
+    `is_dropper` and `is_disposer` are MUTUALLY EXCLUSIVE -- the arg's storage is
+    either released or retained, never both, so a full destructor is `is_dropper`
+    alone (it disposes the fields on the way, but the observable contract is that
+    the allocation is gone) and a cleanup that resets the fields in place is
+    `is_disposer` alone. A block that asserts NO role is rejected: submit `null`.
+
+    Interaction rules with the named arg's ownership (`arg_ptr_by_name` maps arg
+    name -> its post-merge `ptr` block; pass `None` to skip when the caller lacks
+    arg context):
+      - `is_dropper`  => that arg is `owned` (you free the storage of what you own).
+      - `is_cloner`   => that arg is `borrowed` (it reads the source to copy it).
+      - `is_disposer` => EITHER (a full dtor owns it; a `*_cleanup` borrows it).
+    An arg whose `ptr` is still `null` (unanalyzed) is exempt from these — the
+    ownership fact does not exist yet to contradict.
     """
     e: list[str] = []
-    lf = blk.get("lifetime")
     if lf is None:
         return e
     if not isinstance(lf, dict):
-        e.append(f"{label}: lifetime must be null or "
-                 "{is_dropped, is_disposed, is_cloned}")
+        e.append(f"{label}: must be null or "
+                 "{for, is_dropper, is_disposer, is_cloner}")
         return e
     bad = set(lf) - _LIFETIME_KEYS
     if bad:
-        e.append(f"{label}: lifetime unknown key(s) {sorted(bad)}")
-    for k in ("is_dropped", "is_disposed"):
+        e.append(f"{label}: unknown key(s) {sorted(bad)}")
+    for k in ("is_dropper", "is_disposer"):
         v = lf.get(k)
         if v is not None and not isinstance(v, bool):
-            e.append(f"{label}: lifetime.{k} must be a boolean")
-    cloned = lf.get("is_cloned")
+            e.append(f"{label}.{k}: must be a boolean")
+    if lf.get("is_dropper") is True and lf.get("is_disposer") is True:
+        e.append(f"{label}: is_dropper and is_disposer are mutually exclusive — "
+                 "a routine either frees the arg's storage (is_dropper, which "
+                 "subsumes tearing its fields down) or keeps it and resets the "
+                 "fields (is_disposer), never both")
+    cloned = lf.get("is_cloner")
     if cloned is not None:
         if not isinstance(cloned, dict) or (set(cloned) - {"deep", "upref"}):
-            e.append(f"{label}: lifetime.is_cloned must be null or {{deep, upref}}")
+            e.append(f"{label}.is_cloner: must be null or {{deep, upref}}")
             cloned = None
         else:
-            # A submitted `is_cloned` replaces the prior wholesale, so both modes
+            # A submitted `is_cloner` replaces the prior wholesale, so both modes
             # must be stated -- reject a null left where false was meant.
             for mode in ("deep", "upref"):
                 if not isinstance(cloned.get(mode), bool):
-                    e.append(f"{label}: lifetime.is_cloned.{mode} must be an "
-                             "explicit boolean")
-    owned = blk.get("owned")
-    borrowed = blk.get("borrowed")
-    if lf.get("is_dropped") is True and owned is not True:
-        e.append(f"{label}: lifetime.is_dropped requires the arg to be owned "
+                    e.append(f"{label}.is_cloner.{mode}: must be an explicit "
+                             "boolean")
+    any_clone = isinstance(cloned, dict) and bool(
+        cloned.get("deep") or cloned.get("upref"))
+    # A block that claims nothing is not a finding — `null` is how "this symbol
+    # is not a lifecycle primitive" is recorded, and it is what the composer
+    # already emits.
+    if not (lf.get("is_dropper") is True or lf.get("is_disposer") is True
+            or any_clone):
+        e.append(f"{label}: asserts no role — set at least one of is_dropper / "
+                 "is_disposer / is_cloner.{deep,upref}, or submit `lifetime: "
+                 "null` for a symbol that is not a lifecycle primitive")
+
+    subject = lf.get("for")
+    if not isinstance(subject, str) or not subject.strip():
+        e.append(f"{label}.for: required — name the arg this role acts on "
+                 "(a bare arg name, not `arg:<name>` and not a position)")
+        return e
+    if arg_ptr_by_name is None:
+        return e
+    if subject.startswith("arg:") or subject.isdigit():
+        e.append(f"{label}.for: {subject!r} — use the BARE arg name (the "
+                 "`arg:` prefix belongs to a borrowed lifetime, and the "
+                 f"positional form is rejected); expected one of "
+                 f"{sorted(arg_ptr_by_name)}")
+        return e
+    if subject not in arg_ptr_by_name:
+        e.append(f"{label}.for: {subject!r} is not a pointer arg of this symbol "
+                 f"(expected one of {sorted(arg_ptr_by_name)})")
+        return e
+
+    # Cross-check against the subject arg's ownership, as it will stand AFTER
+    # this update (a findings doc may set the role and the ownership together).
+    blk = arg_ptr_by_name[subject]
+    if not isinstance(blk, dict):
+        return e   # arg still unanalyzed — no ownership fact to contradict
+    if lf.get("is_dropper") is True and blk.get("owned") is not True:
+        e.append(f"{label}: is_dropper requires arg {subject!r} to be owned "
                  "(you free the storage of what you own)")
-    if (isinstance(cloned, dict) and (cloned.get("deep") or cloned.get("upref"))
-            and not isinstance(borrowed, dict)):
-        e.append(f"{label}: lifetime.is_cloned requires the arg to be borrowed "
+    if any_clone and not isinstance(blk.get("borrowed"), dict):
+        e.append(f"{label}: is_cloner requires arg {subject!r} to be borrowed "
                  "(it reads the source to copy it)")
     return e
 
@@ -1325,31 +1266,6 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
         errors: list[str] = []
         ekind = entry.get("kind") or ""
 
-        # `macro`: the expansion facets, agent-set on macros only. `kind` itself
-        # is composer-fixed and terminal for every symbol (see docs/schemas/
-        # syms.md `## kind`), so it is not a submittable key at all.
-        if "macro" in f:
-            blk = f["macro"]
-            if ekind != "macro":
-                errors.append(
-                    f"macro: {name!r} is {ekind!r}, not a macro — the macro "
-                    f"block applies to macros only")
-            elif not isinstance(blk, dict):
-                errors.append("macro: must be an object")
-            else:
-                bad = set(blk) - _MACRO_FLAGS
-                if bad:
-                    errors.append(f"macro: unknown key(s) {sorted(bad)}")
-                missing = _MACRO_FLAGS - set(blk)
-                if missing:
-                    errors.append(
-                        f"macro: missing flag(s) {sorted(missing)} — all of "
-                        f"{sorted(_MACRO_FLAGS)} are required")
-                for k in sorted(_MACRO_FLAGS & set(blk)):
-                    if not isinstance(blk[k], bool):
-                        errors.append(
-                            f"macro.{k}: must be a boolean, got {blk[k]!r}")
-
         # `ptr` / `locked_by`: GLOBALS only. A global has no call boundary, so it
         # carries no ptr_args/ptr_ret; instead a pointer global gets a single
         # `ptr` block (same shape as a ptr_args record) and any lock-guarded
@@ -1365,7 +1281,7 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
             elif not isinstance(gptr, dict):
                 errors.append("ptr: must be an object")
             else:
-                bad = set(gptr) - _PTR_RET_AGENT_KEYS
+                bad = set(gptr) - _PTR_AGENT_KEYS
                 if bad:
                     errors.append(f"ptr: unknown key(s) {sorted(bad)}")
                 errors.extend(_sym_ptr_invariant_errors(
@@ -1387,10 +1303,32 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
         # land on one of these.
         valid_args = {a.get("name") for a in arg_by_pos.values() if a.get("name")}
         pr = f.get("ptr_ret")
+        has_args = bool(entry.get("ptr_args"))
+
+        def _post_merge_arg_ptrs(args_f) -> dict:
+            """Arg name -> the `ptr` block as it will stand AFTER this update.
+
+            `lifetime.for` names an arg whose ownership the role must agree with,
+            and a findings doc routinely sets both at once — so the cross-check
+            reads the SUBMITTED block where there is one and the on-disk block
+            otherwise, rather than the pre-update state alone."""
+            out = {}
+            for a in arg_by_pos.values():
+                if not a.get("name"):
+                    continue
+                out[a["name"]] = a.get("ptr")
+            for pos, rec in (args_f or {}).items():
+                a = arg_by_pos.get(str(pos))
+                if a is not None and a.get("name") and isinstance(rec, dict) \
+                        and "ptr" in rec:
+                    out[a["name"]] = rec["ptr"]
+            return out
 
         # Validates one ownership contract — the primary's (`where=""`) or a
         # fork's. Both shapes are identical, so forks reuse it verbatim.
-        def _check_ptr(args_f, ret_f, where):
+        # `has_lt` distinguishes an omitted `lifetime` (leave as-is) from an
+        # explicit `null` (clear the role), which matter differently on merge.
+        def _check_ptr(args_f, ret_f, where, lifetime_f=None, has_lt=False):
             for pos, rec in (args_f or {}).items():
                 if not isinstance(rec, dict):
                     errors.append(f"{where}ptr_args[{pos}]: must be an object")
@@ -1411,14 +1349,14 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                 if not isinstance(blk, dict):
                     errors.append(f"{where}ptr_args[{pos}].ptr: must be an object")
                     continue
-                bad2 = set(blk) - _PTR_ARG_AGENT_KEYS
+                bad2 = set(blk) - _PTR_AGENT_KEYS
                 if bad2:
                     errors.append(
                         f"{where}ptr_args[{pos}].ptr: unknown key(s) {sorted(bad2)}")
                 errors.extend(_sym_ptr_invariant_errors(
                     f"{where}ptr_args[{pos}].ptr", blk,
                     bool(arg_by_pos[str(pos)].get("const")), is_ret=False,
-                    allow_lifetime=True, arg_names=valid_args))
+                    arg_names=valid_args))
             if ret_f is not None:
                 if not isinstance(ret_f, dict):
                     errors.append(f"{where}ptr_ret: must be an object")
@@ -1431,7 +1369,7 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                                       "(the ownership block nests under `ptr`)")
                     blk = ret_f.get("ptr")
                     if isinstance(blk, dict):
-                        bad2 = set(blk) - _PTR_RET_AGENT_KEYS
+                        bad2 = set(blk) - _PTR_AGENT_KEYS
                         if bad2:
                             errors.append(
                                 f"{where}ptr_ret.ptr: unknown key(s) {sorted(bad2)}")
@@ -1442,7 +1380,26 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                     elif blk is not None:
                         errors.append(f"{where}ptr_ret.ptr: must be an object")
 
-        _check_ptr(f.get("ptr_args"), pr, "")
+            # `lifetime`: SYMBOL-level, and only meaningful where there is a call
+            # boundary to act on — a global's ownership has no acting method, and
+            # a macro has no args at all.
+            if has_lt and lifetime_f is not None:
+                if is_global or ekind == "macro":
+                    errors.append(
+                        f"{where}lifetime: {name!r} is {ekind!r} — a lifecycle "
+                        f"role is a property of a function/callback acting on an "
+                        f"arg; a type's Drop/Clone is reverse-derived from those")
+                elif not has_args:
+                    errors.append(
+                        f"{where}lifetime: {name!r} has no pointer args, so there "
+                        f"is nothing for `for` to name")
+                else:
+                    errors.extend(_lifetime_errors(
+                        f"{where}lifetime", lifetime_f,
+                        _post_merge_arg_ptrs(args_f)))
+
+        _check_ptr(f.get("ptr_args"), pr, "",
+                   f.get("lifetime"), "lifetime" in f)
 
         # Forks (callbacks only): split the typedef by ownership cluster.
         forks = f.get("forks")
@@ -1488,7 +1445,8 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                                 f"by another fork")
                         claimed.add(s)
                     _check_ptr(fk.get("ptr_args"), fk.get("ptr_ret"),
-                               f"forks[{i}].")
+                               f"forks[{i}].",
+                               fk.get("lifetime"), "lifetime" in fk)
 
         if errors:
             raise SystemExit(
@@ -1496,9 +1454,7 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                 + "\n  - ".join(errors))
 
         # Merge primary (partial, idempotent): only the slots/args mentioned.
-        if "macro" in f:
-            entry["macro"] = {k: f["macro"][k] for k in sorted(_MACRO_FLAGS)}
-        _apply_ptr_agent(entry, f.get("ptr_args"), pr)
+        _apply_ptr_agent(entry, f.get("ptr_args"), pr, f, "lifetime" in f)
         # Globals: the singular `ptr` IS the ownership block (no composer keys
         # mixed in -- name/type/const live at the entry level), so it is replaced
         # wholesale, like an arg/ret record's nested `ptr`. `locked_by` is one
@@ -1541,7 +1497,8 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                 fe["variant"] = i
                 fe["used_by"] = {"call": sorted(fk.get("callsites") or []),
                                  "ref": []}
-                _apply_ptr_agent(fe, fk.get("ptr_args"), fk.get("ptr_ret"))
+                _apply_ptr_agent(fe, fk.get("ptr_args"), fk.get("ptr_ret"),
+                                 fk, "lifetime" in fk)
                 entries.append(fe)
             doc["symbols"] = entries
             holder["n"] = len(forks)
@@ -1552,157 +1509,6 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
     n = holder["n"]
     tail = f" (+{n} fork{'s' if n != 1 else ''})" if n else ""
     print(f"updated {name} in {path}{tail}")
-
-
-def _create_type(layout, target, src: str) -> None:
-    """Ingest a WHOLE synthetic cluster entry from the buffer pass and write it
-    into the manifest — the schema boundary, so the agent never opens types.json.
-
-    Unlike `--update` (partial-merge of an existing composer-emitted entry), the
-    `string` / `array` clusters have NO composer skeleton — they are born here,
-    so `--create` takes the complete entry and HOMES it: the manifest dir of its
-    `defined_in` (the primary ctor's file). The entry is appended to that dir's
-    `types.json` (created if absent), or replaced if a cluster of the same
-    (type, defined_in) is already there (idempotent re-run). HARD-REJECTS on a
-    non-synthetic kind, a missing/ill-typed identity, a hallucinated function, or
-    a dtor.storage==fields collision."""
-    from compose.path_partition import manifest_dir_for
-
-    raw = sys.stdin.read() if src == "-" else Path(src).read_text()
-    try:
-        f = json.loads(raw)
-    except ValueError as ex:
-        raise SystemExit(f"--create: entry is not valid JSON: {ex}")
-    if not isinstance(f, dict):
-        raise SystemExit("--create: entry must be a JSON object.")
-
-    bad_top = set(f) - _CREATE_TOP
-    if bad_top:
-        raise SystemExit(f"--create: unknown key(s): {sorted(bad_top)}")
-
-    errors: list[str] = []
-    tag = f.get("name") or f.get("type")  # `type` tolerated for legacy findings
-    kind = f.get("kind")
-    if not tag:
-        errors.append("`name` (cluster identifier) is required")
-    if kind not in _SYNTH_CREATE_KINDS:
-        errors.append(f"`kind` must be one of {sorted(_SYNTH_CREATE_KINDS)} "
-                      f"(got {kind!r}) — --create is for synthetic clusters only")
-    if not isinstance(f.get("declared_in"), list):
-        errors.append("`declared_in` must be a JSON list (even for one header)")
-    defined_in = f.get("defined_in")
-    mdir = manifest_dir_for(defined_in) or manifest_dir_for(
-        next(iter(f.get("declared_in") or []), None))
-    if mdir is None:
-        errors.append("cannot place: no `defined_in` / `declared_in` to home it")
-
-    # Hallucination guard — functions ∪ macros (a cluster op may be a macro).
-    import csv as _csv
-    universe: set[str] = set()
-    for csv_name in ("functions.csv", "macros.csv"):
-        p_csv = layout.t1 / csv_name
-        if p_csv.exists():
-            with p_csv.open() as fh:
-                for r in _csv.DictReader(fh):
-                    if r.get("name"):
-                        universe.add(r["name"])
-    named = list(f.get("allocs") or [])
-    _clone = f.get("clone") or {}
-    if isinstance(_clone, dict):
-        if _clone.get("shared"):
-            named.append(_clone["shared"])
-        named += list(_clone.get("exclusive") or [])
-    d = f.get("drop") or {}
-    if isinstance(d, dict):
-        # Current schema {shared, exclusive, fields}; old keys (e.g. the
-        # pre-split `storage`) are rejected. No function may fill two roles.
-        bad_drop = set(d) - {"shared", "exclusive", "fields"}
-        if bad_drop:
-            errors.append(f"drop has old/unknown key(s) {sorted(bad_drop)} "
-                          "(use shared / exclusive / fields)")
-        present = [v for r in ("shared", "exclusive", "fields")
-                   if (v := d.get(r))]
-        if len(present) != len(set(present)):
-            errors.append("drop roles name the same function (must differ)")
-        named += present
-
-    # ARRAY-only element surface. `elems` rows are {type, note} — the concrete
-    # element types the buffer holds at call sites, for the wrapper's typed
-    # CVec<T> aliases (element OWNERSHIP/drop is a PORT concern: ptr.owned_elem).
-    # A string is a single buffer, so it carries no `elems`. Length-aware
-    # teardown is NOT stored: the wrapper reads it off the dtor's signature.
-    elems = f.get("elems")
-    if elems is not None:
-        if kind != "array":
-            errors.append("`elems` is array-only")
-        elif not isinstance(elems, list):
-            errors.append("`elems` must be a list")
-        else:
-            for i, row in enumerate(elems):
-                if not isinstance(row, dict) or not row.get("type"):
-                    errors.append(f"elems[{i}]: each row needs a `type`")
-                elif set(row) - {"type", "note"}:
-                    errors.append(
-                        f"elems[{i}]: unknown key(s) "
-                        f"{sorted(set(row) - {'type', 'note'})} (rows are {{type, note}})")
-
-    for fn in named:
-        if universe and fn not in universe:
-            errors.append(f"{fn!r} is not a known function/macro (hallucination?)")
-
-    if errors:
-        raise SystemExit(
-            "--create REJECTED — fix and re-run:\n  - " + "\n  - ".join(errors))
-
-    entry = {
-        "name": tag, "typedef": [], "kind": kind,
-        "declared_in": f["declared_in"], "defined_in": defined_in,
-        "lifetime": {
-            # `allocs` = the byte-level allocators of this buffer family (metadata
-            # pairing with `dtor` for the CVec strategy); the allocator functions
-            # are still wrapped as free syms by the symbol wrapper.
-            "allocs": f.get("allocs") or [],
-            "clone": f.get("clone") or {"shared": None, "exclusive": []},
-            "drop": f.get("drop") or {"shared": [], "exclusive": [], "fields": []},
-            "locking": f.get("locking"),
-            "conditional_drop": f.get("conditional_drop"),
-        },
-        "casted": {"to": [], "from": []}, "fields": [],
-    }
-    if kind == "array":   # element surface is array-only
-        entry["elems"] = f.get("elems") or []
-    if "_comment_agent" in f:
-        entry["_comment_agent"] = f["_comment_agent"]
-
-    import fcntl
-    import tempfile
-    path = layout.analysis / mdir / manifest_name("type")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    dirfd = os.open(str(path.parent), os.O_RDONLY)
-    try:
-        fcntl.flock(dirfd, fcntl.LOCK_EX)
-        doc = json.loads(path.read_text()) if path.exists() else {
-            "_comment": "agent-synthesized buffer-pass clusters", "types": []}
-        entries = doc.setdefault("types", [])
-        # idempotent: replace a prior cluster of the same identity, else append.
-        entries[:] = [e for e in entries
-                      if not ((e.get("name") or e.get("type")) == tag
-                              and e.get("defined_in") == defined_in)]
-        entries.append(entry)
-        blob = json.dumps(doc, indent=1) + "\n"
-        tmp = tempfile.NamedTemporaryFile("w", dir=str(path.parent), delete=False)
-        try:
-            tmp.write(blob)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-        finally:
-            tmp.close()
-        os.replace(tmp.name, path)
-    finally:
-        fcntl.flock(dirfd, fcntl.LOCK_UN)
-        os.close(dirfd)
-
-    print(f"created {kind} cluster {tag} in {path}")
 
 
 def _records(target, kind, names, files) -> None:
@@ -1837,9 +1643,11 @@ def _resolve(target, *, kind: str, name: str, files: list[str] | None):
     by_key = {node.key: node}
     if kind == "type":
         from compose import scope
-        # Derived method surface (lifecycle ∪ field accessors), or the synthetic
-        # cluster's explicit ops — not a stored concrete-type `ops` list.
-        op_names = scope.type_method_syms(uniq.get(node.defined_in) or {})
+        # Method surface = the type's lifecycle, reverse-derived from the
+        # symbols that carry the role — never a stored `ops` list.
+        op_names = scope.type_method_syms(
+            uniq.get(node.defined_in) or {},
+            scope.build_lifecycle_index(layout.analysis))
         if op_names:
             sidx = _syms_index(layout.analysis)
             keys = []
@@ -1915,10 +1723,9 @@ def _dag_loc(by_key, by_name, names, files, layer, as_json, keep=None) -> None:
         return (n.id, n.defined_in) in op_keys or n.id in op_names
 
     def nops(n) -> int:
-        # distinct ops ∪ ctors (ctors are a subset of ops for most types, but
-        # the synthetic allocator-array clusters carry an allocator ctor not in
-        # ops — so union both to avoid undercounting).
-        return len({nm for nm, _ in n.ops} | set(n.ctors))
+        # A type's method surface is exactly its `ops` (its reverse-derived
+        # lifecycle); there is no second op list to union in.
+        return len({nm for nm, _ in n.ops})
 
     def val(n) -> int:
         # type: field count (node.loc) + 1 per op; function: its body LoC.
@@ -1963,9 +1770,7 @@ def _scope_predicate(layout, target, wrap_only: bool, port_only: bool):
     """A node-keeping predicate for `--wrap-only` / `--port-only`, or None when
     neither is set. The dag is scope-agnostic; scope is read from scope.json on
     demand. `origin_key(id, defined_in)` is exactly the node's serialized origin
-    (`Node.origin()`), so dag nodes and scope entries collide on the same key.
-    Synthetic string/array clusters are never in scope.json — they are *always*
-    wrap-scope, never port (mirrors `query types --wrap-only`)."""
+    (`Node.origin()`), so dag nodes and scope entries collide on the same key."""
     if not (wrap_only or port_only):
         return None
     from compose import scope as _sc
@@ -1973,8 +1778,6 @@ def _scope_predicate(layout, target, wrap_only: bool, port_only: bool):
     keys = _sc.scope_membership(sj, "port" if port_only else "wrap") if sj.exists() else set()
 
     def keep(n) -> bool:
-        if (getattr(n, "subkind", "") or "") in _sc.SYNTHETIC_KINDS:
-            return bool(wrap_only)
         return _sc.origin_key(n.id, n.defined_in, None) in keys
     return keep
 

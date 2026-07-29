@@ -1,649 +1,604 @@
 {
-  "_comment": [
-    "Example records for the per-stem syms.json manifest. Field MEANING lives in",
-    "docs/schemas/syms.md (served by `crustify query syms --schema`); the",
-    "submission shape + rules come from `crustify query syms --update-help`."
-  ],
-  "symbols": [
+ "_comment": [
+  "Example records for the per-stem syms.json manifest. Field MEANING lives in",
+  "docs/schemas/syms.md (served by `crustify query syms --schema`); the",
+  "submission shape + rules come from `crustify query syms --update-help`."
+ ],
+ "symbols": [
+  {
+   "name": "ossl_statem_connect",
+   "kind": "function_exported",
+   "declared_in": [
+    "ssl/statem/statem.h"
+   ],
+   "defined_in": "ssl/statem/statem.c",
+   "type": "int ossl_statem_connect(SSL_CONNECTION *s)",
+   "is_variadic": false,
+   "ptr_args": [
     {
-      "name": "ossl_statem_connect",
-      "kind": "function_exported",
-      "declared_in": [
-        "ssl/statem/statem.h"
-      ],
-      "defined_in": "ssl/statem/statem.c",
-      "type": "int ossl_statem_connect(SSL_CONNECTION *s)",
-      "ptr_args": [
-        {
-          "position": 0,
-          "name": "s",
-          "type": "SSL_CONNECTION",
-          "const": false,
-          "depth": 1,
-          "ptr": {
-            "scalar": {"by_val": true},
-            "array": null,
-            "string": false,
-            "owned": null,
-            "borrowed": {
-              "lifetime": "arg:s"
-            },
-            "nullable": false,
-            "mutable": null,
-            "note": null,
-            "lifetime": {
-              "is_dropped": null,
-              "is_disposed": null,
-              "is_cloned": null
-            }
-          }
-        }
-      ],
-      "ptr_ret": null,
-      "used_by": {
-        "call": [
-          "state_machine"
-        ],
-        "ref": []
+     "position": 0,
+     "name": "s",
+     "type": "SSL_CONNECTION",
+     "const": false,
+     "depth": 1,
+     "ptr": {
+      "scalar": {
+       "by_val": true
       },
-      "depends_on": {
-        "syms": [
-          {
-            "name": "SSL_new",
-            "defined_in": "ssl/ssl_lib.c",
-            "declared_in": [
-              "include/openssl/ssl.h",
-              "ssl/ssl_local.h"
-            ]
-          },
-          {
-            "name": "EVP_DigestInit_ex",
-            "defined_in": "crypto/evp/digest.c",
-            "declared_in": [
-              "include/openssl/evp.h"
-            ]
-          },
-          {
-            "name": "memcpy",
-            "defined_in": null,
-            "declared_in": [
-              "/usr/include/string.h"
-            ]
-          }
-        ],
-        "types": [
-          {
-            "type": "ssl_connection_st",
-            "fields": [
-              "statem",
-              "version"
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "name": "SSL_new",
-      "kind": "function_exported",
-      "macro": null,
-      "declared_in": [
-        "include/openssl/ssl.h",
-        "ssl/ssl_local.h"
-      ],
-      "defined_in": "ssl/ssl_lib.c",
-      "type": "SSL *SSL_new(SSL_CTX *ctx)",
-      "ptr_args": [
-        {
-          "position": 0,
-          "name": "ctx",
-          "type": "SSL_CTX",
-          "const": false,
-          "depth": 1,
-          "ptr": {
-            "scalar": {"by_val": true},
-            "array": null,
-            "string": false,
-            "owned": {
-              "exclusive": false,
-              "shared": true
-            },
-            "borrowed": null,
-            "nullable": false,
-            "mutable": null,
-            "note": "SSL_new bumps the SSL_CTX refcount and retains a shared ref -> CBox via impl_cloned_upref!",
-            "lifetime": {
-              "is_dropped": null,
-              "is_disposed": null,
-              "is_cloned": null
-            }
-          }
-        }
-      ],
-      "ptr_ret": {
-        "type": "SSL",
-        "const": false,
-        "depth": 1,
-        "ptr": {
-          "scalar": {"by_val": true},
-          "array": null,
-          "string": false,
-          "owned": {
-            "exclusive": true,
-            "shared": false
-          },
-          "borrowed": null,
-          "nullable": true,
-          "mutable": null,
-          "note": "fresh SSL, caller owns -> CBox"
-        }
-      }
-    },
-    {
-      "name": "PACKET_remaining",
-      "kind": "function_inline_header",
-      "declared_in": [
-        "include/internal/packet.h"
-      ],
-      "defined_in": "include/internal/packet.h",
-      "type": "static inline size_t PACKET_remaining(const PACKET *pkt)",
-      "ptr_args": [
-        {
-          "position": 0,
-          "name": "pkt",
-          "type": "PACKET",
-          "const": true,
-          "depth": 1,
-          "ptr": {
-            "scalar": {"by_val": true},
-            "array": null,
-            "string": false,
-            "owned": null,
-            "borrowed": {
-              "lifetime": "arg:pkt"
-            },
-            "nullable": false,
-            "mutable": false,
-            "note": null,
-            "lifetime": {
-              "is_dropped": null,
-              "is_disposed": null,
-              "is_cloned": null
-            }
-          }
-        }
-      ],
-      "ptr_ret": null
-    },
-    {
-      "name": "TLS_MAX_VERSION_INTERNAL",
-      "kind": "macro",
-      "macro": {
-        "alias": false,
-        "const": true,
-        "typegen": false
+      "array": null,
+      "string": false,
+      "owned": false,
+      "borrowed": {
+       "lifetime": "arg:s"
       },
-      "declared_in": [
-        "ssl/statem/statem.h"
-      ],
-      "defined_in": "ssl/statem/statem.h",
-      "type": null,
-      "used_by": {
-        "call": [
-          "ssl_choose_client_version"
-        ],
-        "ref": []
-      },
-      "depends_on": {
-        "syms": [],
-        "types": []
-      }
-    },
-    {
-      "name": "SSL_OP_NO_TLSv1_3",
-      "kind": "macro",
-      "macro": {
-        "alias": false,
-        "const": true,
-        "typegen": false
-      },
-      "declared_in": [
-        "include/openssl/ssl.h"
-      ],
-      "defined_in": "include/openssl/ssl.h",
-      "type": null
-    },
-    {
-      "_comment": [
-        "A type generator: one instantiation emits the `stack_st_X509` struct and",
-        "its whole `sk_X509_*` op family. Bindgen binds the EXPANSION, so the",
-        "macro itself needs no shim."
-      ],
-      "name": "DEFINE_STACK_OF",
-      "kind": "macro",
-      "macro": {
-        "alias": false,
-        "const": false,
-        "typegen": true
-      },
-      "declared_in": [
-        "include/openssl/safestack.h"
-      ],
-      "defined_in": "include/openssl/safestack.h",
-      "type": null
-    },
-    {
-      "_comment": [
-        "None of the three: the expansion yields no constant, references no symbol,",
-        "and declares no type. It has no bindgen binding, so this is the one macro",
-        "shape that gets a C shim."
-      ],
-      "name": "PACKET_remaining_bytes",
-      "kind": "macro",
-      "macro": {
-        "alias": false,
-        "const": false,
-        "typegen": false
-      },
-      "declared_in": [
-        "ssl/packet_local.h"
-      ],
-      "defined_in": "ssl/packet_local.h",
-      "type": null
-    },
-    {
-      "name": "tls11downgrade",
-      "kind": "global_extern",
-      "declared_in": [
-        "ssl/ssl_local.h"
-      ],
-      "defined_in": "ssl/s3_lib.c",
-      "type": "const unsigned char tls11downgrade[8]",
-      "ptr": {
-        "scalar": {"by_val": true},
-        "array": {
-          "by_val": true
-        },
-        "string": false,
-        "owned": null,
-        "borrowed": {
-          "lifetime": "static"
-        },
-        "nullable": false,
-        "mutable": false,
-        "note": "'static const byte pattern; read-only, unguarded"
-      },
-      "locked_by": null
-    },
-    {
-      "name": "SSL_verify_cb",
-      "kind": "callback",
-      "declared_in": [
-        "include/openssl/ssl.h"
-      ],
-      "defined_in": null,
-      "type": null,
-      "ptr_args": [
-        {
-          "position": 1,
-          "name": "x509_ctx",
-          "type": "X509_STORE_CTX",
-          "const": false,
-          "depth": 1,
-          "ptr": {
-            "scalar": {"by_val": true},
-            "array": null,
-            "string": false,
-            "owned": null,
-            "borrowed": {
-              "lifetime": "arg:x509_ctx"
-            },
-            "nullable": false,
-            "mutable": null,
-            "note": null,
-            "lifetime": {
-              "is_dropped": null,
-              "is_disposed": null,
-              "is_cloned": null
-            }
-          }
-        }
-      ],
-      "ptr_ret": null,
-      "used_by": {
-        "call": [
-          "ssl_verify_cert_chain"
-        ],
-        "ref": [
-          "SSL_CTX_set_verify",
-          "SSL_set_verify"
-        ]
-      },
-      "depends_on": {
-        "syms": [],
-        "types": [
-          {
-            "type": "x509_store_ctx_st",
-            "defined_in": "crypto/x509/x509_local.h",
-            "declared_in": [
-              "ossl_typ.h"
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "name": "CRYPTO_malloc",
-      "kind": "function_exported",
-      "declared_in": [
-        "include/openssl/crypto.h"
-      ],
-      "defined_in": "crypto/mem.c",
-      "type": "void *CRYPTO_malloc(size_t num, const char *file, int line)",
-      "ptr_args": [
-        {
-          "position": 1,
-          "name": "file",
-          "type": "char",
-          "const": true,
-          "depth": 1,
-          "ptr": {
-            "scalar": null,
-            "array": null,
-            "string": true,
-            "owned": null,
-            "borrowed": {
-              "lifetime": "arg:file"
-            },
-            "nullable": false,
-            "mutable": null,
-            "note": null,
-            "lifetime": {
-              "is_dropped": null,
-              "is_disposed": null,
-              "is_cloned": null
-            }
-          }
-        }
-      ],
-      "ptr_ret": {
-        "type": "void",
-        "const": false,
-        "depth": 1,
-        "ptr": {
-          "scalar": {"by_val": true},
-          "array": null,
-          "string": false,
-          "owned": {
-            "exclusive": true,
-            "shared": false
-          },
-          "borrowed": null,
-          "nullable": true,
-          "mutable": null,
-          "note": "raw region, caller owns -> CBox / CVec"
-        }
-      }
-    },
-    {
-      "name": "CRYPTO_free",
-      "kind": "function_exported",
-      "declared_in": [
-        "include/openssl/crypto.h"
-      ],
-      "defined_in": "crypto/mem.c",
-      "type": "void CRYPTO_free(void *ptr, const char *file, int line)",
-      "ptr_args": [
-        {
-          "position": 0,
-          "name": "ptr",
-          "type": "void",
-          "const": false,
-          "depth": 1,
-          "ptr": {
-            "scalar": {"by_val": true},
-            "array": null,
-            "string": false,
-            "owned": {
-              "exclusive": true,
-              "shared": false
-            },
-            "borrowed": null,
-            "nullable": true,
-            "mutable": null,
-            "note": "consumed and freed (free(NULL) is a no-op)",
-            "lifetime": {
-              "is_dropped": {
-                "exclusive": true,
-                "shared": false
-              },
-              "is_disposed": null,
-              "is_cloned": null
-            }
-          }
-        },
-        {
-          "position": 1,
-          "name": "file",
-          "type": "char",
-          "const": true,
-          "depth": 1,
-          "ptr": {
-            "scalar": null,
-            "array": null,
-            "string": true,
-            "owned": null,
-            "borrowed": {
-              "lifetime": "arg:file"
-            },
-            "nullable": false,
-            "mutable": null,
-            "note": null,
-            "lifetime": {
-              "is_dropped": null,
-              "is_disposed": null,
-              "is_cloned": null
-            }
-          }
-        }
-      ],
-      "ptr_ret": null
-    },
-    {
-      "name": "CRYPTO_strdup",
-      "kind": "function_exported",
-      "declared_in": [
-        "include/openssl/crypto.h"
-      ],
-      "defined_in": "crypto/mem.c",
-      "type": "char *CRYPTO_strdup(const char *str, const char *file, int line)",
-      "ptr_args": [
-        {
-          "position": 0,
-          "name": "str",
-          "type": "char",
-          "const": true,
-          "depth": 1,
-          "ptr": {
-            "scalar": null,
-            "array": null,
-            "string": true,
-            "owned": null,
-            "borrowed": {
-              "lifetime": "arg:str"
-            },
-            "nullable": false,
-            "mutable": null,
-            "note": null,
-            "lifetime": {
-              "is_dropped": null,
-              "is_disposed": null,
-              "is_cloned": {
-                "exclusive": true,
-                "shared": false
-              }
-            }
-          }
-        },
-        {
-          "position": 1,
-          "name": "file",
-          "type": "char",
-          "const": true,
-          "depth": 1,
-          "ptr": {
-            "scalar": null,
-            "array": null,
-            "string": true,
-            "owned": null,
-            "borrowed": {
-              "lifetime": "arg:file"
-            },
-            "nullable": false,
-            "mutable": null,
-            "note": null,
-            "lifetime": {
-              "is_dropped": null,
-              "is_disposed": null,
-              "is_cloned": null
-            }
-          }
-        }
-      ],
-      "ptr_ret": {
-        "type": "char",
-        "const": false,
-        "depth": 1,
-        "ptr": {
-          "scalar": null,
-          "array": null,
-          "string": true,
-          "owned": {
-            "exclusive": true,
-            "shared": false
-          },
-          "borrowed": null,
-          "nullable": true,
-          "mutable": null,
-          "note": "fresh string, caller owns"
-        }
-      }
-    },
-    {
-      "name": "CRYPTO_UP_REF",
-      "kind": "function_inline_header",
-      "declared_in": [
-        "include/internal/refcount.h"
-      ],
-      "defined_in": "include/internal/refcount.h",
-      "type": "int CRYPTO_UP_REF(CRYPTO_REF_COUNT *refcnt, int *ret)",
-      "ptr_args": [
-        {
-          "position": 0,
-          "name": "refcnt",
-          "type": "CRYPTO_REF_COUNT",
-          "const": false,
-          "depth": 1,
-          "ptr": {
-            "scalar": {"by_val": true},
-            "array": null,
-            "string": false,
-            "owned": null,
-            "borrowed": {
-              "lifetime": "arg:refcnt"
-            },
-            "nullable": false,
-            "mutable": true,
-            "note": null,
-            "lifetime": {
-              "is_dropped": null,
-              "is_disposed": null,
-              "is_cloned": null
-            }
-          }
-        },
-        {
-          "position": 1,
-          "name": "ret",
-          "type": "int",
-          "const": false,
-          "depth": 1,
-          "ptr": {
-            "scalar": {"by_val": true},
-            "array": null,
-            "string": false,
-            "owned": null,
-            "borrowed": {
-              "lifetime": "arg:ret"
-            },
-            "nullable": false,
-            "mutable": true,
-            "note": null,
-            "lifetime": {
-              "is_dropped": null,
-              "is_disposed": null,
-              "is_cloned": null
-            }
-          }
-        }
-      ],
-      "ptr_ret": null
-    },
-    {
-      "name": "CRYPTO_THREAD_write_lock",
-      "kind": "function_exported",
-      "declared_in": [
-        "include/openssl/crypto.h"
-      ],
-      "defined_in": "crypto/threads_pthread.c",
-      "type": "int CRYPTO_THREAD_write_lock(CRYPTO_RWLOCK *lock)",
-      "ptr_args": [
-        {
-          "position": 0,
-          "name": "lock",
-          "type": "CRYPTO_RWLOCK",
-          "const": false,
-          "depth": 1,
-          "ptr": {
-            "scalar": {"by_val": true},
-            "array": null,
-            "string": false,
-            "owned": null,
-            "borrowed": {
-              "lifetime": "arg:lock"
-            },
-            "nullable": false,
-            "mutable": true,
-            "note": null,
-            "lifetime": {
-              "is_dropped": null,
-              "is_disposed": null,
-              "is_cloned": null
-            }
-          }
-        }
-      ],
-      "ptr_ret": null
-    },
-    {
-      "_comment": [
-        "Aliases `CRYPTO_malloc(n, __FILE__, __LINE__)`. Rust calls the target, so",
-        "the macro needs no shim (`macro.alias = true`), and it has no ptr records:",
-        "the ownership/release bindings live on `CRYPTO_malloc`, the callable."
-      ],
-      "name": "OPENSSL_malloc",
-      "kind": "macro",
-      "macro": {
-        "alias": true,
-        "const": false,
-        "typegen": false
-      },
-      "declared_in": [
-        "include/openssl/crypto.h"
-      ],
-      "defined_in": "include/openssl/crypto.h",
-      "type": null,
-      "ptr_args": [],
-      "ptr_ret": null
+      "nullable": false,
+      "mutable": null,
+      "note": null
+     }
     }
-  ]
+   ],
+   "ptr_ret": null,
+   "lifetime": null,
+   "used_by": {
+    "call": [
+     "state_machine"
+    ],
+    "ref": []
+   },
+   "depends_on": {
+    "syms": [
+     {
+      "name": "SSL_new",
+      "defined_in": "ssl/ssl_lib.c",
+      "declared_in": [
+       "include/openssl/ssl.h",
+       "ssl/ssl_local.h"
+      ]
+     },
+     {
+      "name": "EVP_DigestInit_ex",
+      "defined_in": "crypto/evp/digest.c",
+      "declared_in": [
+       "include/openssl/evp.h"
+      ]
+     },
+     {
+      "name": "memcpy",
+      "defined_in": null,
+      "declared_in": [
+       "/usr/include/string.h"
+      ]
+     }
+    ],
+    "types": [
+     {
+      "type": "ssl_connection_st",
+      "fields": [
+       "statem",
+       "version"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "SSL_new",
+   "kind": "function_exported",
+   "declared_in": [
+    "include/openssl/ssl.h",
+    "ssl/ssl_local.h"
+   ],
+   "defined_in": "ssl/ssl_lib.c",
+   "type": "SSL *SSL_new(SSL_CTX *ctx)",
+   "is_variadic": false,
+   "ptr_args": [
+    {
+     "position": 0,
+     "name": "ctx",
+     "type": "SSL_CTX",
+     "const": false,
+     "depth": 1,
+     "ptr": {
+      "scalar": {
+       "by_val": true
+      },
+      "array": null,
+      "string": false,
+      "owned": false,
+      "borrowed": {
+       "lifetime": "arg:ctx"
+      },
+      "nullable": false,
+      "mutable": null,
+      "note": "SSL_new bumps the SSL_CTX refcount and retains a shared ref -> CBox via impl_cloned_upref!"
+     }
+    }
+   ],
+   "ptr_ret": {
+    "type": "SSL",
+    "const": false,
+    "depth": 1,
+    "ptr": {
+     "scalar": {
+      "by_val": true
+     },
+     "array": null,
+     "string": false,
+     "owned": true,
+     "borrowed": null,
+     "nullable": true,
+     "mutable": null,
+     "note": "fresh SSL, caller owns -> CBox"
+    }
+   },
+   "lifetime": {
+    "for": "ctx",
+    "is_dropper": false,
+    "is_disposer": false,
+    "is_cloner": {
+     "deep": false,
+     "upref": true
+    }
+   }
+  },
+  {
+   "name": "PACKET_remaining",
+   "kind": "function_inline_header",
+   "declared_in": [
+    "include/internal/packet.h"
+   ],
+   "defined_in": "include/internal/packet.h",
+   "type": "static inline size_t PACKET_remaining(const PACKET *pkt)",
+   "is_variadic": false,
+   "ptr_args": [
+    {
+     "position": 0,
+     "name": "pkt",
+     "type": "PACKET",
+     "const": true,
+     "depth": 1,
+     "ptr": {
+      "scalar": {
+       "by_val": true
+      },
+      "array": null,
+      "string": false,
+      "owned": false,
+      "borrowed": {
+       "lifetime": "arg:pkt"
+      },
+      "nullable": false,
+      "mutable": false,
+      "note": null
+     }
+    }
+   ],
+   "ptr_ret": null,
+   "lifetime": null
+  },
+  {
+   "name": "TLS_MAX_VERSION_INTERNAL",
+   "kind": "macro",
+   "declared_in": [
+    "ssl/statem/statem.h"
+   ],
+   "defined_in": "ssl/statem/statem.h",
+   "type": null,
+   "used_by": {
+    "call": [
+     "ssl_choose_client_version"
+    ],
+    "ref": []
+   },
+   "depends_on": {
+    "syms": [],
+    "types": []
+   }
+  },
+  {
+   "name": "SSL_OP_NO_TLSv1_3",
+   "kind": "macro",
+   "declared_in": [
+    "include/openssl/ssl.h"
+   ],
+   "defined_in": "include/openssl/ssl.h",
+   "type": null
+  },
+  {
+   "_comment": [
+    "A type generator: one instantiation emits the `stack_st_X509` struct and",
+    "its whole `sk_X509_*` op family. Bindgen binds the EXPANSION, so the",
+    "macro itself needs no shim."
+   ],
+   "name": "DEFINE_STACK_OF",
+   "kind": "macro",
+   "declared_in": [
+    "include/openssl/safestack.h"
+   ],
+   "defined_in": "include/openssl/safestack.h",
+   "type": null
+  },
+  {
+   "_comment": [
+    "None of the three: the expansion yields no constant, references no symbol,",
+    "and declares no type. It has no bindgen binding, so this is the one macro",
+    "shape that gets a C shim."
+   ],
+   "name": "PACKET_remaining_bytes",
+   "kind": "macro",
+   "declared_in": [
+    "ssl/packet_local.h"
+   ],
+   "defined_in": "ssl/packet_local.h",
+   "type": null
+  },
+  {
+   "name": "tls11downgrade",
+   "kind": "global_extern",
+   "declared_in": [
+    "ssl/ssl_local.h"
+   ],
+   "defined_in": "ssl/s3_lib.c",
+   "type": "const unsigned char tls11downgrade[8]",
+   "ptr": {
+    "scalar": {
+     "by_val": true
+    },
+    "array": {
+     "by_val": true
+    },
+    "string": false,
+    "owned": false,
+    "borrowed": {
+     "lifetime": "static"
+    },
+    "nullable": false,
+    "mutable": false,
+    "note": "'static const byte pattern; read-only, unguarded"
+   },
+   "locked_by": null
+  },
+  {
+   "name": "SSL_verify_cb",
+   "kind": "callback",
+   "declared_in": [
+    "include/openssl/ssl.h"
+   ],
+   "defined_in": null,
+   "type": null,
+   "ptr_args": [
+    {
+     "position": 1,
+     "name": "x509_ctx",
+     "type": "X509_STORE_CTX",
+     "const": false,
+     "depth": 1,
+     "ptr": {
+      "scalar": {
+       "by_val": true
+      },
+      "array": null,
+      "string": false,
+      "owned": false,
+      "borrowed": {
+       "lifetime": "arg:x509_ctx"
+      },
+      "nullable": false,
+      "mutable": null,
+      "note": null
+     }
+    }
+   ],
+   "ptr_ret": null,
+   "lifetime": null,
+   "used_by": {
+    "call": [
+     "ssl_verify_cert_chain"
+    ],
+    "ref": [
+     "SSL_CTX_set_verify",
+     "SSL_set_verify"
+    ]
+   },
+   "depends_on": {
+    "syms": [],
+    "types": [
+     {
+      "type": "x509_store_ctx_st",
+      "defined_in": "crypto/x509/x509_local.h",
+      "declared_in": [
+       "ossl_typ.h"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "CRYPTO_malloc",
+   "kind": "function_exported",
+   "declared_in": [
+    "include/openssl/crypto.h"
+   ],
+   "defined_in": "crypto/mem.c",
+   "type": "void *CRYPTO_malloc(size_t num, const char *file, int line)",
+   "is_variadic": false,
+   "ptr_args": [
+    {
+     "position": 1,
+     "name": "file",
+     "type": "char",
+     "const": true,
+     "depth": 1,
+     "ptr": {
+      "scalar": null,
+      "array": null,
+      "string": true,
+      "owned": false,
+      "borrowed": {
+       "lifetime": "arg:file"
+      },
+      "nullable": false,
+      "mutable": null,
+      "note": null
+     }
+    }
+   ],
+   "ptr_ret": {
+    "type": "void",
+    "const": false,
+    "depth": 1,
+    "ptr": {
+     "scalar": {
+      "by_val": true
+     },
+     "array": null,
+     "string": false,
+     "owned": true,
+     "borrowed": null,
+     "nullable": true,
+     "mutable": null,
+     "note": "raw region, caller owns -> CBox / CVec"
+    }
+   },
+   "lifetime": null
+  },
+  {
+   "name": "CRYPTO_free",
+   "kind": "function_exported",
+   "declared_in": [
+    "include/openssl/crypto.h"
+   ],
+   "defined_in": "crypto/mem.c",
+   "type": "void CRYPTO_free(void *ptr, const char *file, int line)",
+   "is_variadic": false,
+   "ptr_args": [
+    {
+     "position": 0,
+     "name": "ptr",
+     "type": "void",
+     "const": false,
+     "depth": 1,
+     "ptr": {
+      "scalar": {
+       "by_val": true
+      },
+      "array": null,
+      "string": false,
+      "owned": true,
+      "borrowed": null,
+      "nullable": true,
+      "mutable": null,
+      "note": "consumed and freed (free(NULL) is a no-op)"
+     }
+    },
+    {
+     "position": 1,
+     "name": "file",
+     "type": "char",
+     "const": true,
+     "depth": 1,
+     "ptr": {
+      "scalar": null,
+      "array": null,
+      "string": true,
+      "owned": false,
+      "borrowed": {
+       "lifetime": "arg:file"
+      },
+      "nullable": false,
+      "mutable": null,
+      "note": null
+     }
+    }
+   ],
+   "ptr_ret": null,
+   "lifetime": {
+    "for": "ptr",
+    "is_dropper": true,
+    "is_disposer": false,
+    "is_cloner": null
+   }
+  },
+  {
+   "name": "CRYPTO_strdup",
+   "kind": "function_exported",
+   "declared_in": [
+    "include/openssl/crypto.h"
+   ],
+   "defined_in": "crypto/mem.c",
+   "type": "char *CRYPTO_strdup(const char *str, const char *file, int line)",
+   "is_variadic": false,
+   "ptr_args": [
+    {
+     "position": 0,
+     "name": "str",
+     "type": "char",
+     "const": true,
+     "depth": 1,
+     "ptr": {
+      "scalar": null,
+      "array": null,
+      "string": true,
+      "owned": false,
+      "borrowed": {
+       "lifetime": "arg:str"
+      },
+      "nullable": false,
+      "mutable": null,
+      "note": null
+     }
+    },
+    {
+     "position": 1,
+     "name": "file",
+     "type": "char",
+     "const": true,
+     "depth": 1,
+     "ptr": {
+      "scalar": null,
+      "array": null,
+      "string": true,
+      "owned": false,
+      "borrowed": {
+       "lifetime": "arg:file"
+      },
+      "nullable": false,
+      "mutable": null,
+      "note": null
+     }
+    }
+   ],
+   "ptr_ret": {
+    "type": "char",
+    "const": false,
+    "depth": 1,
+    "ptr": {
+     "scalar": null,
+     "array": null,
+     "string": true,
+     "owned": true,
+     "borrowed": null,
+     "nullable": true,
+     "mutable": null,
+     "note": "fresh string, caller owns"
+    }
+   },
+   "lifetime": {
+    "for": "str",
+    "is_dropper": false,
+    "is_disposer": false,
+    "is_cloner": {
+     "deep": true,
+     "upref": false
+    }
+   }
+  },
+  {
+   "name": "CRYPTO_UP_REF",
+   "kind": "function_inline_header",
+   "declared_in": [
+    "include/internal/refcount.h"
+   ],
+   "defined_in": "include/internal/refcount.h",
+   "type": "int CRYPTO_UP_REF(CRYPTO_REF_COUNT *refcnt, int *ret)",
+   "is_variadic": false,
+   "ptr_args": [
+    {
+     "position": 0,
+     "name": "refcnt",
+     "type": "CRYPTO_REF_COUNT",
+     "const": false,
+     "depth": 1,
+     "ptr": {
+      "scalar": {
+       "by_val": true
+      },
+      "array": null,
+      "string": false,
+      "owned": false,
+      "borrowed": {
+       "lifetime": "arg:refcnt"
+      },
+      "nullable": false,
+      "mutable": true,
+      "note": null
+     }
+    },
+    {
+     "position": 1,
+     "name": "ret",
+     "type": "int",
+     "const": false,
+     "depth": 1,
+     "ptr": {
+      "scalar": {
+       "by_val": true
+      },
+      "array": null,
+      "string": false,
+      "owned": false,
+      "borrowed": {
+       "lifetime": "arg:ret"
+      },
+      "nullable": false,
+      "mutable": true,
+      "note": null
+     }
+    }
+   ],
+   "ptr_ret": null,
+   "lifetime": null
+  },
+  {
+   "name": "CRYPTO_THREAD_write_lock",
+   "kind": "function_exported",
+   "declared_in": [
+    "include/openssl/crypto.h"
+   ],
+   "defined_in": "crypto/threads_pthread.c",
+   "type": "int CRYPTO_THREAD_write_lock(CRYPTO_RWLOCK *lock)",
+   "is_variadic": false,
+   "ptr_args": [
+    {
+     "position": 0,
+     "name": "lock",
+     "type": "CRYPTO_RWLOCK",
+     "const": false,
+     "depth": 1,
+     "ptr": {
+      "scalar": {
+       "by_val": true
+      },
+      "array": null,
+      "string": false,
+      "owned": false,
+      "borrowed": {
+       "lifetime": "arg:lock"
+      },
+      "nullable": false,
+      "mutable": true,
+      "note": null
+     }
+    }
+   ],
+   "ptr_ret": null,
+   "lifetime": null
+  },
+  {
+   "_comment": [
+    "Aliases `CRYPTO_malloc(n, __FILE__, __LINE__)`. Rust calls the target, so",
+    "the macro needs no shim (`macro.alias = true`), and it has no ptr records:",
+    "the ownership/release bindings live on `CRYPTO_malloc`, the callable."
+   ],
+   "name": "OPENSSL_malloc",
+   "kind": "macro",
+   "declared_in": [
+    "include/openssl/crypto.h"
+   ],
+   "defined_in": "include/openssl/crypto.h",
+   "type": null,
+   "ptr_args": [],
+   "ptr_ret": null
+  }
+ ]
 }

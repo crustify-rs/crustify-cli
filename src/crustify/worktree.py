@@ -101,27 +101,25 @@ def add_worktree(repo: Path, base_commit: str, slug: str) -> Path:
 
 
 _SHARED = ("analysis", "analysis.baseline", "codeql", "targets", "tmp",
-           "crates.json", "build.json", "alloc.json")
+           "crates.json", "build.json")
 
 
 def link_shared(wt: Path, repo: Path) -> None:
     """Symlink the gitignored, read-only-across-a-wave crustify artifacts (the
-    analysis dirs plus the repo-root-tier `crates.json` / `build.json` /
-    `alloc.json` stores) from the main checkout into the worktree, so the
-    worktree is a *complete* functional crustify tree (its `Layout` resolves
-    `analysis` / `codeql` / `targets` / `crates.json` / `build.json` /
-    `alloc.json` to the single shared copy) without duplicating them. They
-    never change during a wave; agent logs written under `targets/` thus land
-    in the shared tree.
+    analysis dirs plus the repo-root-tier `crates.json` / `build.json` stores)
+    from the main checkout into the worktree, so the worktree is a *complete*
+    functional crustify tree (its `Layout` resolves `analysis` / `codeql` /
+    `targets` / `crates.json` / `build.json` to the single shared copy) without
+    duplicating them. They never change during a wave; agent logs written under
+    `targets/` thus land in the shared tree.
 
-    `build.json` / `alloc.json` are gitignored AND untracked, so unlike the
-    generated headers (committed in HEAD, hence carried by `snapshot_base`'s
-    `git add -A`) they reach a worktree by NO other route: `snapshot_base`
-    respects `.gitignore` and skips them. The wrap/port/merge agents only READ
-    them (the build descriptor's `build_commands` + feature wiring, and the
-    allocator-surface catalogue); they are written solely by the separate
-    `build` / `alloc` stages that run BEFORE any wave — so they satisfy the
-    same read-only-across-a-wave contract as `crates.json` below.
+    `build.json` is gitignored AND untracked, so unlike the generated headers
+    (committed in HEAD, hence carried by `snapshot_base`'s `git add -A`) it
+    reaches a worktree by NO other route: `snapshot_base` respects `.gitignore`
+    and skips it. The wrap/port/merge agents only READ it (the build
+    descriptor's `build_commands` + feature wiring); it is written before any
+    wave — so it satisfies the same read-only-across-a-wave contract as
+    `crates.json` below.
 
     ``crates.json`` joins the shared set on the **eager pre-seed** contract:
     the placement oracle must be fully populated for the wave's units BEFORE

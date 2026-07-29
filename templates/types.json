@@ -1,199 +1,132 @@
 {
-  "_comment": [
-    "Example records for the per-stem types.json manifest. Field and",
-    "lifecycle-slot MEANING lives in docs/schemas/types.md (served by",
-    "`crustify query --schema`); the submission shape + rules come from",
-    "`crustify query --update-help`."
-  ],
-  "types": [
+ "_comment": [
+  "Example records for the per-stem types.json manifest. Field and",
+  "lifecycle-slot MEANING lives in docs/schemas/types.md (served by",
+  "`crustify query --schema`); the submission shape + rules come from",
+  "`crustify query --update-help`."
+ ],
+ "types": [
+  {
+   "name": "statem_secret_st",
+   "typedef": [
+    "STATEM_SECRET"
+   ],
+   "kind": "struct",
+   "declared_in": [
+    "ssl/statem/statem_local.h"
+   ],
+   "defined_in": "ssl/statem/statem_lib.c",
+   "casted": {
+    "to": [],
+    "from": []
+   },
+   "opaque_in": {
+    "ssl/statem/statem_lib.c": [
+     "statem_secret_new",
+     "statem_secret_dup"
+    ]
+   },
+   "non_opaque_in": {
+    "ssl/statem/statem_lib.c": [
+     "statem_secret_free",
+     "tls_setup_handshake",
+     "tls_process_finished"
+    ],
+    "ssl/statem/statem_srvr.c": [
+     "tls_construct_server_hello"
+    ]
+   },
+   "fields": [
     {
-      "name": "statem_secret_st",
-      "typedef": [
-        "STATEM_SECRET"
-      ],
-      "kind": "struct",
-      "declared_in": [
-        "ssl/statem/statem_local.h"
-      ],
-      "defined_in": "ssl/statem/statem_lib.c",
-      "dropped_by": {
-        "exclusive": [
-          "statem_secret_free"
-        ],
-        "shared": []
-      },
-      "cloned_by": {
-        "exclusive": [
-          "statem_secret_dup"
-        ],
-        "shared": []
-      },
-      "fields_disposed_by": [
-        "statem_secret_free"
-      ],
-      "casted": {
-        "to": [],
-        "from": []
-      },
-      "opaque_in": {
-        "ssl/statem/statem_lib.c": [
-          "statem_secret_new",
-          "statem_secret_dup"
-        ]
-      },
-      "non_opaque_in": {
-        "ssl/statem/statem_lib.c": [
-          "statem_secret_free",
-          "tls_setup_handshake",
-          "tls_process_finished"
-        ],
-        "ssl/statem/statem_srvr.c": [
-          "tls_construct_server_hello"
-        ]
-      },
-      "fields": [
-        {
-          "name": "len"
-        },
-        {
-          "name": "secret",
-          "type": "unsigned char *",
-          "ref": "pointer",
-          "ptr": {
-            "scalar": null,
-            "array": {
-              "by_val": true
-            },
-            "string": false,
-            "owned": {
-              "exclusive": true,
-              "shared": false
-            },
-            "borrowed": null,
-            "nullable": true,
-            "mutable": true,
-            "note": "Session-secret buffer; the dtor zeroes+frees it via CRYPTO_clear_free, the clone deep-copies via CRYPTO_memdup."
-          }
-        },
-        {
-          "name": "salt",
-          "type": "unsigned char",
-          "ref": "value",
-          "array": {
-            "size": 32
-          }
-        }
-      ]
+     "name": "len"
     },
     {
-      "name": "ssl_session_st",
-      "typedef": [
-        "SSL_SESSION"
-      ],
-      "kind": "struct",
-      "declared_in": [
-        "ssl/ssl_local.h"
-      ],
-      "defined_in": "ssl/ssl_sess.c",
-      "dropped_by": {
-        "exclusive": [],
-        "shared": [
-          "SSL_SESSION_free"
-        ]
-      },
-      "cloned_by": {
-        "exclusive": [
-          "SSL_SESSION_dup"
-        ],
-        "shared": [
-          "SSL_SESSION_up_ref"
-        ]
-      },
-      "fields_disposed_by": [
-        "SSL_SESSION_free"
-      ],
-      "casted": {
-        "to": [],
-        "from": []
-      },
-      "opaque_in": {
-        "ssl/statem/statem_clnt.c": [
-          "tls_process_new_session_ticket"
-        ]
-      },
-      "non_opaque_in": {
-        "ssl/ssl_sess.c": [
-          "SSL_SESSION_new",
-          "SSL_SESSION_free",
-          "SSL_SESSION_up_ref",
-          "SSL_SESSION_dup",
-          "SSL_SESSION_get_id"
-        ],
-        "ssl/statem/statem_srvr.c": [
-          "tls_construct_new_session_ticket"
-        ]
-      },
-      "fields": [
-        {
-          "name": "master_key_length"
-        },
-        {
-          "_comment": "Non-pointer field carrying a `locked_by`: a refcount int guarded by the session lock (illustrates the guarded-datum-is-often-not-a-pointer case).",
-          "name": "references",
-          "locked_by": {
-            "lock": "lock",
-            "lock_op": [
-              "CRYPTO_THREAD_write_lock"
-            ],
-            "unlock_op": [
-              "CRYPTO_THREAD_unlock"
-            ]
-          }
-        },
-        {
-          "name": "peer",
-          "type": "X509 *",
-          "ref": "pointer",
-          "ptr": {
-            "scalar": {"by_val": true},
-            "array": null,
-            "string": false,
-            "owned": {
-              "exclusive": false,
-              "shared": true
-            },
-            "borrowed": null,
-            "nullable": true,
-            "mutable": null,
-            "note": "Peer cert; refcounted. The session dtor down-refs via X509_free; its clone up-refs via X509_up_ref -> CBox with impl_dropped! + impl_cloned_upref!."
-          }
-        }
-      ]
+     "name": "secret",
+     "type": "unsigned char *",
+     "ref": "pointer",
+     "ptr": null
     },
     {
-      "name": "ossl_handshake_state",
-      "typedef": [
-        "OSSL_HANDSHAKE_STATE"
-      ],
-      "kind": "enum",
-      "declared_in": [
-        "include/openssl/ssl.h"
-      ],
-      "defined_in": "include/openssl/ssl.h",
-      "dropped_by": {
-        "exclusive": [],
-        "shared": []
-      },
-      "cloned_by": {
-        "exclusive": [],
-        "shared": []
-      },
-      "fields_disposed_by": [],
-      "casted": {
-        "to": [],
-        "from": []
-      },
-      "fields": []
+     "name": "salt",
+     "type": "unsigned char",
+     "ref": "value",
+     "array": {
+      "size": 32
+     }
     }
-  ]
+   ]
+  },
+  {
+   "name": "ssl_session_st",
+   "typedef": [
+    "SSL_SESSION"
+   ],
+   "kind": "struct",
+   "declared_in": [
+    "ssl/ssl_local.h"
+   ],
+   "defined_in": "ssl/ssl_sess.c",
+   "casted": {
+    "to": [],
+    "from": []
+   },
+   "opaque_in": {
+    "ssl/statem/statem_clnt.c": [
+     "tls_process_new_session_ticket"
+    ]
+   },
+   "non_opaque_in": {
+    "ssl/ssl_sess.c": [
+     "SSL_SESSION_new",
+     "SSL_SESSION_free",
+     "SSL_SESSION_up_ref",
+     "SSL_SESSION_dup",
+     "SSL_SESSION_get_id"
+    ],
+    "ssl/statem/statem_srvr.c": [
+     "tls_construct_new_session_ticket"
+    ]
+   },
+   "fields": [
+    {
+     "name": "master_key_length"
+    },
+    {
+     "_comment": "Non-pointer field carrying a `locked_by`: a refcount int guarded by the session lock (illustrates the guarded-datum-is-often-not-a-pointer case).",
+     "name": "references",
+     "locked_by": {
+      "lock": "lock",
+      "lock_op": [
+       "CRYPTO_THREAD_write_lock"
+      ],
+      "unlock_op": [
+       "CRYPTO_THREAD_unlock"
+      ]
+     }
+    },
+    {
+     "name": "peer",
+     "type": "X509 *",
+     "ref": "pointer",
+     "ptr": null
+    }
+   ]
+  },
+  {
+   "name": "ossl_handshake_state",
+   "typedef": [
+    "OSSL_HANDSHAKE_STATE"
+   ],
+   "kind": "enum",
+   "declared_in": [
+    "include/openssl/ssl.h"
+   ],
+   "defined_in": "include/openssl/ssl.h",
+   "casted": {
+    "to": [],
+    "from": []
+   },
+   "fields": []
+  }
+ ]
 }

@@ -22,7 +22,11 @@ than the older "existing entry wins, ignore new" semantic:
     contents on each field, and the entry-level ``lifetime`` / ``ops`` —
     `_overlay_field` keeps the existing ``ptr`` when the field is still a
     pointer, and the composer never emits ``lifetime`` / ``ops`` values, so the
-    add-missing rule leaves them untouched.
+    add-missing rule leaves them untouched. The same holds for a **symbol**
+    entry's ``ptr_args[*].ptr`` / ``ptr_ret.ptr`` and its entry-level
+    ``lifetime`` (the symbol's lifecycle role): the composer emits all three as
+    ``null``, and ``ptr_args`` / ``ptr_ret`` / ``lifetime`` are existing keys,
+    so a re-compose never clobbers an analyzed contract.
   - **Grow-only composer sets** are set-UNIONED rather than frozen, so a
     record accumulates across runs (and across a wrap→port promotion, whose
     port re-emit is strictly richer): ``fields[]`` on type entries (by field
@@ -258,7 +262,8 @@ def _merge_depends_on(existing: dict, incoming: dict) -> dict:
 # fixes / cast-graph or footprint updates). The agent-owned keys — ``lifetime``
 # and ``ops`` — are absent here and thus preserved. Symbol entries lack these
 # keys, so the overlay is a no-op for syms (their composer-owned ``ptr_args`` /
-# ``ptr_ret`` stay under the add-missing rule as before).
+# ``ptr_ret``, and their agent-owned ``lifetime``, stay under the add-missing
+# rule as before).
 _TYPE_COMPOSER_KEYS = (
     "typedef", "kind", "declared_in", "defined_in",
     "casted", "opaque_in", "non_opaque_in",

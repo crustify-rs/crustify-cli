@@ -2,15 +2,13 @@
 ``--name`` scheduler.
 
 Wrap-stage codegen is driven by :mod:`crustify._schedule`: selection is
-``--name`` (repeatable) plus the synthetic ``--strings`` / ``--arrays``
-cluster selectors; a named **type** brings its in-scope ops
+``--name`` (repeatable); a named **type** brings its in-scope ops
 (budget-split), named **free symbols** pool per file. The user supplies the
 dependency order (the DAG is what they read to choose it); a confirmation
 prompt lists first-layer deps.
 
 This module owns only the wrap-specific pieces — the scope-blind selection
-predicate (:func:`_selection_pred`), the synthetic-selector → name mapping, the
-bindgen gate, and the emit seam to :class:`crustify.agents.wrap.CrustifyWrap` — plus
+predicate (:func:`_selection_pred`), the bindgen gate, and the emit seam to :class:`crustify.agents.wrap.CrustifyWrap` — plus
 the stub-index / preflight / budget helpers the scheduler and the port stage
 reuse. Scope (wrap/port) is applied **here**, never in the DAG, via the same
 ``compose.scope`` classifier the manifests use.
@@ -121,18 +119,15 @@ def _index_sym_files(analysis_root: Path) -> dict[str, str]:
 
 def _wrap_eligible_pred(scope_json):
     """Predicate: is this node something `wrap` may take? Wrap takes **wrap-scope**
-    entities (types + symbols), **any in-scope type** (port- *or* wrap-scope —
-    every type is wrapped, never ported), and **synthetic clusters** (always
-    wrap, never in scope.json). A port-scope *symbol* belongs to the port stage,
-    and an out-of-scope entity isn't wrappable — both are rejected by the gate in
-    :func:`wrap_types`."""
+    entities (types + symbols) and **any in-scope type** (port- *or* wrap-scope
+    — every type is wrapped, never ported). A port-scope *symbol* belongs to the
+    port stage, and an out-of-scope entity isn't wrappable — both are rejected by
+    the gate in :func:`wrap_types`."""
     from compose import scope
     is_wrap = scope.in_scope_pred(scope_json, "wrap")
     is_port = scope.in_scope_pred(scope_json, "port")
 
     def pred(n) -> bool:
-        if (n.subkind or "") in scope.SYNTHETIC_KINDS:
-            return True
         if is_wrap(n):
             return True
         return n.node_kind == "type" and is_port(n)
@@ -142,7 +137,7 @@ def _wrap_eligible_pred(scope_json):
 def _selection_pred(scope_json, *, wrap_only: bool,
                     port_only: bool, files: set[str]):
     """Selection predicate over a :class:`_schedule.Node`. The base is
-    :func:`_wrap_eligible_pred` (wrap-scope ∪ in-scope types ∪ synthetics);
+    :func:`_wrap_eligible_pred` (wrap-scope ∪ in-scope types);
     `--wrap-only`/`--port-only` further *narrow* by scope.json membership, and
     `--file` restricts to a defining file (disambiguating a `--name` collision)."""
     from compose import scope
@@ -159,19 +154,6 @@ def _selection_pred(scope_json, *, wrap_only: bool,
         return eligible(n)
     return pred
 
-
-def _synthetic_names(dag: dict, *, strings: bool, arrays: bool) -> list[str]:
-    """Map the synthetic selectors to the type tags of those cluster kinds."""
-    kinds = {k for k, on in (("string", strings), ("array", arrays)) if on}
-    if not kinds:
-        return []
-    out: list[str] = []
-    for layer in dag.get("layers", []):
-        for rec in layer:
-            for m in (rec.get("scc") or [rec]):
-                if m.get("node_kind") == "type" and m.get("subkind") in kinds:
-                    out.append(m["id"])
-    return out
 
 
 def _wrap_emit(
@@ -205,8 +187,8 @@ def _wrap_emit(
             ).run()
             return
         if type_units:
-            # synthetic-pull (string / array cluster): hand the family tags +
-            # kind; the agent pulls each tag's record/ops/deps/.rs.
+            # type-pull: hand the family tags + kind; the agent pulls each
+            # tag's record/ops/deps/.rs.
             CrustifyWrap(
                 target, batch_kind="type",
                 tags=[u.node.id for u in type_units],
@@ -234,8 +216,6 @@ def wrap_types(
     files: list[str] | None = None,
     wrap_only: bool = False,
     port_only: bool = False,
-    strings: bool = False,
-    arrays: bool = False,
     dag_layer: int | None = None,
     skip: list[str] | None = None,
     parallel: bool = False,
@@ -248,8 +228,7 @@ def wrap_types(
 ) -> None:
     """Wrap selected wrap-scope units via the shared ``--name`` scheduler.
 
-    Selection is ``--name`` (repeatable) plus the synthetic ``--strings`` /
-    ``--arrays`` cluster selectors. A named **type** brings its
+    Selection is ``--name`` (repeatable). A named **type** brings its
     in-scope ops (budget-split); named free symbols pool per file. The
     scheduler runs in dependency-layer order and prints the first-layer deps
     as a heads-up (no prompt).
@@ -279,8 +258,7 @@ def wrap_types(
     # stage's (it translates their bodies), so wrap must not facade them.
     _wrap_op = scope.in_scope_pred(scope_json, "wrap")
 
-    sel_names = list(names or []) + _synthetic_names(
-        dag, strings=strings, arrays=arrays)
+    sel_names = list(names or [])
     if dag_layer is not None:
         # e2e driver mode: EVERY in-scope unit at dag layer N — types (any
         # in-scope) and wrap-scope free syms, EXCLUDING lifecycle ops that fold
@@ -298,8 +276,8 @@ def wrap_types(
         sel_names = [s for s in sel_names if s not in _sk]
     if not sel_names:
         raise SystemExit(
-            "wrap: nothing selected — pass --name / --strings / --arrays / "
-            "--dag-layer N (a --skip blocklist may have emptied the selection).")
+            "wrap: nothing selected — pass --name / --dag-layer N "
+            "(a --skip blocklist may have emptied the selection).")
 
     # Macros are header-defined: bindgen owns their <lib>-sys shims, so the wrap
     # stage never facades them. (The PORT stage still translates port-scope TU
@@ -326,8 +304,8 @@ def wrap_types(
     # Scope gate (parallels the port stage). Reject a named entity wrap cannot
     # take, with guidance: a port-scope SYMBOL belongs to `port` (wrap would
     # silently emit a stray FFI shim instead of the safe view); an out-of-scope
-    # name isn't wrappable. Types (port- or wrap-scope) and synthetic clusters
-    # are eligible — they pass `in_scope` above. Resolve scope-blind so we can
+    # name isn't wrappable. Types (port- or wrap-scope) are eligible — they
+    # pass `in_scope` above. Resolve scope-blind so we can
     # *see* the rejected ones instead of dropping them as "unknown".
     _is_port = scope.in_scope_pred(scope_json, "port")
     loose = {n.id: n for nm in sel_names
@@ -350,11 +328,11 @@ def wrap_types(
         raise SystemExit(
             f"wrap: {len(bad_oos)} selected "
             f"{'entity is' if len(bad_oos)==1 else 'entities are'} out of scope "
-            f"(neither wrap- nor port-scope, not a synthetic cluster):\n{listing}")
+            f"(neither wrap- nor port-scope):\n{listing}")
 
     # Bindgen gate for the libraries actually being wrapped. A selected unit's
     # owning library is its crate in crates.json (crate name == link unit);
-    # synthetic clusters not placed there contribute nothing (skipped).
+    # a unit not placed there contributes nothing (skipped).
     sel_nodes, _ = S.resolve_names(sel_names, by_key, by_name, in_scope)
     from crustify import crates as _crates
     _doc = _crates.load(layout)

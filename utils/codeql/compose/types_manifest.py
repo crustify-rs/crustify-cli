@@ -68,6 +68,7 @@ _ARRAY_SUFFIX_RE = re.compile(r"(\[\d*\])+\s*$")
 
 def _parse_field_type(
     field_type: str, is_scalar: bool, by_name: dict[str, dict] | None = None,
+    ptr_depth: int = 0,
 ) -> dict[str, Any]:
     """Decompose a CodeQL `Type.toString()` field type into structural
     parts.
@@ -79,15 +80,23 @@ def _parse_field_type(
       - `const` — bool (const-qualified somewhere in the type)
       - `anon`  — bool (element is an anonymous aggregate)
 
-    Pointer detection is by literal `*`, plus (when `by_name` is given) a
-    typedef lookup: a **function-pointer typedef** (`unaliased_kind ==
-    "callback"`, e.g. `OPENSSL_sk_freefunc_thunk`) hides its star behind the
-    typedef name and C reports it scalar, so without this it would collapse to
-    a bare `{name}` — dropping the type — instead of surfacing as a pointer
-    field like an inline `int (*)(...)`. Object-pointer typedefs are NOT
-    detectable here (CodeQL's `aliasOf` unwraps the star, so `typedef T *P`
-    is indistinguishable from `typedef T P`); recovering those needs a
-    `types.ql` change.
+    Pointer detection is `ptr_depth > 0` — the authoritative count from
+    `entities/fields.ql`, which walks the real CodeQL `Type`. The literal `*`
+    in `field_type` is only a fallback for a pre-`ptr_depth` extraction: the
+    string is `Type.toString()`, and C hides the star behind a name in two
+    common shapes it therefore cannot show —
+
+      - an OBJECT-pointer typedef (`typedef struct _filesec *filesec_t;`),
+        which types.csv also cannot disambiguate (`aliasOf` unwraps the star,
+        making `typedef T *P` identical to `typedef T P`);
+      - a bare function pointer (`int (*ctrl)(BIO *, int, long, void *)`),
+        modelled as `FunctionPointerIshType`, not a `PointerType`.
+
+    Both used to collapse to a bare `{name}` scalar — no `ptr` block, so no
+    ownership analysis for something that *is* a pointer.
+
+    `is_scalar` answers a DIFFERENT question ("does the type contain an
+    aggregate?") and is only consulted for non-pointer fields.
     """
     ft = (field_type or "").strip()
     const = ft.startswith("const ") or " const" in ft
@@ -101,14 +110,9 @@ def _parse_field_type(
         array = {"size": int(outer) if outer else None}
 
     anon = ft.startswith("(") or "(unnamed" in ft or "(anonymous" in ft
-    is_pointer = "*" in ft
-
-    # Typedef'd function pointer: star hidden behind the typedef name.
-    if not is_pointer and array is None and by_name is not None:
-        row = by_name.get(re.sub(r"\bconst\b", "", ft).strip())
-        if (row is not None and row.get("kind") == "typedef"
-                and row.get("unaliased_kind") == "callback"):
-            is_pointer = True
+    # `ptr_depth` is authoritative; the literal `*` keeps a pre-`ptr_depth`
+    # extraction working (it under-reports exactly the hidden-star shapes).
+    is_pointer = ptr_depth > 0 or "*" in ft
 
     if is_pointer:
         ref: str | None = "pointer"
@@ -122,43 +126,38 @@ def _parse_field_type(
     return {"elem": ft, "ref": ref, "array": array, "const": const, "anon": anon}
 
 
-def _null_ptr_skeleton() -> dict[str, Any]:
-    """Agent-fillable pointer-ownership block, emitted with null/false
-    placeholders by the composer."""
-    return {
-        # scalar: ONE pointee. null | {by_val: true} (points at a single inline
-        # value -> CVoidBox/CBox) | {by_ref: {owned, borrowed}} (points at a single
-        # pointer -- a `T**` out-param; owned/borrowed = the INNER pointee's).
-        # Co-exists with `array` (a generic allocator may serve BOTH a singleton
-        # and a buffer); a pointer must be at least one of {scalar, array, string}.
-        "scalar": None,
-        # array: null (single pointee) | {by_val: true} (buffer of inline values)
-        # | {by_ref: {owned, borrowed}} (buffer of element pointers -- a
-        # container; owned/borrowed = ELEMENT ownership, vs the buffer ownership
-        # in `owned` below). Mutually exclusive with `string`.
-        "array": None,
-        "string": None,
-        # owned/borrowed: the pointer's own (buffer/pointee) ownership. `owned`
-        # is a bool; `borrowed` nests {lifetime}. Both may be set for
-        # runtime-conditional dual ownership.
-        "owned": None,
-        "borrowed": None,
-        "nullable": None,
-        "mutable": None,
-        "note": None,
-    }
+def _null_ptr_skeleton():
+    """The agent-fillable ownership slot on a pointer FIELD, emitted `null` by
+    the composer.
+
+    `null` is the UNANALYZED state, so "has this field been through the
+    analyzer?" is a null check on one key — an all-null keyed skeleton would be
+    indistinguishable from a block the agent filled with nulls, and is not
+    submittable anyway (a submitted block replaces the prior WHOLESALE and must
+    be complete). Once filled it is the same `{scalar, array, string, owned,
+    borrowed, nullable, mutable, note}` block a `ptr_args[*]`/`ptr_ret` record
+    carries (see syms_manifest._null_ptr_agent), so a pointer is described
+    identically whether it sits in a struct or crosses a call boundary."""
+    return None
+
+
+# A field type string CodeQL cannot name: a bare function pointer
+# (`..(*)(..)`) or an anonymous aggregate (`(unnamed …)`). Consumers resolving
+# edges off the string get nothing from these.
+_UNNAMEABLE_ELEM_RE = re.compile(r"^\(|\(\s*\*")
 
 
 def _compose_field(
     field_name: str, field_type: str, is_scalar: bool,
-    by_name: dict[str, dict] | None = None,
+    by_name: dict[str, dict] | None = None, ptr_depth: int = 0,
+    sig_types: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build one `fields[]` entry from raw `(name, type, is_scalar)`.
 
     Fields carry their structural shape (`type` / `ref` / `array` / `ptr`) only;
     the wrapper derives accessors from the field layout directly — there are no
     per-field C getter/setter lists."""
-    parsed = _parse_field_type(field_type, is_scalar, by_name)
+    parsed = _parse_field_type(field_type, is_scalar, by_name, ptr_depth)
     ref = parsed["ref"]
     if ref is None:
         return {"name": field_name}  # scalar single
@@ -166,6 +165,13 @@ def _compose_field(
     entry: dict[str, Any] = {"name": field_name, "type": parsed["elem"], "ref": ref}
     if parsed["array"] is not None:
         entry["array"] = parsed["array"]
+    # `sig_types` — the user types named INSIDE an unnameable field type, i.e.
+    # a bare function pointer's signature (`int (*ctrl)(BIO *, …)` -> `BIO`).
+    # `type` renders as `..(*)(..)`, so a consumer resolving edges off that
+    # string gets nothing and the field looks like a dependency leaf. Emitted
+    # only when the string is unnameable — an ordinary `T *` needs no help.
+    if sig_types and _UNNAMEABLE_ELEM_RE.search(parsed["elem"] or ""):
+        entry["sig_types"] = sorted(set(sig_types))
     if ref == "pointer":
         entry["ptr"] = _null_ptr_skeleton()
     return entry
@@ -239,7 +245,14 @@ def _compose_fields_full(
     """
     declared = reach.struct_fields(struct_name, struct_def_file)
     if declared:
-        return [_compose_field(name, ftype, scalar, by_name) for name, ftype, scalar in declared]
+        return [
+            _compose_field(
+                name, ftype, scalar, by_name, depth,
+                [t for t, _k, _f in reach.types_in_field(
+                    struct_name, struct_def_file, name)],
+            )
+            for name, ftype, scalar, depth in declared
+        ]
     # No full-body definition in the DB — fall back to accessed fields.
     return _compose_fields_wrap(
         reach, struct_name, struct_def_file, port_only=False, by_name=by_name,
@@ -287,8 +300,12 @@ def _compose_fields_wrap(
         if meta is None:
             out.append({"name": name})
             continue
-        ftype, scalar = meta
-        out.append(_compose_field(name, ftype, scalar, by_name))
+        ftype, scalar, depth = meta
+        out.append(_compose_field(
+            name, ftype, scalar, by_name, depth,
+            [t for t, _k, _f in reach.types_in_field(
+                struct_name, struct_def_file, name)],
+        ))
     return out
 
 
@@ -448,26 +465,6 @@ def _wrap_port_reachable(
 
 # ------------------------------------------------------------------ skeletons
 
-def _lifecycle_skeleton() -> dict[str, Any]:
-    # No `ops` list: a concrete type's method surface is DERIVED (lifecycle only)
-    # via scope.type_method_syms. `dropped_by`/`cloned_by`/`fields_disposed_by`
-    # are TOP-LEVEL type fields (no `lifetime` wrapper):
-    #   dropped_by = a flat list of this type's destructors.
-    #   cloned_by.deep = duplicator(s) that produce a fresh allocation;
-    #     cloned_by.upref = refcount bump(s). A refcounted type takes its `Clone`
-    #     from the upref and its deep dups stay plain methods; a type with no
-    #     refcount takes `Clone` from the deep duplicator. Both land on
-    #     `CCloned` / `Clone for CBox` -- only the registered routine differs.
-    #   fields_disposed_by = a flat list of this type's own methods that dispose
-    #     its fields.
-    # See docs/schemas/types.md (dropped_by / cloned_by / fields_disposed_by).
-    return {
-        "dropped_by": [],
-        "cloned_by": {"deep": [], "upref": []},
-        "fields_disposed_by": [],
-    }
-
-
 def _struct_skeleton(
     struct_name: str, typedefs: list[str],
     declared_in: str | None, defined_in: str | None,
@@ -475,12 +472,11 @@ def _struct_skeleton(
 ) -> dict[str, Any]:
     # `kind` is "struct" or "union" — a union takes the SAME skeleton (it has a
     # member layout, footprints, casts) and only differs in the tag. Unions get
-    # no agent analysis (the type-analyzer worklist is structs-only); the
-    # lifecycle/accessor slots stay at their empty skeleton defaults.
+    # no agent analysis (the type-analyzer worklist is structs-only); their
+    # per-field `ptr` slots stay null.
     return {
         "name": struct_name, "typedef": typedefs, "kind": kind,
         "declared_in": declared_in, "defined_in": defined_in,
-        **_lifecycle_skeleton(),
         "casted": {"to": [], "from": []},
         "fields": fields,
     }
@@ -492,7 +488,6 @@ def _enum_skeleton(
     e = {
         "name": name, "typedef": typedefs, "kind": "enum",
         "declared_in": declared_in, "defined_in": defined_in,
-        **_lifecycle_skeleton(),
         "casted": {"to": [], "from": []}, "fields": [],
     }
     return e
@@ -608,17 +603,15 @@ def compose(
         decls = scope.parse_decl_files(r["decl_files"])
         # The entry's stored `declared_in` FIELD gets the FULL decl list (set
         # just before append) so the scaffolder reasons over every decl site
-        # and a typegen instance's instantiation header (e.g. comp.h) isn't
-        # dropped. The skeleton builders only STORE that field — they don't
-        # read it. This LOCAL is the single canonical pick for the one place
-        # that needs one file: the typedef loop's `target_file`.
+        # and no instantiation header is dropped. The skeleton builders only
+        # STORE that field — they don't read it. This LOCAL is the single
+        # canonical pick for the one place that needs one file: the typedef
+        # loop's `target_file`.
         declared_in = scope.canonical_decl(decls)
         defined_in = r["def_file"] or None
         is_port = _is_port(r)
 
-        # (Generator instances stay `kind: struct`; the typegen pass only
-        # stamps their `typegen` tag, composer seeds it null.) Named
-        # struct/union/enum identity comes from the C tag here; the
+        # Named struct/union/enum identity comes from the C tag here; the
         # anonymous-typedef loop below mirrors this via the same
         # _build_struct_entry path. A union takes the struct path (member layout
         # + footprints) but keeps `kind: union` so the analyzer worklist skips it.
@@ -658,10 +651,10 @@ def compose(
         decls = scope.parse_decl_files(r["decl_files"])
         # The entry's stored `declared_in` FIELD gets the FULL decl list (set
         # just before append) so the scaffolder reasons over every decl site
-        # and a typegen instance's instantiation header (e.g. comp.h) isn't
-        # dropped. The skeleton builders only STORE that field — they don't
-        # read it. This LOCAL is the single canonical pick for the one place
-        # that needs one file: the typedef loop's `target_file`.
+        # and no instantiation header is dropped. The skeleton builders only
+        # STORE that field — they don't read it. This LOCAL is the single
+        # canonical pick for the one place that needs one file: the typedef
+        # loop's `target_file`.
         declared_in = scope.canonical_decl(decls)
         # The typedef name IS this type's identity (the anonymous base has no
         # tag), and types.ql now resolves the inline aggregate's body site, so
@@ -781,7 +774,7 @@ def compose(
     # Fill the raw cast graph per entry, keyed by tag (edges/casts.ql via
     # Reach). `casted.to` = tags this type is cast into; `casted.from` = tags
     # cast into it. Stored verbatim, unclassified — consumers disambiguate
-    # typegen erasure / polymorphic downcast / ASN1 punning.
+    # engine erasure / downcast / ASN1 punning.
     for entries in entries_by_dir.values():
         for e in entries:
             if "casted" in e:
@@ -810,13 +803,13 @@ _COMMENT = (
     "(touchers that hold the type opaquely — forwarders, ctors, "
     "wrappers). Wrap types restrict both to the in-scope universe "
     "(port-defined ∪ port-reachable); port types keep the full "
-    "footprint. The agent fills each pointer field's `ptr` ownership block "
-    "(incl. owned.dropped_by/cloned_by) and any guarded field's `locked_by`, "
-    "plus the type-level `lifetime` block (clone/drop). "
+    "footprint. The agent fills each pointer field's `ptr` ownership block and "
+    "any guarded field's `locked_by`; a type stores NO lifecycle of its own -- "
+    "which routines drop/dispose/clone it is reverse-derived from the acting "
+    "symbols (`query symbols --lifetime-for <TAG>`). "
     "`casted` {to,from} is the composer-filled raw struct<->struct cast graph "
-    "(see _comment_casted) — instance<->engine erasure, base->derived "
-    "downcasts and ASN1 punning all coexist there, unclassified. Synthetic "
-    "kinds string/array (buffer-pass clusters) are agent-synthesized. "
+    "(see _comment_casted) — engine erasure, downcasts "
+    "and ASN1 punning all coexist there, unclassified. "
     "Anonymous-aggregate fields carry the raw type string; deep inlining "
     "deferred (see docs/TODO.md)."
 )

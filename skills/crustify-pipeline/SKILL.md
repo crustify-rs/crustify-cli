@@ -4,7 +4,7 @@ roles: [orchestrator]
 description: >-
   Drive the crustify C→Rust translation pipeline end to end: the manual
   prerequisites (toolchains, build.json, CodeQL database), the stage order
-  (alloc → analyze → scaffold → bindgen → wrap → port), what each stage
+  (analyze → scaffold → bindgen → wrap → port), what each stage
   consumes/produces, how to select work, and the invocation gotchas. Use when
   orchestrating crustify across stages (not when translating a single symbol —
   that's crustify-oracle + the crate primitive skill).
@@ -78,7 +78,6 @@ each command's `--help`** — run it; this is the router.
 
 | Stage | Produces | Notes |
 |-------|----------|-------|
-| `alloc` | `alloc.json` | the byte-allocator surface catalogue |
 | `analyze <subject>` | `codeql/{t1,t2}/*.csv`, `scope.json`, `analysis/**/{types,syms}.json`, `deps-dag.json` | subjects: `extract-ql` → `scope` → `symbols`/`types` → `dag` (in that order) |
 | `scaffold` | resolved `.rs` modules (placement oracle / stubs) | `--all` fills a target; `--validate` runs the consistency gate |
 | `bindgen` | `<lib>-sys` FFI crates | deterministic, no LLM |

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """deps_dag.py — unified dependency DAG over types AND symbols.
 
-Generalises ``types_dag.py``: builds one scope-agnostic directed graph whose
+Builds one scope-agnostic directed graph whose
 nodes are **types** and **all symbols** (functions / macros / globals,
-including a type's ctors / dtor / ops), where ``A -> B`` means "A needs B
+including a type's lifecycle methods), where ``A -> B`` means "A needs B
 emitted first". Topo-sorted (Tarjan SCC → longest-path layers) it drives both
 the wrap stage (wrap-scope subset) and the port stage (the whole graph, in
 order). See ``docs/WRAP_STAGE_PLAN.md``.
@@ -44,7 +44,7 @@ their *body*-level deps onto the type and project the dense function-call
 graph onto the types, manufacturing huge artificial SCCs (e.g. the libgit2
 ODB/pack subsystem collapsed into one 82-node cycle). Unfolded, the type
 graph is acyclic (only field edges) and only genuine recursion remains as
-SCCs. The type node still *lists* its ``ops``/``ctors`` so the wrap scheduler
+SCCs. The type node still *lists* its ``ops`` so the wrap scheduler
 can co-emit a type with its methods — it just doesn't inherit their deps.
 
 Nothing is dropped: external/libc symbols and builtins referenced by
@@ -96,8 +96,8 @@ def _sym_filekey(defined_in: Any, declared_in: Any) -> str | None:
 
 class TypeNode:
     __slots__ = ("tag", "kind", "defined_in", "declared_in",
-                 "ctype_refs", "ops", "ctors", "drop_syms", "dep_types", "dep_syms",
-                 "cast_to", "cast_from", "elem_refs", "nfields")
+                 "ctype_refs", "ops", "drop_syms", "dep_types", "dep_syms",
+                 "cast_to", "cast_from", "nfields")
 
     def __init__(self, tag: str) -> None:
         self.tag = tag
@@ -106,13 +106,11 @@ class TypeNode:
         self.declared_in: str | None = None
         self.ctype_refs: set[str] = set()   # raw C type strings (field types)
         self.ops: set[str] = set()          # folded op/lifecycle symbol names
-        self.ctors: list[str] = []
         self.drop_syms: set[str] = set()    # dtor storage/fields fn names (sig-fold only)
         self.dep_types: set[str] = set()    # resolved canonical tags
         self.dep_syms: set[str] = set()     # resolved free-symbol names
         self.cast_to: set[str] = set()      # casted.to tags (this -> T)
         self.cast_from: set[str] = set()    # casted.from tags (T -> this)
-        self.elem_refs: set[str] = set()    # array cluster: raw elem type strings
         self.nfields: int = 0               # full struct field count (its port LoC)
 
     def cast_degree(self) -> int:
@@ -212,6 +210,12 @@ def _field_ctype_refs(entry: dict, keep_fields: set[str] | None = None) -> set[s
         t = fld.get("type")
         if t:
             refs.add(t)
+        # A bare function-pointer field renders as `..(*)(..)`, which names
+        # nothing — the composer puts the user types from its SIGNATURE in
+        # `sig_types` instead. Without these a vtable struct (`bio_method_st`
+        # and friends) is a dependency leaf even though its slots traffic in
+        # `BIO`, `BIO_info_cb`, … and would schedule before them.
+        refs.update(fld.get("sig_types") or [])
     return refs
 
 
@@ -257,6 +261,10 @@ def _collect(analysis_root: Path,
     """
     types: dict[str, TypeNode] = {}
     syms: dict[SymKey, SymNode] = {}
+    # A type stores no lifecycle: its method surface is reverse-derived from the
+    # symbols whose `lifetime` acts on an arg of that type. Built once here and
+    # threaded into every type_* accessor below.
+    lifecycle = _scope.build_lifecycle_index(analysis_root)
 
     for f in sorted(analysis_root.rglob("types.json")):
         try:
@@ -285,42 +293,21 @@ def _collect(analysis_root: Path,
                 n.ctype_refs |= _field_ctype_refs(e, keep_fields=port_fields[tag])
             else:
                 n.ctype_refs |= _field_ctype_refs(e)
-            # Array clusters are fieldless but carry `elems` — the concrete
-            # element types their typed CVec<T> aliases reference. The generic
-            # `CVec<T, S>` does NOT depend on T (the strategy frees by byte
-            # length, never touching elements), and a synthetic cluster has no
-            # natural dependents, so the cluster is a foundational LEAF. The
-            # alias→elem coupling is therefore INVERTED below: the elem depends
-            # on the cluster (so the cluster wraps first), and the cluster's
-            # alias renders the elem raw (`ffi::T`) as a `fallback`, back-filled
-            # once the elem lands. Stash elems apart from field refs for that
-            # inversion pass. (Strings have no elems.)
-            n.elem_refs |= {r["type"] for r in (e.get("elems") or [])
-                            if isinstance(r, dict) and r.get("type")}
             cst = e.get("casted") or {}
             if isinstance(cst, dict):
                 n.cast_to |= {t for t in (cst.get("to") or []) if t}
                 n.cast_from |= {t for t in (cst.get("from") or []) if t}
-            # Bundle op-set is exactly the analyzer's `ops` (proven to already
-            # contain every genuine ctor/dtor/up_ref/clone). Generic lifetime
-            # primitives — e.g. a shared `git_mutex_lock` named only in the
-            # `locking` block — are deliberately NOT folded in: the op whose
-            # body uses the primitive already carries the edge (that is the
-            # rule that fills `locking`), so the bundle depends on it
-            # naturally. `locking` stays type metadata for the agent.
-            # A concrete type's method surface is DERIVED — lifecycle only (no
-            # stored `ops`, no field accessors); synthetic clusters use their
-            # explicit `ops`. type_method_syms() unifies both.
-            n.ops |= set(_scope.type_method_syms(e))
-            for c in _scope.alloc_fns(_scope.lifetime(e)):
-                if c not in n.ctors:
-                    n.ctors.append(c)
-            # Dtor sym names, for the signature-fold only (NOT the owned method
-            # surface). A concrete type's dtor is already in `ops` via
-            # type_method_syms; a synthetic cluster's is NOT (its `ops` is the
-            # explicit op list, sans ctor/dtor) — so its dtor's signature types
-            # (e.g. `git_pool_clear(git_pool*)`) would otherwise never fold in.
-            n.drop_syms |= set(_scope.drop_op_names(_scope.type_dropped_by(e)))
+            # A type's method surface is wholly DERIVED — its lifecycle, reverse-
+            # derived from the symbols whose `lifetime` acts on an arg of this
+            # type (no stored ops, no field accessors). Generic lifetime
+            # primitives are deliberately NOT folded in: the op whose body uses
+            # the primitive already carries the edge, so the bundle depends on it
+            # naturally.
+            n.ops |= set(_scope.type_method_syms(e, lifecycle))
+            # Dtor sym names, for the signature-fold. Already inside `ops` via
+            # type_method_syms; kept as its own set because the fold consumes
+            # only the drop signatures.
+            n.drop_syms |= set(_scope.type_dropped_by(e, lifecycle))
 
     for f in sorted(analysis_root.rglob("syms.json")):
         try:
@@ -400,7 +387,7 @@ def _build_edges(types, syms, amap):
     discovered (so we can mint nodes for them).
 
     Ops are **not folded** into their types: every symbol (functions / macros
-    / globals — including a type's ctors / dtor / ops) is its own node. A type
+    / globals — including a type's lifecycle methods) is its own node. A type
     depends only on its non-scalar **field** types; an op's dependency on its
     type falls out naturally from the op's **signature** (receiver / return
     type). This keeps the type graph acyclic and leaves only genuine
@@ -474,7 +461,7 @@ def _build_edges(types, syms, amap):
         ds.add(depkey)
 
     # Types: their non-scalar field types PLUS the
-    # **signature** type-refs of their ops/ctors/dtor — the types a wrapper's
+    # **signature** type-refs of their ops/dtor — the types a wrapper's
     # method signatures mention, which must be wrapped first (`from_str(&mut
     # GitStr)`; `Drop` calling `git_pool_clear(git_pool*)`). Body-level op deps
     # stay unfolded (they cause the dense call-graph SCCs); signatures are sparse.
@@ -496,7 +483,7 @@ def _build_edges(types, syms, amap):
             res_ctype(ref, n.dep_types, n.dep_syms)
             if t in types and t != tag:
                 wedge[(tag, t)] += 1
-        for opname in (set(n.ops) | set(n.ctors) | n.drop_syms):   # op/ctor/dtor SIGNATURE refs
+        for opname in (set(n.ops) | n.drop_syms):   # op/dtor SIGNATURE refs
             for sn in name2syms.get(opname, ()):
                 for ref in sn.sig_type_refs:
                     t = _resolve_ctype(ref, amap, types)
@@ -530,15 +517,6 @@ def _build_edges(types, syms, amap):
     # back-edge — A's alias renders T raw (`fallback`), and T back-fills it once
     # T's wrapper lands, strictly after A's module is complete (no same-wave
     # writer race on A's file).
-    forced_back: list[tuple[str, str]] = []
-    for tag, n in types.items():
-        for ref in n.elem_refs:
-            t = _resolve_ctype(ref, amap, types)
-            if t in types and t != tag:
-                types[t].dep_types.add(tag)      # elem -> cluster (layering)
-                wedge[(t, tag)] += 1
-                forced_back.append((tag, t))      # cluster -> elem (fallback)
-
     # Symbols (ALL — ops and callbacks included, never folded). Two sources:
     #   - `depends_on` (types + syms) — codebase-wide, no port/wrap shape fork
     #   - `ptr_args`/`ptr_ret` signature pointer types
@@ -559,7 +537,7 @@ def _build_edges(types, syms, amap):
             res_ctype(ref, n.dep_types, n.dep_syms)
         n.dep_syms.discard(key)          # no self-edge
 
-    return ext_syms, ext_types, dict(wedge), forced_back
+    return ext_syms, ext_types, dict(wedge)
 
 
 # ------------------------------------------------------- node id + adjacency
@@ -578,7 +556,7 @@ def _sid(key: SymKey) -> str:
 def _build_graph(types, syms, ext_syms, ext_types):
     """Return (nodes, adj): nodes id -> record dict; adj id -> set(dep ids).
     Every type and every symbol is a node (ops are not folded). Type nodes
-    still carry their ``ops``/``ctors`` lists so the wrap scheduler can
+    still carry their ``ops`` list so the wrap scheduler can
     co-emit a type with its methods."""
     nodes: dict[str, dict] = {}
     adj: dict[str, set[str]] = {}
@@ -604,14 +582,13 @@ def _build_graph(types, syms, ext_syms, ext_types):
         adj.setdefault(nid, set())
 
     for tag, n in types.items():
-        # `ops`/`ctors` are kept for scheduler grouping (which symbol nodes
-        # are this type's methods). Ops carry `defined_in` so the scheduler
-        # binds the right same-named static (mirrors `deps.syms`).
+        # `ops` is kept for scheduler grouping (which symbol nodes are this
+        # type's methods). Ops carry `defined_in` so the scheduler binds the
+        # right same-named static (mirrors `deps.syms`).
         add(_tid(tag), {
             "id": tag, "node_kind": "type", "subkind": n.kind,
             "defined_in": n.origin(),
             "ops": _op_objs(n.ops),
-            "ctors": list(n.ctors),
             "loc": n.nfields,           # struct field count (a type's own LoC)
             "_dt": n.dep_types, "_ds": n.dep_syms,
         })
@@ -627,7 +604,7 @@ def _build_graph(types, syms, ext_syms, ext_types):
         if _tid(tag) not in nodes:
             add(_tid(tag), {"id": tag, "node_kind": "type", "subkind": "external",
                             "defined_in": None,
-                            "ops": [], "ctors": [], "_dt": set(), "_ds": set()})
+                            "ops": [], "_dt": set(), "_ds": set()})
     for key, sub in ext_syms.items():
         if _sid(key) not in nodes:
             add(_sid(key), {"id": key[0], "node_kind": "symbol", "subkind": sub,
@@ -777,7 +754,6 @@ def _emit_node(nodes, comp):
                "subkind": rec["subkind"], "defined_in": rec["defined_in"]}
         if rec["node_kind"] == "type":
             out["ops"] = rec.get("ops", [])
-            out["ctors"] = rec.get("ctors", [])
             if rec.get("loc"):
                 out["loc"] = rec["loc"]
         elif rec.get("loc"):
@@ -788,7 +764,6 @@ def _emit_node(nodes, comp):
              "defined_in": m.get("defined_in")}
         if m["node_kind"] == "type":
             d["ops"] = m.get("ops", [])
-            d["ctors"] = m.get("ctors", [])
             if m.get("loc"):
                 d["loc"] = m["loc"]
         elif m.get("loc"):
@@ -866,7 +841,7 @@ def compose(analysis_root: Path, scope_json: Path | None = None) -> dict[str, An
     types, syms = _collect(analysis_root, port_syms, port_fields)
     _populate_nfields(analysis_root, types)
     amap = _alias_map(analysis_root, types)
-    ext_syms, ext_types, wedge, forced_back = _build_edges(types, syms, amap)
+    ext_syms, ext_types, wedge = _build_edges(types, syms, amap)
     nodes, adj = _build_graph(types, syms, ext_syms, ext_types)
     sccs = _tarjan(adj)
     # Flatten genuine cycles (parent↔child backrefs) with a weighted FAS: the
@@ -874,16 +849,6 @@ def compose(analysis_root: Path, scope_json: Path | None = None) -> dict[str, An
     # raw `ffi::T` — their target is a not-yet-wrapped cycle sibling), and the
     # remaining graph is acyclic, so every node layers individually.
     back = _break_sccs(sccs, adj, nodes, wedge)
-    # Inject the array-cluster alias inversions as forced back-edges (cluster ->
-    # elem): the elem -> cluster layering edge already lives in `adj` (from
-    # dep_types), so the cluster stays a leaf while its alias renders the elem
-    # raw + back-fills. Injected AFTER FAS so it never manufactures a spurious
-    # SCC for the cycle breaker to arbitrate.
-    for a_tag, e_tag in forced_back:
-        a_id, e_id = _tid(a_tag), _tid(e_tag)
-        if a_id in adj and e_id in nodes:
-            adj[a_id].add(e_id)
-            back.add((a_id, e_id))
     n_cyclic = sum(1 for c in sccs if len(c) > 1)
     adj_dag = {nid: {d for d in deps if (nid, d) not in back}
                for nid, deps in adj.items()}
@@ -932,7 +897,7 @@ def compose(analysis_root: Path, scope_json: Path | None = None) -> dict[str, An
         "_comment": (
             "Scope-agnostic unified dependency DAG (types + symbols) by "
             "compose/deps_dag.py. A's `deps` are emitted before A. A type "
-            "depends on its non-scalar field types AND its ops'/ctors' "
+            "depends on its non-scalar field types AND its ops' "
             "**signature** types (what the wrapper's method signatures need); "
             "body-level op deps stay unfolded (a type lists its ops as "
             "{name, defined_in} for the scheduler but doesn't inherit their "
