@@ -554,22 +554,23 @@ def main() -> None:
 
     analyze_scope_p = analyze_sub.add_parser(
         "scope",
-        help="Derive a section of scope.json (one required, mutually exclusive): "
-             "--port-only (port set from config) or --wrap-only (wrap "
-             "import-closure; composer-only, computed standalone from CodeQL "
-             "T1/T2 + the port section).",
+        help="Emit scope.json. With no flag, derives BOTH sections in one "
+             "pass: `port` (the translation set, from config.json) then "
+             "`wrap` (the FFI import-closure derived from it). Both are "
+             "composer-only — no LLM. The --port-only / --wrap-only flags "
+             "narrow to one section for re-deriving it alone.",
     )
-    analyze_scope_sel = analyze_scope_p.add_mutually_exclusive_group(required=True)
+    analyze_scope_sel = analyze_scope_p.add_mutually_exclusive_group()
     analyze_scope_sel.add_argument(
         "--port-only", action="store_true", dest="port_only",
-        help="Derive the `port` section from config.json (the seed — run first).",
+        help="Derive only the `port` section from config.json. Leaves any "
+             "existing `wrap` section stale — it is derived FROM `port`.",
     )
     analyze_scope_sel.add_argument(
         "--wrap-only", action="store_true", dest="wrap_only",
-        help="Derive the `wrap` import-closure section (appended alongside "
-             "`port`; computed standalone from CodeQL T1/T2 + the `port` "
-             "section — needs only `analyze scope --port-only` + "
-             "`analyze extract-ql`).",
+        help="Re-derive only the `wrap` import-closure from an existing "
+             "`port` section plus the T1/T2 tables. Useful after editing "
+             "config.json's out_of_scope without re-seeding `port`.",
     )
 
     analyze_symbols_p = analyze_sub.add_parser(
@@ -932,14 +933,14 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
 
     if subject == "scope":
         port_only = bool(getattr(args, "port_only", False))
-        # --reset wipes the port seed; meaningful only for --port-only. The
-        # wrap section is a derived augmentation that recomputes in place.
-        if reset_stages and port_only:
+        wrap_only = bool(getattr(args, "wrap_only", False))
+        # --reset wipes the whole seed, so it is meaningless with --wrap-only:
+        # that re-derives wrap FROM the port section, which the reset would
+        # have just deleted. Both other forms re-seed `port` from config.json.
+        if reset_stages and not wrap_only:
             analyze_mod.reset_scope(target)
         analyze_mod.analyze_scope(
-            target,
-            port_only=port_only,
-            wrap_only=bool(getattr(args, "wrap_only", False)),
+            target, port_only=port_only, wrap_only=wrap_only,
         )
         return
 

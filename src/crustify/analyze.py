@@ -551,22 +551,28 @@ def _run_subject_manifests_list(
 def analyze_scope(
     target: Path, *, port_only: bool = False, wrap_only: bool = False,
 ) -> None:
-    """Derive one section of scope.json — exactly one of ``port_only`` /
-    ``wrap_only`` (they are produced at different points in the pipeline):
+    """Emit scope.json's two sections.
 
-      - ``port_only`` — the ``port`` section, from ``config.json`` (the seed;
-        must run before files/symbols/types).
-      - ``wrap_only`` — the derived ``wrap`` import-closure section. Walks port
-        entities' ``depends_on`` edges into the FFI items they use, narrowed to
-        the header(s) the importing TU ``#include``s. Appended alongside
-        ``port``; requires ``analyze symbols``/``types`` to have run.
+      - ``port`` — the translation set, seeded from ``config.json``.
+      - ``wrap`` — the FFI import-closure *derived from* ``port``: walk port
+        entities' forward edges into the items they use, narrowed to the
+        header(s) the importing TU ``#include``s.
+
+    Default (neither flag) runs both in order, which is the normal case: the
+    two were once separate stages because the wrap closure read the syms/types
+    manifests and so had to run after ``analyze symbols``/``types``. It is now
+    computed standalone from T1/T2 plus ``port``, so nothing needs to happen
+    between them.
+
+    The flags narrow to one section. ``--port-only`` leaves any existing
+    ``wrap`` **stale**, since wrap is a function of port; ``--wrap-only``
+    re-derives wrap against the port section already on disk.
     """
-    if port_only == wrap_only:
-        raise SystemExit(
-            "analyze scope: pass exactly one of --port-only / --wrap-only.")
-    if port_only:
-        _scope(target)
-    else:
+    if wrap_only:
+        _wrap_scope(target)
+        return
+    _scope(target)
+    if not port_only:
         _wrap_scope(target)
 
 
