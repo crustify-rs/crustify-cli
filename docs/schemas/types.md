@@ -35,8 +35,9 @@ Composer-filled.
 
 Agent-filled list of destructor/releaser function names (`[]` when none) mapping
 to `impl Drop`. A type may have several. On a type with a `refcount` field the
-destructor is the down-ref that backs `CRefDropped::c_unref` (-> `CArc`); with no
-refcount it backs `CDropped::c_free` (-> `CBox`).
+destructor is the down-ref; with no refcount it is the plain `*_free`. Either
+way it backs `CDropped::c_free` on a `CBox` -- the wrapper is the same, only the
+registered routine differs.
 
 ## cloned_by
 
@@ -44,11 +45,16 @@ Agent-filled `{deep, upref}`, each a LIST of clone routines (`[]` when
 none) -- the routines behind Rust `Clone`.
 
 - **`deep`** -- routines that produce a fresh allocation (the `dup`s). On a type
-  with no `refcount` field -> `CCloned` / `Clone for CBox`. On a refcounted type
-  `Clone` is already the up_ref, so these stay plain methods.
-- **`upref`** -- refcount bumps (the `up_ref`s) -> `CRefCloned` /
-  `Clone for CArc`. At most one; `[]` when the type carries a `refcount` field
-  but exposes no up_ref routine (the wrapper shims `CRYPTO_UP_REF` on the field).
+  with no `refcount` field -> `CCloned::c_clone` / `Clone for CBox`
+  (`impl_cloned!`). On a refcounted type `Clone` is already the up_ref, so these
+  stay plain methods.
+- **`upref`** -- refcount bumps (the `up_ref`s) -> `CCloned::c_clone` /
+  `Clone for CBox` (`impl_cloned_upref!`, which returns the SAME pointer). At
+  most one; `[]` when the type carries a `refcount` field but exposes no up_ref
+  routine (the wrapper shims `CRYPTO_UP_REF` on the field).
+
+Both feed the same trait: `CCloned` spans deep copy and refcount bump, so
+`refcount` decides which ROUTINE backs `Clone`, not which wrapper type.
 
 Both may be set: a refcounted type is often also deep-copyable.
 
@@ -101,10 +107,10 @@ Three agent-fillable keys ride on a field record:
 - **`refcount`** -- `true` on the ONE field storing this type's reference count
   (the datum an up_ref bumps and a down-ref decrements), `false`/absent
   otherwise. Any field kind: a refcount is a by-value member, not a pointer. It
-  is what makes the type `CArc`-shaped rather than `CBox`-shaped, so it decides
-  which trait each `dropped_by` / `cloned_by` routine backs. It also names the
-  field a generated shim reads when the type carries a refcount but exposes no
-  up_ref routine.
+  decides which ROUTINE backs the type's `CDropped` / `CCloned` impl (down-ref
+  and up_ref vs `*_free` and `*_dup`); the wrapper is `CBox` either way. It also
+  names the field a generated shim reads when the type carries a refcount but
+  exposes no up_ref routine.
 - **`locked_by`** -- the concurrency binding on ANY field (pointer or not) that
   is accessed under a lock: `null`, or `{lock, lock_op, unlock_op}`. `lock` names
   the type's field or global variable storing the lock object that guards this field; `lock_op` is
@@ -133,8 +139,8 @@ Per pointer field. Composer emits a null skeleton; the agent fills it.
 - **`string`** -- Is there any execution path where this pointer is a NUL-terminated string?
   If yes, `true`; otherwise `false`.
 - **`owned`** -- `true` if the field is owned by the type, `false` otherwise.
-  Whether that ownership becomes `CBox` or `CArc` is the FIELD-TYPE's `refcount`,
-  not this flag.
+  Ownership is a `CBox` either way; the FIELD-TYPE's `refcount` decides whether
+  that `CBox`'s teardown is a down-ref or a plain free, not this flag.
 - **`borrowed`** -- `null`, or `{lifetime}`: the pointer is borrowed, bound to
   another entity's lifetime. Sources are `self` (the enclosing struct),
   `field:<name>` (a sibling field's storage), `static`, or `other` -- the

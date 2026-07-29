@@ -317,7 +317,7 @@ def _materialize_manifests(layout, doc: dict) -> str:
     by denying ``clippy::undocumented_unsafe_blocks`` workspace-wide, inherited
     via ``[lints] workspace = true`` (the ``-sys`` crates don't opt in, keeping
     their generated-code ``allow``)."""
-    crustify_crate = Path(__file__).resolve().parents[3] / "crustify-crate"
+    crustify_prim = Path(__file__).resolve().parents[3] / "crustify-prim"
     crates = doc.get("crates") or {}
     # A wrapper crate becomes "real" once it has a scaffolded lib.rs (members were
     # placed there); skip empty ones (e.g. a foreign lib with no wrappers). NOTE:
@@ -333,7 +333,7 @@ def _materialize_manifests(layout, doc: dict) -> str:
         manifest = crate_dir / "Cargo.toml"
         if not manifest.exists():
             manifest.write_text(
-                _crate_manifest(name, c, crate_dir, layout, crustify_crate, real))
+                _crate_manifest(name, c, crate_dir, layout, crustify_prim, real))
             written += 1
         members += _add_workspace_member(
             ws_toml, os.path.relpath(crate_dir, layout.rust).replace(os.sep, "/"))
@@ -343,14 +343,14 @@ def _materialize_manifests(layout, doc: dict) -> str:
 
 
 def _crate_manifest(name: str, c: dict, crate_dir: Path, layout,
-                    crustify_crate: Path, real: dict) -> str:
+                    crustify_prim: Path, real: dict) -> str:
     def rel(p: Path) -> str:
         return os.path.relpath(p, crate_dir).replace(os.sep, "/")
-    # `crustify-crate` lives OUTSIDE `rust/` (up at the git root), so a relative
+    # `crustify-prim` lives OUTSIDE `rust/` (up at the git root), so a relative
     # path is depth-sensitive and breaks inside a git worktree (which sits two
     # levels deeper under `crustify/.worktrees/<slug>/`). Use an absolute path so
     # it resolves identically from the main checkout and from any worktree.
-    deps = [f'crustify = {{ path = "{crustify_crate}" }}']
+    deps = [f'crustify-prim = {{ path = "{crustify_prim}" }}']
     # The crate's -sys FFI dep: explicit `sys_crate`, else the `<name>-sys`
     # convention (foreign wrapper crates carry no `sys_crate` but still reference
     # `ffi::` from their bindgen crate, e.g. libpthread → libpthread-sys).

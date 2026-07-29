@@ -53,7 +53,7 @@ Translate each function / global body to **idiomatic** safe Rust and
 whether it needs any updating or fixing. If a symbol in your workset has a
 wrapper calling into `ffi::`, port its body to Rust and remove the `ffi::`
 call. Obey the established translation philosophy and leverage the primitives
-from `crustify-crate` to express raw pointers and types safely in native Rust.
+from `crustify-prim` to express raw pointers and types safely in native Rust.
 
 **`[var]`-prefixed items**: are file-scope globals (dispatch tables,
 constants, mutable state) - port them as idiomatic Rust (`static` array,
@@ -119,5 +119,5 @@ Run the audit command from the `crustify-oracle` skill to get potential sites
 that are still using your symbol workset as naked `ffi::` calls, whether your
 own ports still use raw pointer args, return, or in-body statements, which may
 be signals that they need to use the ported function you wrote, and your port
-should use the `define_type!` wrapped types and the crustify-crate smart
+should use the `define_type!` wrapped types and the crustify-prim smart
 pointers / traits. Fix them, unless justified.

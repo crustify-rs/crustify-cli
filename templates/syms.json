@@ -110,7 +110,7 @@
             "borrowed": null,
             "nullable": false,
             "mutable": null,
-            "note": "SSL_new bumps the SSL_CTX refcount and retains a shared ref -> CArc",
+            "note": "SSL_new bumps the SSL_CTX refcount and retains a shared ref -> CBox via impl_cloned_upref!",
             "lifetime": {
               "is_dropped": null,
               "is_disposed": null,

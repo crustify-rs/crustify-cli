@@ -942,7 +942,7 @@ def _port_crate_cargo_toml(crate: str, rust_root: Path) -> str:
         if p.is_dir() and p.name.endswith("-sys") and (p / "Cargo.toml").exists()
     )
     lib_name = crate.replace("-", "_")
-    deps = ['crustify = { path = "../../../../crustify-crate" }', 'paste = "1"']
+    deps = ['crustify-prim = { path = "../../../../crustify-prim" }', 'paste = "1"']
     deps += [f'{d} = {{ path = "../{d}" }}' for d in sys_deps]
     return (
         "[package]\n"

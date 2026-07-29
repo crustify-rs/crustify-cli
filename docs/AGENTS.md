@@ -102,7 +102,7 @@ fully-checked Rust**. This is load-bearing - the steps assume it.
     
     (2) manual memory management for types / pointers whose lifetime / ownership
     semantics **cannot be expressed** through the smart pointers and traits from
-    `crustify-crate`.
+    `crustify-prim`.
     
     (3) calling an `ffi::` routine inside its own safe wrapper or inside Rust-native
     functions if the `ffi::` routine does not have a safe wrapper yet. Known routines

@@ -60,7 +60,7 @@ invokes BOTH operations in the correct order - field disposer first, then
 storage free - reconstituting the one-`Drop` contract. When C already
 provides an orchestrating destructor that does both, bind `Drop` to that
 alone. For an embedded / by-value header (disposer only -> `CVal`),
-`Drop` calls the disposer; for a heap header (`CBox` / `CArc`), `Drop`
+`Drop` calls the disposer; for a heap header (`CBox`), `Drop`
 calls disposer-then-free, or the orchestrator when one exists.
 
 **Analysis signal.** The dtor `{shared, exclusive, fields}` split names

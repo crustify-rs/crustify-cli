@@ -176,8 +176,9 @@ composer's top-level structural keys -- so `--update` replaces `ptr_args[i].ptr`
   cleanup borrows the container).
   - **`is_cloned`** -- `null`, or `{deep, upref}`: the method produces a copy of
     the arg. `deep` = a fresh allocation -> `Clone for CBox` on a type with no
-    refcount, else a plain method (`CArc`'s `Clone` is its up_ref). `upref` = a
-    refcount bump -> `Clone for CArc`. Both MAY be set: a body that branches
+    refcount, else a plain method (a refcounted type's `Clone` is its up_ref).
+    `upref` = a refcount bump -> also `Clone for CBox`, via
+    `impl_cloned_upref!`. Both MAY be set: a body that branches
     between the two, or a `void *` whose concrete element decides at
     runtime. Requires `borrowed` (it reads the source to copy it).
 - **`nullable`** -- may be NULL -> Rust `Option<...>`.

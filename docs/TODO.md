@@ -114,6 +114,64 @@ porting the C consumers (see the callback-gate note below).
 
 ---
 
+## Use cbindgen for the C-side re-export declarations instead of the port agent (2026-07-28)
+
+`port.md` currently makes the agent hand-write **both** halves of the re-export
+seam:
+
+- **Sec 5** -- the `#[no_mangle]` body in `mod ffi_export`, which reconstructs
+  wrappers from raw params and delegates to the idiomatic `pub(crate) fn`;
+- **Sec 6a** -- the C `#else` branch: an `extern` declaration for every ported
+  symbol, plus the `#define <name> crustify_<file>__<name>` redirect for the
+  TU-local kinds.
+
+Sec 6a is pure transcription -- the C signature already exists, and the agent is
+copying it into a declaration that must match the Rust `#[no_mangle]` item
+exactly or the link is silently ABI-wrong. That is bookkeeping, not judgement,
+and by the pipeline's own split it belongs in a deterministic composer.
+`cbindgen` does exactly this: it parses Rust source (via `syn`, no rustc) and
+emits a C header declaring the crate's `#[no_mangle] extern "C"` items and
+`#[repr(C)]` types.
+
+**What cbindgen can and cannot take over.** It generates *declarations for items
+that are already exported* -- it does **not** synthesise the marshalling body.
+So Sec 5 stays agent work (or becomes a macro; see the constructor-macro item
+above): reconstructing a wrapper from a raw param is exactly the judgement
+cbindgen has no basis for. Sec 6a is the part that moves.
+
+**Three candidate uses, increasing ambition:**
+
+1. **Verification oracle (cheapest, do first).** Keep the agent writing Sec 6a,
+   run cbindgen over the port crate, and diff its output against what the agent
+   wrote *and* against the original C declarations in the header. Any mismatch
+   is an ABI bug the two-variant build matrix (Sec 7) may not catch -- a wrong
+   pointer depth or a missing `const` links fine and corrupts at run time.
+2. **Replace Sec 6a.** Emit the `#else` branch from cbindgen output. Needs the
+   TU-local `crustify_<file>__<name>` naming to be expressible; `cbindgen.toml`
+   has renaming rules, but whether they can key off our per-symbol `kind`
+   (`function_static` / `function_inline_tu` / `global_static` vs the exported
+   kinds) is unverified -- probably needs a post-pass over cbindgen's output
+   rather than pure config.
+3. **Header parity check for the whole seam.** Once (2) holds, cbindgen output
+   *is* the contract between the C build and the port crate, so the
+   `CRUSTIFY_<FILE>` switch can be validated structurally instead of only by
+   building both variants.
+
+**Open questions:**
+
+- Does cbindgen handle the `#[repr(C)]` types our ported files re-export, or
+  only the function signatures? Types crossing the seam by value would need it.
+- Interaction with the per-file `mod ffi_export` layout: cbindgen works
+  per-crate, our fencing is per-C-file. Emitting one header per crate and
+  fencing per file may be fine, or may need `--config` per module.
+- It parses syntactically, so macro-generated `#[no_mangle]` items (anything the
+  `define_*!` family might grow) are invisible to it. Check before relying on it
+  as an oracle -- a false "no drift" is worse than no check.
+- Scope: this is the **port** stage only. The wrap stage's direction is C -> Rust
+  and cbindgen has nothing to say about it.
+
+---
+
 ## Treat mmap-like resource acquirers as byte-level allocators (alloc stage)
 
 The alloc stage (`alloc.md` analyzer -> `alloc.json`) currently catalogues only
@@ -233,7 +291,7 @@ mutable-global gap noted for `DRIFTS.md`.
 
 ## `CVec` / `CrustifyStr` `Clone` -- primitives done; wrapper opt-in + deep clone pending
 
-DONE (crate, `crustify-crate/src/smart_pointers.rs`): both now have a
+DONE (crate, `crustify-prim/src/owned_refs.rs`): both now have a
 **conditional** `Clone` gated on the strategy registering a copy -- a free-only
 strategy is deliberately not `Clone` (a `.clone()` is a compile error, never a
 silent shallow double-freeing copy; the types are never `#[derive(Clone)]`).
@@ -271,7 +329,7 @@ REMAINING:
 ## Migrate libgit2 consumer to the `*mut T::C` pointer seam (2026-07-06)
 
 The crate's owning pointer seam now speaks the **raw ffi type** instead of the
-wrapper type: `CBox` / `CArc` / `CUniqueArc` `as_ptr` / `from_raw` / `into_raw`
+wrapper type: `CBox`'s `as_ptr` / `from_raw` / `into_raw`
 changed from `*mut T` to `*mut T::C` (via the enriched `CCell: type C`). This
 makes C interop cast-free (`CBox::from_raw(ffi::X_new())`, `ffi::X_free(b.into_raw())`).
 
@@ -288,8 +346,14 @@ context (return type / binding) or a turbofish. Two mechanical shapes:
   cast **deletes** entirely: `from_raw(p.cast::<W>()) -> from_raw(p)`. So the
   change is mostly a net *cleanup* (strips wrapper-cast boilerplate).
 - **Context-free `from_raw`** (`let _ = ...`, `drop(...)`) additionally needs the
-  turbofish supplied (~14 sites): `CArc::from_raw(x.cast::<W>()) ->
-  CArc::<W>::from_raw(x.cast())`.
+  turbofish supplied (~14 sites): `CBox::from_raw(x.cast::<W>()) ->
+  CBox::<W>::from_raw(x.cast())`.
+
+SUPERSEDED IN PART (2026-07-29): `CArc` / `CUniqueArc` / `CArcWith` were dropped
+from the crate; every refcounted site is now a `CBox` whose `c_free` is the
+down-ref and whose `c_clone` is the `up_ref` (`impl_dropped!` +
+`impl_cloned_upref!`). The libgit2 sites still need the `*mut T::C` migration
+above, but the wrapper rename folds into the same pass.
 
 Files: `odb/{odb_pack,odb,cache,oid,odb_backend_api}.rs`, `util/alloc.rs`,
 `pack/{indexer,midx_h,commit_graph_h}.rs`, `object/object_h.rs`. Run the regex,
@@ -370,6 +434,42 @@ edge relations -- closes (a). (3) Soften the "COMPLETE tree-wide" wording in bot
 schema docs to "complete within the extracted build configuration + static call
 graph." Pairs with the 2026-06-04 macro-expansion-provenance item (same
 CodeQL-single-view family) and the 2026-06-16 inline-fn-ptr callback item.
+
+**Note (2026-07-28) -- maximal-feature build as the cheap version of fix (2).**
+Before paying for N builds + an edge-relation union, try a single build
+configured with **every optional feature on** (`--enable-all` /
+`./config enable-...` for openssl, all `-D<feature>=ON` for CMake). One build,
+no composer changes, and it recovers the whole `#ifdef FEATURE` class -- which is
+most of blind spot (a). `build_propose.md` would need to prefer a
+maximal-feature configure line over the project's default.
+
+Two things it does **not** fix, so fix (2) stays on the table:
+- **Mutually-exclusive branches** (`#ifdef _WIN32 / #else`, FIPS on/off). These
+  are a genuine either/or, not optional extras -- only multi-config union
+  reaches both arms.
+- **Files the build system excludes entirely** (platform backends never handed
+  to the compiler). Bigger in practice than the `#ifdef` loss and invisible to
+  a feature flag. Cheap complement: also create a `--build-mode=none` DB (CLI
+  >= 2.21.4, GA 2025-10) -- it infers TUs from file extensions rather than from
+  the build, so it picks up untraced files, while the traced DB keeps correct
+  flags and build-time generated code. Union the two.
+
+**Measure before fixing.** CodeQL retains the preprocessor directives even for
+branches it never parsed, so the loss is queryable from the existing substrate:
+`PreprocessorBranch.wasTaken()` holds only where some TU took the branch, and
+`PreprocessorBranchDirective.getNext()` walks to the matching `#else`/`#endif`
+for the skipped source range. A `not pb.wasTaken()` query plus a diff of `*.c`
+on disk against the DB's `File` entities gives a coverage number -- worth having
+regardless of which fix is chosen, and it tells us whether this is worth paying
+for on a given target.
+
+**Counterpoint worth recording:** for wrapper generation, config-conditional
+extraction is arguably *correct*, not lossy -- a symbol behind a disabled
+`#ifdef` is absent from the `.so` we link against, so wrapping it is a link
+error, not a recovered feature. The real consequence is that the generated
+`-sys` crate is valid only for the extracted configuration, i.e. the C feature
+flags ought to surface as Cargo features. That reframing may make the whole item
+lower priority than it looks.
 
 ---
 
@@ -1173,14 +1273,14 @@ Two pieces of work are parked here:
      primitive through the crustify trait. Migrate them only as part of
      full nativization (after layout sovereignty), never standalone.
 
-  2. **Pinned native handle in `crustify-crate`.** Once a type *is*
+  2. **Pinned native handle in `crustify-prim`.** Once a type *is*
      Rust-allocated but still exchanges its (opaque) handle with C, the
      allocation must not move after exposure. Today this is expressible
      with std `Pin<Box<T>>` over the `!Unpin` `CType` (`define_type!`
-     already bakes in `PhantomPinned`, see `crustify-crate/src/c_type.rs`),
+     already bakes in `PhantomPinned`, see `crustify-prim/src/c_type.rs`),
      but there is no ergonomic crate-level primitive (a `CPinBox<T>` /
      pinned `CBox` analogue) that ties the pinned heap handle to the
-     crate's ownership model the way `CBox`/`CArc` do for C-allocated
+     crate's ownership model the way `CBox` does for C-allocated
      pointers. Add one when the first real use site lands.
 
 ### Why we're not doing it now
@@ -1236,7 +1336,7 @@ ctors) and the scaffolder's two-`Drop` emit.
 
 ## 2026-06-12 - Kill *Stack/*Embed companions + hand-written impl Drop -- DONE
 
-`crustify-crate`: `define_type!` forwards `uninit()`/`zeroed()` to `CType`;
+`crustify-prim`: `define_type!` forwards `uninit()`/`zeroed()` to `CType`;
 `CValued` trait + `CVal<T>` + `impl_cvalued!` added (`smart_pointers.rs`,
 `macros.rs`). All 7 target subjects migrated to `CVal` in the libgit2 port
 (`GitPool`/`GitMap`/`GitHashCtx`/`GitOidarray`/`GitCache`/... via `impl_cvalued!`);

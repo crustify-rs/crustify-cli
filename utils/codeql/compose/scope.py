@@ -303,9 +303,10 @@ SYNTHETIC_KINDS = ("string", "array")  # buffer-pass clusters
 
 
 # Destructor role keys of a synthetic buffer cluster's `drop` block: `shared`
-# (refcount-decrementing free, pairs with up_ref -> CArc), `exclusive`
-# (sole-owner plain free -> CBox), `fields` (the by-value POD disposer,
-# *_dispose / *_cleanup -> CVal). A struct's `dropped_by` carries no roles.
+# (refcount-decrementing free, pairs with an up_ref), `exclusive` (sole-owner
+# plain free), `fields` (the by-value POD disposer, *_dispose / *_cleanup ->
+# CVal). `shared` and `exclusive` both back `CDropped::c_free` on a `CBox`; the
+# role records which C mechanism it is. A struct's `dropped_by` carries no roles.
 _DROP_ROLE_KEYS = ("shared", "exclusive", "fields")
 
 

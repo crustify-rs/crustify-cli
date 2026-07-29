@@ -127,7 +127,7 @@ def _null_ptr_skeleton() -> dict[str, Any]:
     placeholders by the composer."""
     return {
         # scalar: ONE pointee. null | {by_val: true} (points at a single inline
-        # value -> COwn/CBox) | {by_ref: {owned, borrowed}} (points at a single
+        # value -> CVoidBox/CBox) | {by_ref: {owned, borrowed}} (points at a single
         # pointer -- a `T**` out-param; owned/borrowed = the INNER pointee's).
         # Co-exists with `array` (a generic allocator may serve BOTH a singleton
         # and a buffer); a pointer must be at least one of {scalar, array, string}.
@@ -455,8 +455,9 @@ def _lifecycle_skeleton() -> dict[str, Any]:
     #   dropped_by = a flat list of this type's destructors.
     #   cloned_by.deep = duplicator(s) that produce a fresh allocation;
     #     cloned_by.upref = refcount bump(s). A refcounted type takes its `Clone`
-    #     from the upref (-> CArc) and its deep dups stay plain methods; a type
-    #     with no refcount takes `Clone` from the deep duplicator (-> CBox).
+    #     from the upref and its deep dups stay plain methods; a type with no
+    #     refcount takes `Clone` from the deep duplicator. Both land on
+    #     `CCloned` / `Clone for CBox` -- only the registered routine differs.
     #   fields_disposed_by = a flat list of this type's own methods that dispose
     #     its fields.
     # See docs/schemas/types.md (dropped_by / cloned_by / fields_disposed_by).

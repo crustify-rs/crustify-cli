@@ -134,8 +134,8 @@ class CrustifyWrap(CrustifyAgent):
             "rs_out":         self._rs_out,
             "deps":           json.dumps(self._deps),
             "discipline":     str(crustify_root / "docs" / "DISCIPLINE.md"),
-            "crustify_crate": str(
-                crustify_root / ".." / "crustify-crate" / "src" / "lib.rs"),
+            "crustify_prim": str(
+                crustify_root / ".." / "crustify-prim" / "src" / "lib.rs"),
             # Always-on principles preamble (AGENTS.md), with the role-scoped
             # skill index spliced into its `<!-- SKILLS_INDEX -->` sentinel.
             # Inlined as `{principles}` (type_wrapper.md; harmless if unused).

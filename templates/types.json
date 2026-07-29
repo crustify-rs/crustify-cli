@@ -165,7 +165,7 @@
             "borrowed": null,
             "nullable": true,
             "mutable": null,
-            "note": "Peer cert; refcounted -> CArc. The session dtor down-refs via X509_free; its clone up-refs via X509_up_ref."
+            "note": "Peer cert; refcounted. The session dtor down-refs via X509_free; its clone up-refs via X509_up_ref -> CBox with impl_dropped! + impl_cloned_upref!."
           }
         }
       ]
