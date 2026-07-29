@@ -8,11 +8,7 @@ query syms --update-help`, so meaning and shape never duplicate.
 
 One entry per symbol (function, macro, global, or callback -- a function-pointer
 typedef) whose definition -- or, when the symbol is never defined (a header
-typedef/decl), its declaration -- lives in a file of this stem-group. Two entry
-shapes share one schema: a BASE shape carried by every entry, plus an optional
-PORT-SCOPE ADDITIONS layer (`used_by`, `depends_on`) the composer adds when the
-entry's defining file is listed in `crustify/targets/<target>/scope.json`. There
-is no separate wrap vs port template: a wrap entry is simply base-only.
+typedef/decl), its declaration -- lives in a file of this stem-group.
 
 Each `## <field>` section documents one record field; the heading name is the
 field key.
@@ -25,13 +21,22 @@ Files are grouped into one manifest dir per `path_partition.manifest_dir_for(fil
 absolute path) route under `analysis/system/` (e.g. `/usr/include/string.h` ->
 `analysis/system/usr/include/string/syms.json`).
 
-## port_additions
+## reach fields
 
-The two port-scope fields (`used_by`, `depends_on`) are emitted only when the
-entry's `defined_in` -- or `declared_in[0]` for declaration-only entries -- is
-listed under `.port` in `crustify/targets/<target>/scope.json`. Wrap-scope
-entries omit both. A macro's body is never emitted; the agent reads the
-expansion from source when it needs to classify or port it.
+`used_by` and `depends_on` are emitted for EVERY entry, port-scope and
+wrap-scope alike, and carry the full scope-agnostic reach: `depends_on`
+includes body-level callees and field accesses even for an entry no target
+ever ports. The manifest is a shared repo-tier record of facts; it holds no
+port/wrap shape, and consumers apply scope themselves against
+`crustify/targets/<target>/scope.json`.
+
+Two do. `analyze dag` narrows edges per node -- a wrap-scope node contributes
+only its signature, since a binding is emitted from the signature alone and
+its body is never translated. `query --methods` filters the consumer
+footprints to scope at read time. Both derive scope; neither is baked here.
+
+A macro's body is never emitted; the agent reads the expansion from source
+when it needs to classify or port it.
 
 ## name
 

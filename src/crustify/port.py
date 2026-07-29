@@ -64,9 +64,9 @@ def _preflight(target: Path, layout: "Layout") -> Path:
         raise SystemExit(
             f"port: no analysis tree at {analysis}. Run "
             f"`crustify {target} analyze --all` first.")
-    if not (analysis / "deps-dag.json").exists():
+    if not layout.deps_dag(target).exists():
         raise SystemExit(
-            f"port: no deps-dag.json at {analysis}. Run "
+            f"port: no deps-dag.json at {layout.deps_dag(target)}. Run "
             f"`crustify {target} analyze dag` first.")
     scope_json = layout.scope(target)
     if not scope_json.exists():
@@ -186,7 +186,7 @@ def port(
 
     layout = Layout.discover(target)
     scope_json = _preflight(target, layout)
-    dag = json.loads((layout.analysis / "deps-dag.json").read_text())
+    dag = json.loads(layout.deps_dag(target).read_text())
     print(f"[crustify port] deps DAG: {dag.get('stats')}")
 
     by_key, by_name = S.load_nodes(dag)

@@ -48,9 +48,9 @@ def _preflight(target: Path, layout: "Layout") -> Path:
             f"wrap: no analysis tree at {analysis}. Run "
             f"`crustify {target} analyze --all` first."
         )
-    if not (analysis / "deps-dag.json").exists():
+    if not layout.deps_dag(target).exists():
         raise SystemExit(
-            f"wrap: no deps-dag.json at {analysis}. Run "
+            f"wrap: no deps-dag.json at {layout.deps_dag(target)}. Run "
             f"`crustify {target} analyze dag` first."
         )
     scope_json = layout.scope(target)
@@ -266,7 +266,7 @@ def wrap_types(
 
     layout = Layout.discover(target)
     scope_json = _preflight(target, layout)
-    dag = json.loads((layout.analysis / "deps-dag.json").read_text())
+    dag = json.loads(layout.deps_dag(target).read_text())
     print(f"[crustify wrap] deps DAG: {dag.get('stats')}")
 
     by_key, by_name = S.load_nodes(dag)

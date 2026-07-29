@@ -2011,7 +2011,7 @@ def query_dag(
     from crustify.layout import Layout
 
     layout = Layout.discover(target)
-    dag_path = layout.analysis / "deps-dag.json"
+    dag_path = layout.deps_dag(target)
     if not dag_path.exists():
         raise SystemExit(
             f"query dag: no deps-dag.json at {layout.analysis}. "

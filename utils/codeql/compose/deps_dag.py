@@ -198,9 +198,17 @@ def _is_real(entry: dict, key: str = "name") -> bool:
     return bool(v) and not str(v).startswith("(")
 
 
-def _field_ctype_refs(entry: dict) -> set[str]:
+def _field_ctype_refs(entry: dict, keep_fields: set[str] | None = None) -> set[str]:
+    """Type refs from a struct's fields.
+
+    ``keep_fields`` restricts to the named fields — the port-touched subset
+    for a wrap-scope struct, whose other fields are layout bound opaquely and
+    must not order this target's work. None keeps every field (port scope).
+    """
     refs: set[str] = set()
     for fld in entry.get("fields") or []:
+        if keep_fields is not None and fld.get("name") not in keep_fields:
+            continue
         t = fld.get("type")
         if t:
             refs.add(t)
@@ -222,7 +230,31 @@ def _sig_type_refs(entry: dict) -> set[str]:
 
 # ------------------------------------------------------------------- collect
 
-def _collect(analysis_root: Path):
+def _collect(analysis_root: Path,
+             port_syms: set | None = None,
+             port_fields: dict[str, set[str]] | None = None):
+    """Collect nodes/edges from the analysis tree, narrowed to one target.
+
+    The tree is scope-agnostic and ACCUMULATES across targets: an entry that
+    was port-scope for an earlier target keeps the full body-level
+    ``depends_on`` it gained then. Building this target's graph from that
+    unfiltered tree imports another target's body edges, which deepens the
+    layering for work this target never does.
+
+    So edges are narrowed per node against THIS target's scope:
+
+      - **port-scope symbol** — every edge. Its body is translated, so its
+        callees and field-derived type uses are real dependencies.
+      - **wrap-scope symbol** — signature only. A binding is emitted from the
+        signature alone: callee edges are dropped outright, and type edges
+        keep only signature/opaque uses (``fields: []``).
+      - **wrap-scope struct** — only fields the port scope actually touches
+        (``port_fields``); the rest of the layout is never reached through
+        this target and must not order its work.
+
+    ``port_syms`` of None disables narrowing (whole-tree graph, the old
+    behaviour) — used by callers with no scope in hand.
+    """
     types: dict[str, TypeNode] = {}
     syms: dict[SymKey, SymNode] = {}
 
@@ -244,7 +276,15 @@ def _collect(analysis_root: Path):
                 dh = e.get("declared_in")
                 n.declared_in = dh[0] if isinstance(dh, list) and dh else (
                     dh if isinstance(dh, str) else None)
-            n.ctype_refs |= _field_ctype_refs(e)
+            # A wrap struct only orders work through the fields the port
+            # scope actually reads; its other fields are layout it binds
+            # opaquely. port_fields carries that per-target subset.
+            if port_fields is not None and tag not in port_fields:
+                n.ctype_refs |= _field_ctype_refs(e, keep_fields=set())
+            elif port_fields is not None:
+                n.ctype_refs |= _field_ctype_refs(e, keep_fields=port_fields[tag])
+            else:
+                n.ctype_refs |= _field_ctype_refs(e)
             # Array clusters are fieldless but carry `elems` — the concrete
             # element types their typed CVec<T> aliases reference. The generic
             # `CVec<T, S>` does NOT depend on T (the strategy frees by byte
@@ -305,14 +345,23 @@ def _collect(analysis_root: Path):
             if "depends_on" in e:
                 n.has_dep = True
                 dep = e["depends_on"] or {}
+                # `depends_on` is only ever emitted for an entry that was
+                # port-scope for SOME target; whether it is port-scope for
+                # THIS one decides how much of it applies.
+                is_port = port_syms is None or key in port_syms
                 for d in dep.get("types") or []:
-                    if d.get("type"):
+                    if not d.get("type"):
+                        continue
+                    # A wrap node keeps signature/opaque uses (fields: []) and
+                    # drops field-derived ones: it binds the type, never reads it.
+                    if is_port or not d.get("fields"):
                         n.dep_on_types.add(d["type"])
-                for d in dep.get("syms") or []:
-                    if d.get("name"):
-                        n.dep_on_syms.add(
-                            (d["name"], _sym_filekey(d.get("defined_in"),
-                                                     d.get("declared_in"))))
+                if is_port:
+                    for d in dep.get("syms") or []:
+                        if d.get("name"):
+                            n.dep_on_syms.add(
+                                (d["name"], _sym_filekey(d.get("defined_in"),
+                                                         d.get("declared_in"))))
             n.sig_type_refs |= _sig_type_refs(e)
     return types, syms
 
@@ -775,8 +824,46 @@ def _populate_nfields(analysis_root: Path, types: dict[str, TypeNode]) -> None:
         n.nfields = cnt if cnt is not None else by_name.get(tag, 0)
 
 
-def compose(analysis_root: Path) -> dict[str, Any]:
-    types, syms = _collect(analysis_root)
+def port_touched_fields(analysis_root: Path, port_syms: set) -> dict[str, set[str]]:
+    """``{type tag: field names the port scope reads}``.
+
+    Derived from the port-scope symbols' own ``depends_on.types[].fields``,
+    which is exactly "fields this function accesses" — the same quantity the
+    types composer computes transiently as ``focus_by_key`` for the analyzer's
+    focus. A type absent from the result is reached only opaquely.
+    """
+    touched: dict[str, set[str]] = {}
+    for f in sorted(analysis_root.rglob("syms.json")):
+        try:
+            doc = json.loads(f.read_text())
+        except Exception:
+            continue
+        for e in doc.get("symbols", []):
+            key = (e.get("name"),
+                   _sym_filekey(e.get("defined_in"), e.get("declared_in")))
+            if key not in port_syms:
+                continue
+            for d in (e.get("depends_on") or {}).get("types") or []:
+                tag = d.get("type")
+                if tag:
+                    touched.setdefault(tag, set()).update(d.get("fields") or [])
+    return touched
+
+
+def compose(analysis_root: Path, scope_json: Path | None = None) -> dict[str, Any]:
+    """Build the layered DAG. With ``scope_json``, narrowed to that target
+    (see :func:`_collect`); without it, the whole tree, unnarrowed."""
+    port_syms = port_fields = None
+    if scope_json is not None and Path(scope_json).is_file():
+        from . import scope as _scope
+        port_syms = set()
+        for kind in ("functions", "globals", "macros"):
+            try:
+                port_syms |= _scope.load_port_entities(Path(scope_json), kind)
+            except Exception:
+                pass
+        port_fields = port_touched_fields(analysis_root, port_syms)
+    types, syms = _collect(analysis_root, port_syms, port_fields)
     _populate_nfields(analysis_root, types)
     amap = _alias_map(analysis_root, types)
     ext_syms, ext_types, wedge, forced_back = _build_edges(types, syms, amap)

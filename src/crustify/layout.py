@@ -160,6 +160,16 @@ class Layout:
     def scope(self, target: Path) -> Path:
         return self.target_dir(target) / "scope.json"
 
+    def deps_dag(self, target: Path) -> Path:
+        """Per-TARGET dependency DAG, beside scope.json.
+
+        Target-tier rather than repo-tier because its edges are narrowed by
+        scope: a wrap-scope node contributes only its signature, so the graph
+        — and therefore the layering that schedules wrap/port — differs per
+        target. The analysis tree it is built from stays scope-agnostic and
+        shared."""
+        return self.target_dir(target) / "deps-dag.json"
+
     def logs(self, target: Path) -> Path:
         return self.target_dir(target) / "logs"
 

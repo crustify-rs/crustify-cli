@@ -753,21 +753,23 @@ def run_buffer_pass(target: Path) -> None:
 
 
 def analyze_dag(target: Path) -> None:
-    """Stage 4: emit deps-dag.json — the scope-agnostic unified
-    types+symbols dependency DAG.
+    """Stage 4: emit this target's layered types+symbols dependency DAG.
 
-    Reads every ``types.json`` / ``syms.json`` under the analysis tree
-    and writes the layered DAG (`stats` + `layers[]`) to
-    ``<analysis>/deps-dag.json``. Downstream (wrap, port) consumes it
-    as the layered work plan; classifying nodes port vs wrap is the
-    consumer's job (apply ``scope.entry_scope`` per origin).
+    Reads the shared, scope-agnostic analysis tree and narrows each node's
+    edges against the target's ``scope.json``: a port-scope node contributes
+    every edge, a wrap-scope node only its signature (see
+    ``compose.deps_dag._collect``). The graph is therefore per TARGET and is
+    written beside scope.json at ``targets/<target>/deps-dag.json``, not into
+    the shared tree.
 
-    Requires a populated analysis tree (``analyze symbols`` + ``types``).
+    Requires a populated analysis tree (``analyze symbols`` + ``types``) and
+    ``analyze scope``.
     """
     from compose.deps_dag import compose as deps_dag_compose
     import json
 
-    analysis = Layout.discover(target).analysis
+    layout = Layout.discover(target)
+    analysis = layout.analysis
     if not analysis.exists() or not any(analysis.rglob("types.json")):
         print(
             f"error: analyze dag requires a populated analysis tree at "
@@ -778,16 +780,27 @@ def analyze_dag(target: Path) -> None:
         )
         sys.exit(1)
 
-    dag = deps_dag_compose(analysis)
-    out = analysis / "deps-dag.json"
+    scope_path = layout.scope(target)
+    if not scope_path.is_file():
+        print(
+            f"error: analyze dag needs {scope_path} to narrow wrap-scope "
+            f"edges.\n"
+            f"       Run `crustify <target> analyze scope` first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    dag = deps_dag_compose(analysis, scope_path)
+    out = layout.deps_dag(target)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(dag, indent=2) + "\n")
-    s = dag["stats"]
+    s = dag.get("stats", {})
     print(
-        f"[crustify analyze dag] {s['nodes']} nodes "
-        f"({s['types']} types / {s['symbols']} syms / "
-        f"{s['external_syms']} ext) / {s['edges']} edges / "
-        f"{s['layers']} layers / {s['sccs_flattened']} cycle(s) flattened "
-        f"({s['fallback_edges']} fallback edges) → {out}"
+        f"[crustify analyze dag] {s.get('nodes')} nodes "
+        f"({s.get('types')} types / {s.get('symbols')} syms / "
+        f"{s.get('external_syms')} ext) / {s.get('edges')} edges / "
+        f"{s.get('layers')} layers / {s.get('sccs_flattened')} cycle(s) "
+        f"flattened ({s.get('fallback_edges')} fallback edges) → {out}"
     )
 
 
@@ -877,7 +890,7 @@ def reset_scope(target: Path) -> None:
 
 def reset_dag(target: Path) -> None:
     """Delete deps-dag.json so the next ``analyze dag`` re-emits fresh."""
-    p = Layout.discover(target).analysis / "deps-dag.json"
+    p = Layout.discover(target).deps_dag(target)
     if p.exists():
         p.unlink()
         print(f"[crustify --reset] removed {p}")

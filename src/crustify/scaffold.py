@@ -97,7 +97,7 @@ def scaffold(
 
     # --- act
     if create:
-        stats = _materialize(layout, entries, _elem_aliases(layout),
+        stats = _materialize(layout, entries, _elem_aliases(layout, target),
                              _scope_map(layout, target), _field_map(layout))
         mstats = _materialize_manifests(layout, doc)
         print(f"[crustify scaffold --create] {stats}{mstats} → {layout.rust}")
@@ -248,7 +248,7 @@ def _path_filter(layout, target, sel: str) -> str:
 
 # ------------------------------------------------------------------- materialize
 
-def _elem_aliases(layout) -> dict[str, list[str]]:
+def _elem_aliases(layout, target) -> dict[str, list[str]]:
     """`element-type tag -> [array-cluster tag, …]` from the deps-dag.
 
     An array cluster is a foundational leaf: the generic `CVec<T, S>` is
@@ -260,12 +260,9 @@ def _elem_aliases(layout) -> dict[str, list[str]]:
     site — not in the cluster's. The dag has already resolved elem strings to
     canonical tags and dropped scalars (no wrapper); missing dag → empty."""
     out: dict[str, list[str]] = {}
-    root = getattr(layout, "analysis", None)
-    if root is None:
-        return out
     try:
-        doc = json.loads((root / "deps-dag.json").read_text())
-    except (OSError, ValueError):
+        doc = json.loads(layout.deps_dag(target).read_text())
+    except (OSError, ValueError, AttributeError):
         return out
     for layer in doc.get("layers", []):
         for n in layer:
