@@ -67,41 +67,14 @@ def _is_out_of_scope(rel_path: str, out_of_scope: list[str]) -> bool:
     return False
 
 
-def enumerate_port_files(config: dict, repo_root: Path) -> list[str]:
-    """Return the repo-root-relative port-scope candidate file paths.
-
-    Two modes:
-
-      - **Hand-authored subset** — when ``config["port_files"]`` is a
-        non-empty list, the port scope is exactly those files (still
-        filtered through ``out_of_scope``). Use this when the port
-        cluster is a logical subset of a directory rather than a whole
-        subtree (e.g. libgit2's ODB/pack files inside ``src/libgit2/``).
-      - **Directory walk** — otherwise, recursively walk ``target`` and
-        take every source/header file not excluded by ``out_of_scope``.
-
-    Either way the result is only the *candidate* set; the T1 tables
-    (via ``_port_entities`` / ``_contributing_files``) decide which of
-    these actually compiled under the build configuration.
-    """
-    out_of_scope = list(config.get("out_of_scope", {}).get("paths", []))
-
-    explicit = config.get("port_files")
-    if explicit:
-        return sorted(
-            rel for rel in explicit
-            if not _is_out_of_scope(rel, out_of_scope)
-        )
-
-    target_rel = config["target"]
-    target_dir = repo_root if target_rel in (".", "") else (repo_root / target_rel)
-    target_dir = target_dir.resolve()
+def _walk_dir(rel_dir: str, repo_root: Path, out_of_scope: list[str]) -> list[str]:
+    """Every source/header file under ``rel_dir``, repo-root-relative."""
+    base = repo_root if rel_dir in (".", "", "/") else (repo_root / rel_dir)
+    base = base.resolve()
 
     files: list[str] = []
-    for p in target_dir.rglob("*"):
-        if not p.is_file():
-            continue
-        if p.suffix not in _ALL_EXTS:
+    for p in base.rglob("*"):
+        if not p.is_file() or p.suffix not in _ALL_EXTS:
             continue
         try:
             rel = str(p.resolve().relative_to(repo_root.resolve()))
@@ -110,7 +83,51 @@ def enumerate_port_files(config: dict, repo_root: Path) -> list[str]:
         if _is_out_of_scope(rel, out_of_scope):
             continue
         files.append(rel)
-    return sorted(files)
+    return files
+
+
+def enumerate_port_files(config: dict, repo_root: Path) -> list[str]:
+    """Return the repo-root-relative port-scope candidate file paths.
+
+    Two modes:
+
+      - **Hand-authored list** — when ``config["port_files"]`` is a
+        non-empty list, the port scope is exactly what it names, and
+        ``target`` is not walked. Entries are repo-root-relative and may
+        be either:
+
+          * a **file** — ``include/internal/statem.h``
+          * a **directory**, written with a trailing slash — ``ssl/`` —
+            which expands to every source/header file beneath it
+
+        The trailing-slash convention matches ``out_of_scope.paths``, so
+        the two path fields read the same way. Directory entries are what
+        make "this whole subtree **plus** these specific headers"
+        expressible: a port cluster often spans a tree it does not own,
+        because the structs its code implements are declared in headers
+        that live elsewhere.
+
+      - **Directory walk** — otherwise, recursively walk ``target`` and
+        take every source/header file not excluded by ``out_of_scope``.
+
+    Either way the result is only the *candidate* set; the T1 tables
+    (via ``_port_entities`` / ``_contributing_files``) decide which of
+    these actually compiled under the build configuration — so naming a
+    file that the build never compiled is harmless, not an error.
+    """
+    out_of_scope = list(config.get("out_of_scope", {}).get("paths", []))
+
+    explicit = config.get("port_files")
+    if explicit:
+        files: list[str] = []
+        for entry in explicit:
+            if entry.endswith("/"):
+                files.extend(_walk_dir(entry, repo_root, out_of_scope))
+            elif not _is_out_of_scope(entry, out_of_scope):
+                files.append(entry)
+        return sorted(set(files))
+
+    return sorted(set(_walk_dir(config["target"], repo_root, out_of_scope)))
 
 
 def _port_entities(t1_dir: Path, candidate_files: set[str]) -> dict[str, list[dict]]:
