@@ -55,7 +55,14 @@
  *                      array dimensions
  *   is_scalar        : "true" iff the type contains no Struct /
  *                      Union / Enum anywhere in its derived-type
- *                      walk; "false" otherwise
+ *                      walk; "false" otherwise. NOTE this answers
+ *                      "contains an aggregate?", NOT "is a pointer?"
+ *                      — use `ptr_depth` for the latter.
+ *   ptr_depth        : pointer indirection count — 0 for a
+ *                      non-pointer, 1 for `T *` / an object-pointer
+ *                      typedef / a function pointer, 2 for `T **`, …
+ *                      Sees THROUGH typedefs that hide the star, which
+ *                      the `field_type` string cannot show
  *
  * Consumer: `utils/codeql/compose/types_manifest.py` —
  * populates `fields[].type` per struct entry in
@@ -81,6 +88,69 @@ string pathOf(File f) {
  * Returns false for pure-primitive chains (`int`, `size_t` →
  * `unsigned long`, `char *`, `void *`).
  */
+/** Holds if `t`'s unwrap chain reaches a `RoutineType` (a function type). */
+predicate reachesRoutineType(Type t) {
+  t instanceof RoutineType
+  or
+  reachesRoutineType(t.(DerivedType).getBaseType())
+  or
+  reachesRoutineType(t.(TypedefType).getBaseType())
+}
+
+/** A typedef whose unwrap chain reaches a `RoutineType` — terminal for the
+ * pointer walk: the identity is the typedef name, not the anonymous routine. */
+predicate isCallbackTypedef(Type t) {
+  t instanceof TypedefType and reachesRoutineType(t)
+}
+
+/** Holds if a pointer level is reachable from `t` through qualifiers/typedefs. */
+predicate reachesPointer(Type t) {
+  t instanceof PointerType
+  or
+  t instanceof FunctionPointerIshType
+  or
+  reachesPointer(t.(SpecifiedType).getBaseType())
+  or
+  reachesPointer(t.(TypedefType).getBaseType())
+}
+
+/**
+ * Pointer indirection count for a FIELD's declared type — the authoritative
+ * "is this field a pointer?" signal, replacing the consumer's old heuristic of
+ * looking for a literal `*` in `field_type`.
+ *
+ * That heuristic was blind to the two shapes where C hides the star behind a
+ * name, both of which then collapsed to a bare scalar field with NO pointer
+ * record and hence no ownership analysis:
+ *
+ *   - an OBJECT-pointer typedef (`typedef struct _filesec *filesec_t;`) —
+ *     `Type.toString()` prints `filesec_t`, and types.csv cannot help because
+ *     `aliasOf` unwraps the star, making `typedef T *P` indistinguishable from
+ *     `typedef T P`;
+ *   - a bare function pointer (`int (*ctrl)(BIO *, int, long, void *)`) —
+ *     modelled as `FunctionPointerIshType`, which is NOT a `PointerType`.
+ *
+ * Mirrors `edges/function_pointer_args.ql::pointerDepth` so a field and a
+ * parameter of the same type report the same depth.
+ */
+int pointerDepthOf(Type t) {
+  if isCallbackTypedef(t)
+  then result = 1
+  else
+    if t instanceof FunctionPointerIshType
+    then result = 1
+    else
+      if t instanceof PointerType
+      then result = 1 + pointerDepthOf(t.(PointerType).getBaseType())
+      else
+        if t instanceof SpecifiedType and reachesPointer(t.(SpecifiedType).getBaseType())
+        then result = pointerDepthOf(t.(SpecifiedType).getBaseType())
+        else
+          if t instanceof TypedefType and reachesPointer(t.(TypedefType).getBaseType())
+          then result = pointerDepthOf(t.(TypedefType).getBaseType())
+          else result = 0
+}
+
 predicate containsAggregateType(Type t) {
   t instanceof Struct
   or t instanceof Union
@@ -214,4 +284,5 @@ select struct_name,
        struct_def_file,
        field_name,
        f.getType().toString() as field_type,
-       isScalarOf(f) as is_scalar
+       isScalarOf(f) as is_scalar,
+       pointerDepthOf(f.getType()) as ptr_depth

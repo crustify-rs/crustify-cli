@@ -26,6 +26,13 @@
  *   loc         : body line span (endLine - startLine + 1) of the definition,
  *                 or 0 for a declaration-only function (no body in the DB).
  *                 Consumed by the port bin-packer's lines-of-code budget.
+ *   is_variadic : "1" if the function takes a trailing `...` (a C variadic
+ *                 like `printf`), "0" otherwise. A variadic has no safe Rust
+ *                 signature — `extern "C"` variadics are unstable and the
+ *                 wrapper must instead bind the `v*`-suffixed `va_list`
+ *                 sibling or emit a fixed-arity shim — so the wrap/port
+ *                 stages need this off the signature, which the `signature`
+ *                 column's parameter list alone does not reveal.
  *
  * Consumer: CrustifySymbolAnalyzer, for enriching call-edge results
  * with linkage + signature; also CrustifyTypeAnalyzer when looking up
@@ -97,10 +104,19 @@ int locOf(Function fn) {
   else result = 0
 }
 
+/**
+ * 1 when the function takes a trailing `...`, else 0. A helper predicate
+ * rather than an inline `if` — the select clause takes terms, not expressions.
+ */
+int isVariadicOf(Function fn) {
+  if fn.isVarargs() then result = 1 else result = 0
+}
+
 from Function fn
 select fn.getName() as name,
        linkageClassOf(fn) as linkage,
        defFileOf(fn) as def_file,
        declFilesOf(fn) as decl_files,
        signatureOf(fn) as signature,
-       locOf(fn) as loc
+       locOf(fn) as loc,
+       isVariadicOf(fn) as is_variadic

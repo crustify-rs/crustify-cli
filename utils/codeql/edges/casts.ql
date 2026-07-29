@@ -13,7 +13,7 @@
  * relation surfaces several distinct C idioms, distinguished only by other
  * signals (field shape, in-degree, first-member embedding), which is a
  * consumer concern:
- *   - typegen ERASURE: `stack_st_X509 -> stack_st` (instance casts to its
+ *   - engine ERASURE: `stack_st_X509 -> stack_st` (instance casts to its
  *     type-erased engine), and the reverse from value getters.
  *   - polymorphic DOWNCAST: `ssl_st -> ssl_connection_st` (base handle cast
  *     to a derived; the embedded-base UPCAST goes through `&derived->base`

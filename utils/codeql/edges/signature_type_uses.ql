@@ -86,7 +86,20 @@ string fnDefFileOf(Function fn) {
  */
 predicate reachableUserType(Type outer, UserType t) {
   outer = t
-  or reachableUserType(outer.(DerivedType).getBaseType(), t)
+  or
+  reachableUserType(outer.(DerivedType).getBaseType(), t)
+  or
+  // Descend INTO a function pointer's SIGNATURE. The `DerivedType` step above
+  // already reaches the `RoutineType` itself, but a routine's parameter and
+  // return types hang off `getAParameterType()` / `getReturnType()` — NOT
+  // `getBaseType()` — so without these two disjuncts the walk dies at the
+  // routine and every user type named by a bare (un-typedef'd) function
+  // pointer is invisible. A typedef'd callback also benefits: the consumer
+  // gains a direct edge to the types in the callback's signature, alongside
+  // the indirect one through the callback's own symbol entry.
+  reachableUserType(outer.(RoutineType).getReturnType(), t)
+  or
+  reachableUserType(outer.(RoutineType).getAParameterType(), t)
 }
 
 from Function fn, UserType t, string pos

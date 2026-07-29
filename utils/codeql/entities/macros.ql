@@ -3,9 +3,8 @@
  *
  * One row per Macro. The macro's head (parameter list as written
  * after the name in the `#define`, or "" for object-like macros) and
- * body text are emitted verbatim so consumers can classify the kind
- * (`macro_constant` vs `macro_symbol` vs `macro_typegen` vs
- * `macro_misc`) without re-querying.
+ * body text are emitted verbatim so a consumer can read what a macro
+ * expands to without re-querying.
  *
  * Conditionally redefined macros produce one row per `#define`
  * site. Consumers that need a single canonical row per name dedup at

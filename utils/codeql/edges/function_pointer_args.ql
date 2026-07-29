@@ -72,6 +72,13 @@ string pathOf(File f) {
 predicate reachesPointer(Type t) {
   t instanceof PointerType
   or
+  // A bare function pointer IS a pointer level, but CodeQL models it as
+  // `FunctionPointerIshType extends DerivedType` — NOT a `PointerType` — so
+  // without this it scored depth 0, failed the `pointerDepth > 0` gate, and
+  // produced no record at all (which is why `"(routine)"` never once appeared
+  // in the emitted CSVs despite being documented below).
+  t instanceof FunctionPointerIshType
+  or
   reachesPointer(t.(SpecifiedType).getBaseType())
   or
   reachesPointer(t.(TypedefType).getBaseType())
@@ -99,15 +106,20 @@ int pointerDepth(Type t) {
   if isCallbackTypedef(t)
   then result = 1
   else
-    if t instanceof PointerType
-    then result = 1 + pointerDepth(t.(PointerType).getBaseType())
+    // A bare function pointer is terminal at depth 1, exactly like a callback
+    // typedef — there is no pointee chain to keep walking, only a signature.
+    if t instanceof FunctionPointerIshType
+    then result = 1
     else
-      if t instanceof SpecifiedType and reachesPointer(t.(SpecifiedType).getBaseType())
-      then result = pointerDepth(t.(SpecifiedType).getBaseType())
+      if t instanceof PointerType
+      then result = 1 + pointerDepth(t.(PointerType).getBaseType())
       else
-        if t instanceof TypedefType and reachesPointer(t.(TypedefType).getBaseType())
-        then result = pointerDepth(t.(TypedefType).getBaseType())
-        else result = 0
+        if t instanceof SpecifiedType and reachesPointer(t.(SpecifiedType).getBaseType())
+        then result = pointerDepth(t.(SpecifiedType).getBaseType())
+        else
+          if t instanceof TypedefType and reachesPointer(t.(TypedefType).getBaseType())
+          then result = pointerDepth(t.(TypedefType).getBaseType())
+          else result = 0
 }
 
 /**
@@ -126,15 +138,22 @@ Type pointerInner(Type t) {
   if isCallbackTypedef(t)
   then result = t
   else
-    if t instanceof PointerType
-    then result = pointerInner(t.(PointerType).getBaseType())
+    // Bare function pointer: the innermost thing is its `RoutineType`, which
+    // `pointeeName` renders as the synthetic marker `"(routine)"`. It names
+    // nothing depend-able (that is what makes it "bare"); the user types in
+    // its signature are recovered separately by the *_type_uses queries.
+    if t instanceof FunctionPointerIshType
+    then result = t.(FunctionPointerIshType).getBaseType()
     else
-      if t instanceof SpecifiedType and reachesPointer(t.(SpecifiedType).getBaseType())
-      then result = pointerInner(t.(SpecifiedType).getBaseType())
+      if t instanceof PointerType
+      then result = pointerInner(t.(PointerType).getBaseType())
       else
-        if t instanceof TypedefType and reachesPointer(t.(TypedefType).getBaseType())
-        then result = pointerInner(t.(TypedefType).getBaseType())
-        else result = t
+        if t instanceof SpecifiedType and reachesPointer(t.(SpecifiedType).getBaseType())
+        then result = pointerInner(t.(SpecifiedType).getBaseType())
+        else
+          if t instanceof TypedefType and reachesPointer(t.(TypedefType).getBaseType())
+          then result = pointerInner(t.(TypedefType).getBaseType())
+          else result = t
 }
 
 /**

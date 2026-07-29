@@ -21,8 +21,8 @@
  * invocation_file, invocation_line)`, NOT by parentage.
  *
  * The `enclosing_name` column is "" for file-scope invocations
- * (e.g. `DEFINE_STACK_OF(SSL_SESSION)` at file scope, which is the
- * typegen reachability form) and the enclosing function's name for
+ * (e.g. `DEFINE_STACK_OF(SSL_SESSION)` at file scope) and the
+ * enclosing function's name for
  * function-body invocations. The two forms produce different
  * reachability semantics — function-body macros reach via a port
  * function calling them, file-scope macros reach via a port file
@@ -40,8 +40,7 @@
  *
  * Consumer: CrustifySymbolAnalyzer (for `called_by.call` / `ref`
  * on macros, and `depends_on.syms.{port,wrap}` on functions whose
- * bodies expand wrap-side macros); CrustifyTypeAnalyzer (for
- * typegen-instantiation site discovery on `generic_type`s).
+ * bodies expand wrap-side macros).
  */
 import cpp
 
