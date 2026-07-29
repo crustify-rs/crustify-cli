@@ -34,7 +34,7 @@ class CrustifyAllocAnalyzer(CrustifyAgent):
     """
 
     name = "CrustifyAllocAnalyzer"
-    model = "claude-sonnet-4-6"
+    model = "anthropic/claude-sonnet-4-6"
     stage = "alloc"
     output = "alloc.json"
 
@@ -84,7 +84,7 @@ class CrustifySymbolAnalyzer(CrustifyAgent):
     """
 
     name = "CrustifySymbolAnalyzer"
-    model = "claude-opus-4-8"
+    model = "anthropic/claude-opus-4-8"
     stage = "symbol_analyzer"
     prompt_dir = "analyzer"
 
@@ -151,7 +151,7 @@ class CrustifyTypeAnalyzer(CrustifyAgent):
     """
 
     name = "CrustifyTypeAnalyzer"
-    model = "claude-opus-4-8"
+    model = "anthropic/claude-opus-4-8"
     stage = "type_analyzer"
     prompt_dir = "analyzer"
 

@@ -23,7 +23,7 @@ class CrustifyPort(CrustifyAgent):
     """Port one scheduled batch of free symbols (functions / globals) C → Rust."""
 
     name = "CrustifyPort"
-    model = "claude-opus-4-8"
+    model = "anthropic/claude-opus-4-8"
     output = None  # writes the Rust workspace; idempotency is the per-item todo.
 
     def __init__(

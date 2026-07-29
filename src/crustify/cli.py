@@ -427,23 +427,38 @@ def main() -> None:
         "--no-file-log",
         action="store_true",
         default=False,
-        help="Disable per-agent log files under .crustify/logs/<session>/.",
+        help="Disable per-agent log files under targets/<target>/logs/<session>/.",
     )
     parser.add_argument(
         "--model",
         default=None,
         metavar="NAME",
-        help="Override every agent's model with this kiss model name "
-             "(e.g. codex/gpt-5.5, claude-opus-4-8). Default: each agent's "
-             "hard-coded model.",
+        help="Override every agent's model. Named <provider>/<model>, "
+             "e.g. anthropic/claude-opus-4-8, openai/gpt-5.6, "
+             "openrouter/z-ai/glm-4.6. The provider selects both the "
+             "billing rates and the CLI that drives it. Default: each "
+             "agent's hard-coded model.",
     )
     parser.add_argument(
         "--backend",
         default=None,
-        choices=["agents_sdk", "relentless"],
-        help="Agent backend driving each stage: agents_sdk (OpenAI Agents SDK, "
-             "default) or relentless (kiss RelentlessAgent). "
-             "Default: config.BACKEND.",
+        help="Agent backend driving each stage. Default: config.BACKEND.",
+    )
+    parser.add_argument(
+        "--billing",
+        default=None,
+        choices=["subscription", "api"],
+        help="How the provider CLI authenticates: subscription (its own "
+             "logged-in account) or api (an API key from the environment). "
+             "Default: config.BILLING.",
+    )
+    parser.add_argument(
+        "--override-base-prompt",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Replace the provider CLI's own base prompt with crustify's "
+             "(default). --no-override-base-prompt keeps the provider's "
+             "instructions underneath crustify's stage prompt.",
     )
     parser.add_argument(
         "--parallel",
@@ -861,38 +876,12 @@ def main() -> None:
         crustify_config.MODEL_OVERRIDE = args.model
     if getattr(args, "backend", None):
         crustify_config.BACKEND = args.backend
+    if getattr(args, "billing", None):
+        crustify_config.BILLING = args.billing
+    if getattr(args, "override_base_prompt", None) is not None:
+        crustify_config.OVERRIDE_BASE_PROMPT = args.override_base_prompt
 
-    # -- Redirect KISS trajectory storage into a per-session subdir.
-    # Only the `relentless` backend runs kiss agents. Under `agents_sdk` this
-    # call would still mkdir an empty `kiss/<session>/.kiss.artifacts/jobs/
-    # <job>/` tree on every invocation and never write a trajectory into it,
-    # so it is skipped entirely.
-    if crustify_config.BACKEND == "relentless":
-        from kiss.core.config import set_artifact_base_dir
-        from crustify import config as _cfg
-
-        from crustify.layout import Layout as _Layout
-        try:
-            _kiss_base = _Layout.discover(target).kiss(target) / _cfg.SESSION_ID
-        except SystemExit:  # crustify/ not set up yet (pre-init command)
-            _kiss_base = Path(target) / "crustify" / "kiss" / _cfg.SESSION_ID
-        set_artifact_base_dir(_kiss_base)
-
-    if args.command == "build":
-        from crustify.build import build_propose, build_execute
-        reset = bool(getattr(args, "reset", False))
-        if args.build_subject == "propose":
-            build_propose(target, reset=reset)
-        elif args.build_subject == "execute":
-            build_execute(target, reset=reset)
-        else:
-            print(
-                f"error: unknown build subject {args.build_subject!r}",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-
-    elif args.command == "audit":
+    if args.command == "audit":
         from crustify.audit import audit as _audit
         _audit(target, all=getattr(args, "all", False),
                names=getattr(args, "name", None),

@@ -32,7 +32,7 @@ class CrustifyBindgenShimmer(CrustifyAgent):
     """Per-``<lib>-sys`` crate: macro/global shims + cargo-check verify loop."""
 
     name = "CrustifyBindgenShimmer"
-    model = "claude-opus-4-8"
+    model = "anthropic/claude-opus-4-8"
 
     def __init__(self, target: Path, *, library: str) -> None:
         super().__init__(target)

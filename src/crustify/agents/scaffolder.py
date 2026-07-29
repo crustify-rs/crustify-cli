@@ -28,7 +28,7 @@ class CrustifyScaffolder(CrustifyAgent):
     """
 
     name = "CrustifyScaffolder"
-    model = "claude-opus-4-8"
+    model = "anthropic/claude-opus-4-8"
     stage = "scaffolder"
     tier = "repo_root"
 

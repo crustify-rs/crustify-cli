@@ -7,9 +7,7 @@ name = "crustify"
 version = "0.1.0"
 description = "Multi-agent C-to-Rust translation pipeline"
 requires-python = ">=3.13"
-dependencies = [
-    "kiss-agent-framework",
-]
+dependencies = []
 
 [project.scripts]
 crustify = "crustify.cli:main"

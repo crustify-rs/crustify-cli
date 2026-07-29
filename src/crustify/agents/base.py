@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import IO
 
-from kiss.core.print_to_console import ConsolePrinter
-from kiss.core.printer import MultiPrinter, Printer
-
+from crustify.agentlog import AgentLog, open_agent_log
 from crustify.artifact_store import ArtifactStore
 from crustify.layout import Layout
 
@@ -86,7 +83,7 @@ def _resolve_repo_root(target: Path) -> Path:
 
 
 class CrustifyAgent:
-    """Thin wrapper around RelentlessAgent for a single pipeline stage.
+    """One pipeline stage, driven by a provider-CLI backend.
 
     Each agent runs against a *target* (the subdirectory crustify is
     scoped to) and additionally has access to the *repo_root* (the
@@ -143,7 +140,7 @@ class CrustifyAgent:
         # Repo-relative target id (e.g. "ssl/statem", or "." for the repo
         # root) — the value the prompt passes as crustify's second positional.
         self.target_rel = self.layout.rel_target(self.target)
-        # Target-tier store: crustify/targets/<rel>/ (logs, scope, kiss, …).
+        # Target-tier store: crustify/targets/<rel>/ (logs, scope, config).
         self.target_store = ArtifactStore(self.layout.target_dir(self.target))
         # Repo-root-tier store: crustify/ (analysis, build.json, alloc.json).
         self.root_store = ArtifactStore(self.layout.root)
@@ -159,63 +156,56 @@ class CrustifyAgent:
         from crustify import config as _cfg0
         if getattr(_cfg0, "ISOLATED_WAVE", False) and getattr(self, "_commits_own_work", True):
             prompt += _ISOLATED_COMMIT_FOOTER
-        printer, log_fh = self._make_printer()
+        from crustify import config as _cfg
+        from crustify.agents.backends import get_backend
+        from crustify.models import resolve as _resolve_model
 
-        try:
-            from crustify import config as _cfg
-            from crustify.agents.backends import get_backend
-            get_backend(_cfg.BACKEND).run(
+        # The model selects the backend: a Claude model can only be driven
+        # by the claude CLI. `--backend` overrides for forcing a pairing.
+        model = _cfg.MODEL_OVERRIDE or self.model
+        backend = _cfg.BACKEND or _resolve_model(model).backend
+
+        with self._make_log() as log:
+            get_backend(backend).run(
                 name=self.name,
-                model=_cfg.MODEL_OVERRIDE or self.model,
+                model=model,
                 prompt_template=prompt,
                 arguments=self._arguments(),
                 # Agents default to the target dir; a worktree-isolated agent
                 # (e.g. CrustifyMerge) overrides this to its own worktree.
                 work_dir=str(getattr(self, "_work_dir", None) or self.target),
-                printer=printer,
+                log=log,
             )
-        finally:
-            if log_fh is not None:
-                log_fh.close()
 
-    def _make_printer(self) -> tuple[Printer | None, IO[str] | None]:
-        """Build a Printer based on runtime config flags.
+    def _log_stem(self) -> str:
+        """Filename stem for this agent's logs, unique within a session.
 
-        Returns ``(printer, log_file_handle)``.  The caller **must** close
-        *log_file_handle* when it is no longer needed (typically in a
-        ``finally`` block).
+        ``stage_suffix`` disambiguates concurrent agents of the same stage
+        under ``--parallel`` so they never clobber each other's files.
+        """
+        stem = self.stage.replace("/", "_").replace(" ", "_")
+        if self.stage_suffix:
+            safe_suffix = (
+                self.stage_suffix
+                .replace("/", "_")
+                .replace(" ", "_")
+                .replace(".", "_")
+            )
+            stem = f"{stem}__{safe_suffix}"
+        return stem
+
+    def _make_log(self) -> AgentLog:
+        """Open this agent's output sinks (see :mod:`crustify.agentlog`).
 
         Logs are always written under the *target* tier so they stay
         co-located with the invocation that produced them.
         """
         from crustify import config as crustify_config
 
-        printers: list[Printer] = []
-        log_fh: IO[str] | None = None
-
-        if crustify_config.LOG_TO_CONSOLE:
-            printers.append(ConsolePrinter())
-
-        if crustify_config.LOG_TO_FILE:
-            log_dir = self.target_store.root / "logs" / crustify_config.SESSION_ID
-            log_dir.mkdir(parents=True, exist_ok=True)
-            safe_name = self.stage.replace("/", "_").replace(" ", "_")
-            if self.stage_suffix:
-                safe_suffix = (
-                    self.stage_suffix
-                    .replace("/", "_")
-                    .replace(" ", "_")
-                    .replace(".", "_")
-                )
-                safe_name = f"{safe_name}__{safe_suffix}"
-            log_fh = open(log_dir / f"{safe_name}.log", "w")  # noqa: SIM115
-            printers.append(ConsolePrinter(file=log_fh))
-
-        if len(printers) == 0:
-            return None, log_fh
-        if len(printers) == 1:
-            return printers[0], log_fh
-        return MultiPrinter(printers), log_fh
+        return open_agent_log(
+            self.target_store.root / "logs" / crustify_config.SESSION_ID,
+            self._log_stem(),
+        )
 
     def _is_done(self) -> bool:
         """Check whether this agent's output artifact already exists.
@@ -246,8 +236,8 @@ class CrustifyAgent:
         # A prompt may carry the role-scoped skill index inline via the shared
         # `<!-- SKILLS_INDEX -->` sentinel (the same convention AGENTS.md uses
         # through _render_principles) instead of the `{principles}` slot. Braces
-        # in the rendered index are escaped so it survives the downstream
-        # RelentlessAgent `prompt_template.format(**arguments)`.
+        # in the rendered index are escaped so it survives the backend's
+        # `prompt_template.format(**arguments)`.
         if "<!-- SKILLS_INDEX -->" in text:
             idx = self._render_skills().replace("{", "{{").replace("}", "}}")
             text = text.replace("<!-- SKILLS_INDEX -->", idx)
@@ -274,7 +264,7 @@ class CrustifyAgent:
 
     def _dep(self, name: str, fallback: Path | None = None) -> Path | None:
         """Resolve an absolute dependency path declared under ``deps`` in the
-        repo config (e.g. ``crustify-crate``), else ``fallback``."""
+        repo config (e.g. ``crustify-prim``), else ``fallback``."""
         raw = self._repo_config().get("deps", {}).get(name)
         return Path(raw) if raw else fallback
 

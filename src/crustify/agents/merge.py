@@ -33,7 +33,7 @@ class CrustifyMerge(CrustifyAgent):
     worktrees."""
 
     name = "CrustifyMerge"
-    model = "claude-opus-4-8"
+    model = "anthropic/claude-opus-4-8"
     prompt_dir = "merge"
     output = None  # idempotency is the orchestrator's (one merge per wave).
     _commits_own_work = False  # leaves the merged result uncommitted in the main tree

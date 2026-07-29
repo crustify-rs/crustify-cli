@@ -11,10 +11,9 @@ import time as _time
 SESSION_ID: str = f"{_time.strftime('%Y-%m-%d_%H-%M-%S')}_{_secrets.token_hex(2)}"
 """Timestamp label shared by all agents in a single ``crustify`` run.
 
-Used to group per-session log files under ``.crustify/logs/<SESSION_ID>/``,
-and -- under the ``relentless`` backend only -- KISS trajectory artifacts
-under ``.crustify/kiss/<SESSION_ID>/``. The ``agents_sdk`` backend writes no
-kiss artifacts and creates no such directory.
+Used to group per-session log files under
+``targets/<target>/logs/<SESSION_ID>/`` -- see :mod:`crustify.agentlog` for
+what each agent writes there.
 
 The timestamp keeps sessions chronologically sortable; the trailing 4-hex
 random token disambiguates crustify processes launched within the same second
@@ -77,30 +76,47 @@ when the symbol *count* is well under ``PORT_MAX_SYMS``."""
 
 
 # ---------------------------------------------------------------------------
-# Logging — toggled by CLI flags --no-console / --no-file-log
+# Agent execution — model, backend, billing
 # ---------------------------------------------------------------------------
 
 MODEL_OVERRIDE: str | None = None
 """Set by the CLI ``--model`` flag. When non-None, every agent runs against
-this model name (kiss naming, e.g. ``codex/gpt-5.5``, ``claude-opus-4-8``)
-instead of its hard-coded per-agent default. None => each agent's own default."""
+this model instead of its hard-coded per-agent default. None => each
+agent's own default.
 
-BACKEND: str = "agents_sdk"
-"""Which agent backend drives each stage (set by the CLI ``--backend`` flag):
+Named ``<provider>/<model>`` — see :mod:`crustify.models`."""
 
-  - ``agents_sdk`` (default) -- the OpenAI Agents SDK. Claude models route
-    through LiteLLM to the Anthropic API; OpenAI models run natively. API-key
-    auth, pure in-process.
-  - ``relentless`` -- the original kiss ``RelentlessAgent`` path.
+BACKEND: str | None = None
+"""Force a specific agent backend (CLI ``--backend``), overriding the one
+:mod:`crustify.models` derives from the model name.
 
-See :mod:`crustify.agents.backends`."""
+None (the default) means derive: the model decides, since a Claude model
+can only be driven by the claude CLI and an OpenAI one only by codex. Set
+this only to force a pairing. See :mod:`crustify.agents.backends`."""
+
+BILLING: str = "subscription"
+"""How the provider CLI authenticates (set by the CLI ``--billing`` flag):
+
+  - ``subscription`` -- the CLI's own logged-in account.
+  - ``api`` -- an API key from the environment.
+
+The distinction is not cosmetic: it selects a different auth path per CLI,
+and for Claude it is not switchable by environment variable alone."""
+
+OVERRIDE_BASE_PROMPT: bool = True
+"""Whether to replace the provider CLI's own base/system prompt with
+crustify's (set by ``--override-base-prompt`` / ``--no-override-base-prompt``).
+
+crustify's stage prompt is delivered as the user message either way; this
+only controls whether the provider's own instructions survive underneath it.
+Replacing them is markedly cheaper per invocation."""
 
 LOG_TO_CONSOLE: bool = True
 """When ``False``, suppress live console output from agents."""
 
 LOG_TO_FILE: bool = True
 """When ``False``, disable per-agent log files under
-``.crustify/logs/<SESSION_ID>/``."""
+``targets/<target>/logs/<SESSION_ID>/``."""
 
 
 ISOLATED_WAVE: bool = False

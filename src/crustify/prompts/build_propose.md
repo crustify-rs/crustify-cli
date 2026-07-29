@@ -19,7 +19,7 @@ All artifacts live under one `crustify/` directory at the repo root
     `build.json` (this file), `alloc.json`, `analysis/`, `codeql/`.
   - **Target-tier** - `{repo_root}/crustify/targets/<target>/` - per-target
     invocation state: `config.json` (user-authored), `scope.json`,
-    `logs/`, `kiss/`.
+    `logs/`.
 
 You read the target-tier `config.json` for project-identification
 context but write `build.json` to the repo-tier `crustify/`.

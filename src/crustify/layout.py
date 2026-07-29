@@ -10,7 +10,7 @@ walking the filesystem — and its artifacts live at ``repo_root/crustify/``:
         build.json   alloc.json                  # repo-tier, project-wide
         analysis/    codeql/{t1,t2,db}/
         targets/<repo-relative-target>/           # per-target invocation state
-          config.json   scope.json   logs/   kiss/
+          config.json   scope.json   logs/
         rust/                                     # the shared Rust crates
       ssl/  crypto/  …                            # vanilla C tree (no artifacts)
 
@@ -114,10 +114,23 @@ class Layout:
     def rust(self) -> Path:
         return self.root / "rust"
 
+    def providers(self, cli: str) -> Path:
+        """Config home crustify hands a provider CLI (``claude`` / ``codex``),
+        so a run reads crustify's settings rather than the operator's.
+
+        Not a full sandbox: claude keeps session transcripts in the real
+        ``~/.claude/projects/`` regardless of ``ANTHROPIC_CONFIG_DIR``, and
+        codex resolves auth from ``CODEX_HOME`` — so pointing that at a
+        crustify path loses a ChatGPT-subscription login (an OpenRouter
+        ``env_key`` needs no auth file and is unaffected)."""
+        d = self.root / ".providers" / cli
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     @property
     def repo_config(self) -> Path:
-        """Repo-wide crustify config — absolute dep paths (crustify-crate,
-        kiss_ai, crustify itself) and the SKILL.md set indexed into prompts.
+        """Repo-wide crustify config — absolute dep paths (crustify-prim,
+        crustify itself) and the SKILL.md set indexed into prompts.
         Distinct from the per-target :meth:`config`; lives at the
         ``crustify/`` root so it is shared across targets."""
         return self.root / "config.json"
@@ -150,5 +163,3 @@ class Layout:
     def logs(self, target: Path) -> Path:
         return self.target_dir(target) / "logs"
 
-    def kiss(self, target: Path) -> Path:
-        return self.target_dir(target) / "kiss"
