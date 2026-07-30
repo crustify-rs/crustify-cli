@@ -28,6 +28,8 @@ translations across multiple port sessions.
 - `{syms}`: a JSON list of `{{name, defined_in}}` - your worklist. (`defined_in`
   disambiguates same-named file-local statics.)
 
+- `{git_base}`: the base worktree where you merge your committed worktree changes into.
+
 ## Steps
 
 ### Discover your items 

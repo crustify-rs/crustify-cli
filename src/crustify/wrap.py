@@ -344,15 +344,7 @@ def wrap_types(
     _check_bindgen(layout, target,
                    {lib for n in sel_nodes if (lib := _lib_of(n))})
 
-    from crustify.agents.merge import CrustifyMerge
-    # The merge agent runs the OFF/ON C build+test matrix for wrap waves too: the
-    # flag-ON build links already-ported C against the per-library port crates
-    # (each library staticlib carries its own `mod ffi_export` re-exports),
-    # which depend on this wave's wrappers, so a wrapper change can break the
-    # cumulative ported build. It reads the SAME cumulative manifest the port
-    # stage writes (absent until the first port wave, in which case ON == OFF).
-    feature_file = layout.port_features          # rust/port-features.json (git-tracked)
-    # Worktree isolation auto-engages with --parallel (production emit only; a
+    # Worktree isolation engages whenever the production emit is in play (a
     # caller-supplied emit_fn, e.g. a test double, opts out).
     emit_factory = None if emit_fn else (
         lambda t, l: _wrap_emit(t, l, max_fields=max_fields, max_syms=max_syms))
@@ -362,9 +354,6 @@ def wrap_types(
                                       max_fields=max_fields, max_syms=max_syms),
         max_syms=max_syms, max_fields=max_fields,
         emit_factory=emit_factory, target=target, layout=layout,
-        merge_factory=(lambda base, results, crates: CrustifyMerge(
-            target, base_commit=base, results=results, crates=crates, stage="wrap",
-            feature_file=str(feature_file))),
     )
     failures = S.schedule(
         dag=dag, analysis_root=layout.analysis,

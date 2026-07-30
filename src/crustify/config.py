@@ -119,9 +119,9 @@ LOG_TO_FILE: bool = True
 ``targets/<target>/logs/<SESSION_ID>/``."""
 
 
-ISOLATED_WAVE: bool = False
-"""Set True by the scheduler for the duration of a parallel, worktree-isolated
-wave (see :mod:`crustify.worktree`). While set, wrap/port agents run inside their
-own git worktree and are asked to commit their work there (base agent appends a
-commit footer). Reset to False before the merge agent runs (which must NOT
-commit — it leaves the merged result uncommitted in the main tree)."""
+SESSION_BASE: str = ""
+"""Path to the wave's base worktree, set by the scheduler for the duration of a
+worktree-isolated wave (see :mod:`crustify.worktree`). Exposed to every prompt as
+``{git_base}``: it is where an agent lands its committed work, so the agent needs
+the path and only the scheduler knows it. Empty outside a wave."""
+

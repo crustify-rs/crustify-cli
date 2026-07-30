@@ -805,17 +805,33 @@ def sync_workspace(rust_root: Path) -> None:
         if p.is_dir() and (p / "Cargo.toml").exists()
     )
     body = "".join(f'    "{m}",\n' for m in members)
-    # `[workspace.lints]` must exist for any member carrying `[lints] workspace =
-    # true` to load at all — without it cargo rejects the WHOLE workspace, not
-    # just that crate. Emitted empty: which lints to set is a policy call for the
-    # crate author, and an empty table inherits nothing while still resolving.
-    (rust_root / "Cargo.toml").write_text(
-        "[workspace]\n"
-        'resolver = "2"\n'
-        f"members = [\n{body}]\n"
-        "\n"
-        "[workspace.lints]\n"
-    )
+    ws = rust_root / "Cargo.toml"
+    block = "[workspace]\n" f'resolver = "2"\n' f"members = [\n{body}]\n"
+
+    # Reconcile the `[workspace]` table only, preserving every other section.
+    # This function used to rewrite the whole file, which silently destroyed
+    # `scaffold._ensure_workspace_lints`'s `[workspace.lints.clippy]` table on
+    # every bindgen run — and a member carrying `[lints] workspace = true` then
+    # made cargo reject the WHOLE workspace, so whichever of the two wrote last
+    # decided whether the workspace loaded at all.
+    if ws.exists():
+        text = ws.read_text()
+        head, sep, rest = text.partition("[workspace]")
+        if sep:
+            # Drop only up to the next top-level table, keep the remainder.
+            tail = ""
+            for i, line in enumerate(rest.splitlines(keepends=True)):
+                if i and line.startswith("["):
+                    tail = "".join(rest.splitlines(keepends=True)[i:])
+                    break
+            ws.write_text(head + block + ("\n" + tail if tail else ""))
+            return
+        ws.write_text(block + "\n" + text)
+        return
+
+    # Fresh file: seed an empty `[workspace.lints]` so a member inheriting lints
+    # resolves even before `scaffold` appends the clippy sub-table.
+    ws.write_text(block + "\n[workspace.lints]\n")
 
 
 # --------------------------------------------------------------------- main

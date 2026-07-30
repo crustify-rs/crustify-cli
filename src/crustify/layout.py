@@ -136,8 +136,8 @@ class Layout:
         """The CUMULATIVE `CRUSTIFY_<FILE>` flag manifest, in the **git-tracked**
         `rust/` tree (NOT under the symlinked `targets/`), so each isolated
         worktree forks its committed baseline via `git worktree add` and appends
-        only its own chain's files — a per-worktree-coherent flag set the merge
-        then unions. Read at C-build time by `src/libgit2/CMakeLists.txt`."""
+        only its own chain's files — a per-worktree-coherent flag set that the
+        agents' rebase-then-merge unions as each lands. Read at C-build time by `src/libgit2/CMakeLists.txt`."""
         return self.rust / "port-features.json"
 
     # ------------------------------------------------- target-tier (per-target)

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -485,30 +486,14 @@ class Stage:
     # only port-scope ops. Defaults to `in_scope` when unset.
     op_in_scope: Callable[[Node], bool] | None = None
     shared_artifact_fn: Callable[[], None] | None = None  # serialized post-step
-    # Worktree-isolation seam (auto-engaged with --parallel when provided): build
-    # an emit bound to a per-chain worktree (target + Layout rooted there); the
-    # main target + Layout; and a merge-agent factory (base, results, crates).
+    # Worktree-isolation seam. When wired, EVERY agent runs in its own worktree,
+    # serial or parallel alike: isolation is what makes an agent's scoped
+    # `cargo check` mean anything, not a parallelism optimisation. Builds an emit
+    # bound to that worktree (target + Layout rooted there). Leaving it unset (a
+    # caller-supplied `emit_fn`, e.g. a test double) opts out and writes in place.
     emit_factory: Callable[[Path, Any], EmitFn] | None = None
     target: Path | None = None
     layout: Any = None
-    merge_factory: Callable[[str, list[dict], list[str]], Any] | None = None
-
-
-def _crates_of(batches: list[Batch], doc: dict, layout) -> list[str]:
-    """The distinct crates (component under ``rust/``) this wave writes into —
-    the merge agent's validation scope."""
-    crates: set[str] = set()
-    for b in batches:
-        for m in b.members:
-            p = resolve_path(m, doc, layout)
-            if not p:
-                continue
-            parts = p.parts
-            if "rust" in parts:
-                i = parts.index("rust")
-                if i + 1 < len(parts):
-                    crates.add(parts[i + 1])
-    return sorted(crates)
 
 
 def _chains_by_home(batches: list[Batch], doc: dict, layout) -> dict[str, list[Batch]]:
@@ -559,11 +544,14 @@ def run(
 ) -> list[tuple[Batch, BaseException]]:
     """Sequential within a file; disjoint files in parallel when requested.
 
-    With ``--parallel`` and an isolation seam (``emit_factory``/``target``/
-    ``layout``/``merge_factory``) wired, each file-chain runs in its **own git
-    worktree** (finding F3): isolated writes + uncontaminated `cargo check`, the
-    agents commit their own work, and :class:`crustify.agents.merge.CrustifyMerge`
-    applies + validates + cleans up. Otherwise the legacy in-place path runs."""
+    With the isolation seam (``emit_factory``/``target``/``layout``) wired, every
+    file-chain runs in its **own git worktree** (finding F3) — with or without
+    ``--parallel``, and even when there is only one chain. Isolation is not a
+    parallelism optimisation: it is what makes a chain's scoped `cargo check`
+    mean anything, and what gives the agent a branch to land. Each agent commits
+    and merges its own work back into the session base; nothing here integrates,
+    validates or tears down. Only a caller-supplied ``emit_fn`` (a test double)
+    takes the in-place path."""
     failures: list[tuple[Batch, BaseException]] = []
     # Chain by scaffolded home `.rs` (write-disjoint), NOT by C source file —
     # multiple sources (oid.c + oid.h) home into one `.rs`, so source chaining
@@ -577,11 +565,14 @@ def run(
         for b in batches:
             by_file.setdefault(b.file, []).append(b)
 
-    isolate = (parallelize and len(by_file) > 1
-               and stage.emit_factory is not None and stage.target is not None
-               and stage.layout is not None)
-    if isolate:
-        return _isolated_wave(by_file, batches, stage, parallel_max)
+    # Unconditional when the seam is wired: one worktree per agent regardless of
+    # `--parallel` or chain count. (It used to also require `parallelize` and
+    # more than one chain, so a serial run wrote in place — which meant a serial
+    # agent had no branch to land and validated against a tree it shared with
+    # nobody, two different contracts for the same stage.)
+    if (stage.emit_factory is not None and stage.target is not None
+            and stage.layout is not None):
+        return _isolated_wave(by_file, stage, parallelize, parallel_max)
 
     def run_chain(chain: list[Batch]) -> None:
         for b in chain:
@@ -608,38 +599,61 @@ def run(
 
 
 def _isolated_wave(
-    by_file: dict[str | None, list[Batch]], batches: list[Batch],
-    stage: Stage, parallel_max: int,
+    by_file: dict[str | None, list[Batch]], stage: Stage,
+    parallelize: bool, parallel_max: int,
 ) -> list[tuple[Batch, BaseException]]:
-    """Run each file-chain in its own git worktree, then merge with the agent."""
+    """Give every chain its own worktree off the session base, run its agent,
+    and stop there.
+
+    The scheduler's whole involvement in worktree management is in this function:
+    materialize the session base once, fork one child per agent, symlink the
+    shared read-only artifacts. It does not integrate, validate, commit on an
+    agent's behalf, or tear anything down — the agent commits its own work and
+    lands it on the base branch itself (`--ff-only` after rebasing onto the
+    current tip; at most one agent per tip can fast-forward, the rest rebase and
+    retry). Advancing the base needs real mutual exclusion, which git does not
+    provide for a shared worktree — see :mod:`crustify.worktree`.
+
+    Worktrees survive the wave by design. A child's branch is the record of what
+    that agent produced, and a partial or failed wave must stay inspectable
+    (finding F12); tearing them down here would discard a successful agent's work
+    on a sibling's failure.
+    """
     from crustify import config as _cfg
-    from crustify import crates as _crates_doc
     from crustify import worktree as W
     from crustify.layout import Layout
 
     repo = Path(stage.layout.repo_root)
     rel = stage.layout.rel_target(stage.target)
-    crates = _crates_of(batches, _crates_doc.load(stage.layout), stage.layout)
     chains = list(by_file.values())
     failures: list[tuple[Batch, BaseException]] = []
-    results: list[dict] = []
 
-    base = W.snapshot_base(repo)
+    # Once per session, and adopted as-is if it already exists — so a later
+    # dependency layer forks from a base that already holds the earlier layers'
+    # landed work rather than re-snapshotting the untouched main tree.
+    base = W.session_base(repo, f"{stage.verb}-{_cfg.SESSION_ID}")
+    W.link_shared(base.path, repo)
 
     def _slug(i: int, chain: list[Batch]) -> str:
         stem = Path(chain[0].file).stem if chain[0].file else "batch"
-        return f"{stage.verb}-{i:02d}-" + re.sub(r"[^A-Za-z0-9]+", "_", stem)[:24]
+        # Unique by construction: session + index + a random suffix. Slugs used to
+        # be `<verb>-<NN>-<stem>`, which collides across waves, and `add_worktree`
+        # then force-removed the stale directory — silently destroying an earlier
+        # agent's unlanded branch. With a random tail there is nothing to clear,
+        # so a collision is impossible rather than papered over.
+        return (f"{stage.verb}-{_cfg.SESSION_ID}-{i:02d}-"
+                + re.sub(r"[^A-Za-z0-9]+", "_", stem)[:24]
+                + "-" + secrets.token_hex(4))
 
-    def run_chain_wt(slug: str, wt: Path, chain: list[Batch]) -> dict:
+    def run_chain_wt(wt: Path, chain: list[Batch]) -> None:
         emit = stage.emit_factory(wt / rel, Layout(wt))   # bound to the worktree
         for b in chain:
             emit(b)
-        head = W.ensure_committed(wt, f"crustify {stage.verb} {slug}")  # safety net
-        return {"slug": slug, "worktree": str(wt), "commit": head}
 
-    _cfg.ISOLATED_WAVE = True
+
+    _cfg.SESSION_BASE = str(base.path)
     try:
-        with ThreadPoolExecutor(max_workers=parallel_max) as ex:
+        with ThreadPoolExecutor(max_workers=parallel_max if parallelize else 1) as ex:
             # Worktrees are created SEQUENTIALLY in the main thread — `git worktree
             # add` takes a repo-level lock and is NOT concurrency-safe; creating
             # them in parallel raced and silently dropped a chain (finding F14).
@@ -650,32 +664,26 @@ def _isolated_wave(
             for i, ch in enumerate(chains):
                 slug = _slug(i, ch)
                 try:
-                    wt = W.add_worktree(repo, base, slug)
+                    wt = W.add_worktree(repo, base.branch, slug)
                     W.link_shared(wt, repo)
                 except BaseException as e:               # noqa: BLE001
                     failures.append((ch[0], e))          # setup failed; keep the rest
                     continue
-                futs[ex.submit(run_chain_wt, slug, wt, ch)] = ch
+                futs[ex.submit(run_chain_wt, wt, ch)] = ch
             for fut in as_completed(futs):
                 try:
-                    results.append(fut.result())
+                    fut.result()
                 except BaseException as e:               # noqa: BLE001
                     failures.append((futs[fut][0], e))
     finally:
-        _cfg.ISOLATED_WAVE = False
+        _cfg.SESSION_BASE = ""
 
-    # Merge agent: apply every committed worktree into the main tree, resolve,
-    # validate, remove the worktrees. (It must NOT commit — ISOLATED_WAVE is off.)
-    # The orchestrator does NOT prune: the merge agent removes worktrees on the
-    # happy path; on a partial/failed wave the surviving worktrees (and their
-    # commits) are deliberately PRESERVED for inspection/retry — pruning here
-    # would silently discard successful agents' work (finding F12).
-    produced = [r for r in results if r["commit"] != base]
-    if produced and stage.merge_factory is not None:
-        try:
-            stage.merge_factory(base, results, crates).run()
-        except BaseException as e:                       # noqa: BLE001
-            failures.append((chains[0][0], e))
+    # Only what the scheduler itself did. It deliberately makes NO claim about
+    # what landed on the base — it does not read the base tip, diff it, or check
+    # whether an agent committed. Integration is the agents' business, and any
+    # summary here would be a guess that reads as a report.
+    print(f"[{stage.verb}] {len(chains)} agent worktree(s) under "
+          f"{base.path.parent}; session branch {base.branch}")
 
     if stage.shared_artifact_fn is not None:
         stage.shared_artifact_fn()
@@ -711,11 +719,11 @@ def schedule(
     units = form_units(nodes, by_key, stage.op_in_scope or stage.in_scope, type_meta)
     # ---- Dependency-layer scheduling --------------------------------------
     # Partition the selected units by their dag layer and run ascending: same
-    # layer runs as one wave (batched per home .rs + effort budget, parallel
-    # worktrees), and each layer is merged BEFORE the next so a higher layer's
-    # worktrees fork from a base that already holds the lower layers' wrappers.
-    # `snapshot_base` captures the *uncommitted* working tree, so no inter-layer
-    # commits are needed. A single-layer selection is exactly one wave.
+    # layer runs as one wave (batched per home .rs + effort budget, one worktree
+    # per agent). A higher layer must fork from a base that already holds the
+    # lower layers' output, which now holds because every layer's agents land on
+    # the SAME session branch and `session_base` adopts it rather than
+    # re-snapshotting. A single-layer selection is exactly one wave.
     from collections import defaultdict
     by_layer: dict[int, list[Unit]] = defaultdict(list)
     for u in units:
@@ -767,9 +775,8 @@ def schedule(
         show_plan(units, all_batches, by_key, stage.in_scope, stage.verb)
         return []
 
-    # Run each layer in turn, lower → higher; each layer is merged before the
-    # next so a higher layer's worktrees fork from a base that already holds the
-    # lower layers' output.
+    # Run each layer in turn, lower → higher; a layer's agents land on the
+    # session branch before the next layer forks its worktrees from it.
     failures: list[tuple[Batch, BaseException]] = []
     for li in layers:
         lb = pack(by_layer[li], max_syms=stage.max_syms,
@@ -778,7 +785,7 @@ def schedule(
             continue
         if len(layers) > 1:
             print(f"\n[{stage.verb}] dependency layer {li}: {len(by_layer[li])} "
-                  f"unit(s) → {len(lb)} batch(es) (lower layers already merged)")
+                  f"unit(s) → {len(lb)} batch(es) (lower layers already landed)")
         show_plan(by_layer[li], lb, by_key, stage.in_scope, stage.verb)
         failures += run(lb, stage, parallelize=parallelize,
                         parallel_max=parallel_max)

@@ -808,7 +808,7 @@ could have been typed `*const GitOid` at zero layout cost (the
 unrelated `GitPackOffsetmap`'s).
 
 **Root cause.** An isolated wrap/port worktree forks from
-`snapshot_base`, which holds the **merged output of every lower layer**.
+the session base branch, which holds the **landed output of every lower layer**.
 So a dependency that sits at a *lower* dag layer than the unit being
 wrapped is **guaranteed already on disk** — a "not yet wrapped" excuse
 is categorically invalid for it. The rationale is only ever defensible

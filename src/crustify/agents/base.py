@@ -52,30 +52,6 @@ def _skill_meta(path: Path) -> tuple[str, str, set[str] | None, str | None]:
             in_desc = True
     return name, " ".join(" ".join(desc).split()), roles, binname
 
-# Appended to a wrap/port agent's prompt during a worktree-isolated parallel
-# wave: the agent owns committing its own work in its private worktree (the
-# orchestrator only safety-nets anything left uncommitted).
-_ISOLATED_COMMIT_FOOTER = """
-
----
-
-## Finalize — commit your work (isolated worktree)
-
-You are running inside your **own git worktree**, isolated from the other
-parallel agents. Your `cargo check` / `clippy` therefore see only your own work
-on top of the shared base — trust them. When your codegen is complete **and your
-scoped checks pass**, stage and commit everything you wrote, here, before you
-finish:
-
-```
-git add -A
-git commit -m "crustify: <stage> <your unit(s)>"
-```
-
-Commit exactly once, at the end. Do not push, do not touch any other checkout.
-"""
-
-
 def _resolve_repo_root(target: Path) -> Path:
     """Repo root = the nearest ancestor of ``target`` containing
     ``crustify/`` (the repo marker). No config field needed."""
@@ -153,9 +129,6 @@ class CrustifyAgent:
             return
 
         prompt = self._prompt()
-        from crustify import config as _cfg0
-        if getattr(_cfg0, "ISOLATED_WAVE", False) and getattr(self, "_commits_own_work", True):
-            prompt += _ISOLATED_COMMIT_FOOTER
         from crustify import config as _cfg
         from crustify.agents.backends import get_backend
         from crustify.models import resolve as _resolve_model
@@ -171,8 +144,6 @@ class CrustifyAgent:
                 model=model,
                 prompt_template=prompt,
                 arguments=self._arguments(),
-                # Agents default to the target dir; a worktree-isolated agent
-                # (e.g. CrustifyMerge) overrides this to its own worktree.
                 work_dir=str(getattr(self, "_work_dir", None) or self.target),
                 log=log,
             )
@@ -246,8 +217,15 @@ class CrustifyAgent:
     def _arguments(self) -> dict:
         # `target` is the repo-RELATIVE id and `repo_root` the full path —
         # together the two positionals every `crustify <repo_root> <target> …`
-        # invocation in a prompt needs. Subclasses extend (super()._arguments()).
-        return {"target": self.target_rel, "repo_root": str(self.repo_root)}
+        # invocation in a prompt needs. `git_base` is the wave's base worktree,
+        # the branch an isolated agent lands its own commit on (empty outside a
+        # wave). Supplied to EVERY agent: `str.format` ignores a key the template
+        # does not reference, and a template referencing a key nobody supplies
+        # dies with KeyError before the agent issues a request.
+        # Subclasses extend (super()._arguments()).
+        from crustify import config as _cfg
+        return {"target": self.target_rel, "repo_root": str(self.repo_root),
+                "git_base": _cfg.SESSION_BASE}
 
     def _template(self, name: str) -> str:
         return (_PKG_ROOT.parent / "templates" / name).read_text()

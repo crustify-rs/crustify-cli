@@ -318,14 +318,13 @@ def port(
         # No wave-global pre-fan-out write: _port_emit appends each batch's files
         # to its layout's port_features (per-worktree in an isolated wave, main in
         # serial) — so a worktree's flag set is baseline ∪ its-own-files, coherent
-        # with its own staticlib. The merge unions the per-worktree manifests.
+        # with its own staticlib. Each agent's rebase-then-merge unions them.
         emit = emit or _port_emit(target, layout, opacify=[],
                                   feature_file=feature_file)
 
-    from crustify.agents.merge import CrustifyMerge
-    # Worktree isolation auto-engages with --parallel (production emit only). Bind
+    # Worktree isolation engages whenever the production emit is in play. Bind
     # feature_file to the WORKTREE's layout (l.port_features) so each worktree
-    # appends to its own (git-inherited baseline) copy; the merge unions them.
+    # appends to its own git-inherited baseline copy.
     emit_factory = None if emit_fn else (
         lambda t, l: _port_emit(t, l, opacify=[], feature_file=l.port_features))
     stage = S.Stage(
@@ -334,10 +333,7 @@ def port(
         # so there are no type ops/fields to window (max_fields stays unbounded).
         # The per-batch budget is count (max_syms) ∧ lines-of-code (max_loc).
         max_syms=max_syms, max_loc=max_loc,
-        emit_factory=emit_factory, target=target, layout=layout,
-        merge_factory=(lambda base, results, crates: CrustifyMerge(
-            target, base_commit=base, results=results, crates=crates,
-            stage="port", feature_file=str(feature_file))))
+        emit_factory=emit_factory, target=target, layout=layout)
     failures = S.schedule(
         dag=dag, analysis_root=layout.analysis,
         names=sel_names, stage=stage, parallelize=parallel,
