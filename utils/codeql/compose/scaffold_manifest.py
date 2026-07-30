@@ -278,31 +278,21 @@ def _classify_symbols(syms_by_dir, port_files, want):
                 yield name, df, decls, "Replaces", scope.classify(df, decls, port_files)
 
 
-def _linked_in_by_mdir(analysis_root: Path | None) -> dict[str, str]:
-    """Map each manifest dir (posix, relative to ``analysis_root``) to its
-    agent-filled ``linked_in`` library — the crate it belongs to. All entries
-    in a file share a library, so the first non-null wins. The analyzers run
-    before scaffold, so this value is already on disk by the time we read it."""
-    out: dict[str, str] = {}
-    if analysis_root is None or not analysis_root.is_dir():
-        return out
-    for jf in list(analysis_root.rglob("syms.json")) + list(
-            analysis_root.rglob("types.json")):
-        mdir = jf.parent.relative_to(analysis_root).as_posix()
-        if mdir in out:
-            continue
-        try:
-            doc = json.loads(jf.read_text())
-        except (OSError, ValueError):
-            continue
-        for e in doc.get("symbols", []) + doc.get("types", []):
-            li = e.get("linked_in")
-            li = (li[0] if isinstance(li, list) and li
-                  else li if isinstance(li, str) else None)
-            if li:
-                out[mdir] = li
-                break
-    return out
+def _crate_by_mdir(analysis_root: Path | None) -> dict[str, str]:
+    """Map each manifest dir to its owning crate. Always ``{}``.
+
+    This used to read a per-entry ``linked_in`` library off the analysis tree.
+    That field is emitted by nothing and present on no entry (0 of 437 types,
+    0 of 7926 symbols on the OpenSSL tree), so the lookup could only ever miss;
+    reading it back was dead code that read as live attribution.
+
+    Crate attribution is ``crates.json`` now, consumed by ``crustify.scaffold``
+    — which is the ``scaffold`` command. The ``python -m scaffold_manifest``
+    entry point below does not use it, so it has had no crate attribution since
+    ``linked_in`` was retired. Kept as a seam rather than threaded through, so
+    that gap stays visible instead of being spelled `{}` at the call site.
+    """
+    return {}
 
 
 def compose_files(
@@ -330,18 +320,20 @@ def compose_files(
     syms_by_dir, _, _ = syms_compose(csv_dir_t1, csv_dir_t2, filter_spec)
     manifest_dirs = set(types_by_dir) | set(syms_by_dir)
 
-    # Crate = `linked_in` library (read from the agent-annotated analysis tree,
-    # which scaffold runs after). The module tree inside a crate mirrors the
+    # Crate = the owning link unit. The module tree inside a crate mirrors the
     # full C source path, so a type (in `include/…`) and its ops (in `src/…`)
     # co-locate in their library's crate. NO in-tree/system discrimination —
     # any library with a source location (in-tree, a vendored lib like libz, or
-    # a system header carrying a type/constant) is scaffolded into its own
-    # crate. Pure external symbols with no source file are unscaffoldable
-    # anyway (see `_SKIP_KINDS`) and stay FFI-only via bindgen.
-    li_by_mdir = _linked_in_by_mdir(analysis_root)
+    # a system header carrying a type/constant) belongs in its own crate. Pure
+    # external symbols with no source file are unscaffoldable anyway (see
+    # `_SKIP_KINDS`) and stay FFI-only via bindgen.
+    # `_crate_by_mdir` is empty — see its docstring: this path has had no crate
+    # attribution since `linked_in` was retired, and `crates.json` (via
+    # `crustify.scaffold`) is the live one.
+    crate_by_mdir = _crate_by_mdir(analysis_root)
 
     def _crate_for(md_posix: str) -> str | None:
-        return li_by_mdir.get(md_posix) or None
+        return crate_by_mdir.get(md_posix) or None
 
     stubs: dict[str, FileStub] = {}
 
@@ -766,7 +758,7 @@ def _field_names(entry: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _port_crate_cargo_toml(crate: str, rust_root: Path) -> str:
-    """Cargo.toml for a per-``linked_in`` port crate. It is the **staticlib**
+    """Cargo.toml for a per-library port crate. It is the **staticlib**
     the C build links (replacing the old central ``ffi-exports`` crate, since
     the ``#[no_mangle]`` re-exports now co-locate with their ops inside this
     crate). Carries an empty ``[features]`` table (the port stage appends the
@@ -813,10 +805,16 @@ def sync_workspace(rust_root: Path) -> None:
         if p.is_dir() and (p / "Cargo.toml").exists()
     )
     body = "".join(f'    "{m}",\n' for m in members)
+    # `[workspace.lints]` must exist for any member carrying `[lints] workspace =
+    # true` to load at all — without it cargo rejects the WHOLE workspace, not
+    # just that crate. Emitted empty: which lints to set is a policy call for the
+    # crate author, and an empty table inherits nothing while still resolving.
     (rust_root / "Cargo.toml").write_text(
         "[workspace]\n"
         'resolver = "2"\n'
         f"members = [\n{body}]\n"
+        "\n"
+        "[workspace.lints]\n"
     )
 
 
@@ -838,7 +836,7 @@ def main() -> None:
                     help="Restrict to these top-level crate dirs (post-scope).")
     ap.add_argument("--analysis-root", type=Path, default=None,
                     help="<repo_root>/.crustify/analysis. Optional; enables "
-                         "linked_in routing.")
+                         "crate routing.")
     args = ap.parse_args()
 
     spec = FilterSpec(scope_json_path=args.scope_json)

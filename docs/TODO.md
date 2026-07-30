@@ -208,32 +208,6 @@ cbindgen has no basis for. Sec 6a is the part that moves.
 
 ---
 
-## Treat mmap-like resource acquirers as byte-level allocators (alloc stage)
-
-The alloc stage (`alloc.md` analyzer -> `alloc.json`) currently catalogues only
-the malloc-family byte allocators (malloc/calloc/realloc/strdup + the `git__*`
-and backend variants). Resource acquirers that hand back **owned memory needing a
-non-`free` releaser** -- chiefly `p_mmap` <-> `p_munmap` (and the
-`git_futils_mmap_*` wrappers over them) -- aren't catalogued. Under the byte-level
-allocator ctor definition this leaves resource-owning types ctor-less: e.g.
-`git_map` resolves to **zero ctors** while its dtor (`p_munmap`) is real.
-
-Teach `alloc.md` to recognize a second allocator shape -- a routine that maps/opens
-an owned resource and pairs with a dedicated releaser (mmap<->munmap) -- and emit it
-as its own allocator family. **Interim:** a `posix_mmap` family (`p_mmap` /
-`p_munmap`) was added to `<repo>/crustify/alloc.json` by hand.
-
-Related: a ctor detector built on this definition must read the **CodeQL
-`function_calls.csv`** for the "calls a byte-level allocator" edge, **not** the
-composed `depends_on.syms` -- the latter is empty by design for wrap-scope bodies
-(`_wrap_additions_function` emits `syms: []`), so wrap-scope ctors like
-`git_object__from_raw`, `git_vector_dup`, and the `git__strdup` family would
-otherwise be missed.
-
-**Note (2026-07-07 audit):** the type-lifecycle slot was renamed `ctors` -> `allocs` (HEAD commit "rename type lifecycle ctors slot to allocs"), so read this item's "zero ctors / ctor-less" as "zero `allocs`". The alloc.md teaching below is still unimplemented; only the manual `posix_mmap` family in alloc.json exists.
-
----
-
 ## Wrap callback gate misses call-site-reached callbacks (raw `ffi::` escapes)
 
 Callback typedefs the port reaches show up as naked `ffi::<cb>` with "no wrapper
@@ -344,18 +318,6 @@ Both derive a fallible `try_clone` (mirrors `CBox::try_clone`) and an infallible
 `Clone` that `abort()`s on the C-copy-failed (`None`) case.
 
 REMAINING:
-- **Analyzer classification (`buffer_analyzer.md`).** A `*_memdup` / `*_strdup` /
-  `*_strndup` allocates AND copies a source -- it is a **clone**, not a plain
-  alloc, so it belongs in a cluster's `clones`, not `allocs`. The analyzer files
-  them under `allocs`, leaving every cluster's `clones` empty, so the wrapper has
-  no clone to register. Fold the rule into `buffer_analyzer.md`. (Reclassified
-  manually on-disk 2026-07-03 for the 6 openssl clusters -- `memdup` -> clones on
-  the two `*_free`/`*_clear_free` byte families, `strdup`/`strndup` -> clones on
-  the two string families; `secure_*` have no dup, so no clone.)
-- **Wrapper opt-in.** A cluster wrapper still registers the copy on its strategy
-  ZST: `impl_cloned!` on the string strategy; a `CLenCloned` impl naming the
-  family `*_memdup` on the buffer strategy. strings_wrapper.md / arrays_wrapper.md
-  should emit it when the port clones that family.
 - **Deep (per-element) clone.** `CLenCloned` is a **byte** copy -- POD elements
   only. An `owned_elem` buffer (elements own pointers) needs a per-element
   `T: CCloned` deep clone, not yet modeled.
@@ -476,8 +438,9 @@ Before paying for N builds + an edge-relation union, try a single build
 configured with **every optional feature on** (`--enable-all` /
 `./config enable-...` for openssl, all `-D<feature>=ON` for CMake). One build,
 no composer changes, and it recovers the whole `#ifdef FEATURE` class -- which is
-most of blind spot (a). `build_propose.md` would need to prefer a
-maximal-feature configure line over the project's default.
+most of blind spot (a). The configure line is authored by hand in
+`build.json`, so this is a choice at database-creation time, not a
+composer change.
 
 Two things it does **not** fix, so fix (2) stays on the table:
 - **Mutually-exclusive branches** (`#ifdef _WIN32 / #else`, FIPS on/off). These
@@ -697,8 +660,10 @@ type-entry (the wrap-closure under-capture: the closure walks port-*symbol*
 deps but not port-*type* field deps, and never harvests a frontier wrap
 function's signature types). Gated behind that closure fix: the analyzer can
 only decide wrapper-vs-raw
-once the embedded opaque type is captured with its op set attributed (the
-alloc.json `locks` category + `git_mutex_*` ops). Keep raw until then.
+once the embedded opaque type is captured with its op set attributed (its
+lock/unlock ops reachable via the per-symbol lifetime model + `locked_by`; the
+alloc.json `locks` category this originally named is gone with the alloc stage).
+Keep raw until then.
 
 ---
 

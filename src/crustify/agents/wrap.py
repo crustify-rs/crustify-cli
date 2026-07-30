@@ -57,7 +57,6 @@ class CrustifyWrap(CrustifyAgent):
         kinds: list[str] | None = None,
         entry_files: list[str] | None = None,
         rs_outs: list[str] | None = None,
-        linked_in: list[str] | None = None,
         fields_per: list[list[str]] | None = None,      # parallel to tags
         ops_per: list[list[str]] | None = None,         # parallel to tags
         op_rs_outs_per: list[list[str]] | None = None,  # parallel to ops_per
@@ -78,7 +77,6 @@ class CrustifyWrap(CrustifyAgent):
         self._kinds = list(kinds or [])
         self._entry_files = list(entry_files or [])
         self._rs_outs = list(rs_outs or [])
-        self._linked_in = list(linked_in or [])
         self._fields_per = list(fields_per or [])
         self._ops_per = list(ops_per or [])
         # Per-op output file, parallel to ``ops_per``. An op whose module

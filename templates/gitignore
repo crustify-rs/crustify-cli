@@ -1,7 +1,7 @@
 # Crustify artifacts that are regenerable and/or read-only across a wrap/port
 # session. Excluded from git tracking so per-agent worktrees stay lean and the
 # `git worktree` snapshot only carries the actual mutation surface (`rust/`
-# source + build.json/alloc.json + the C edits).
+# source + build.json + the C edits).
 #
 # These are NOT hidden from agents: the analysis/codeql trees don't change
 # during a wave, so agents read the single shared copy via absolute paths into
@@ -21,7 +21,6 @@ analysis
 targets
 tmp
 .worktrees
-alloc.json
 build.json
 crates.json
 stats.md

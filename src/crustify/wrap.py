@@ -347,7 +347,7 @@ def wrap_types(
     from crustify.agents.merge import CrustifyMerge
     # The merge agent runs the OFF/ON C build+test matrix for wrap waves too: the
     # flag-ON build links already-ported C against the per-library port crates
-    # (each `<linked_in>` staticlib carries its own `mod ffi_export` re-exports),
+    # (each library staticlib carries its own `mod ffi_export` re-exports),
     # which depend on this wave's wrappers, so a wrapper change can break the
     # cumulative ported build. It reads the SAME cumulative manifest the port
     # stage writes (absent until the first port wave, in which case ON == OFF).

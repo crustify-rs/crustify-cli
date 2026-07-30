@@ -2,9 +2,9 @@
 
 ``crates.json`` is the placement oracle: it maps every in-scope C symbol/type
 to the unique Rust ``.rs`` that homes it. It is authored outside crustify — by
-hand, or by an orchestrator driving ``prompts/scaffolder.md`` — against the
-layout in ``templates/crates.json``; this module is the consumer-side read /
-lookup / validate API the ``scaffold`` command uses against it. Schema
+hand, or by an orchestrator — against the layout in
+``templates/crates.json``; this module is the consumer-side read / lookup /
+validate API the ``scaffold`` command uses against it. Schema
 authority: ``templates/crates.json``.
 
 Shape (eliding ``_comment`` keys)::
@@ -34,6 +34,7 @@ Field meaning: ``docs/schemas/crates.md``. Layout: ``templates/crates.json``.
 from __future__ import annotations
 
 import json
+import re
 from typing import Optional
 
 # Member buckets. `macros` is homed for library attribution only — bindgen
@@ -125,6 +126,86 @@ def validate(doc: dict) -> list[str]:
     if cyc:
         errors.append("dependency cycle: " + " -> ".join(cyc))
 
+    return errors
+
+
+# C primitives / qualifiers that are never a user-type tag.
+_NON_TAG = frozenset({
+    "const", "volatile", "struct", "union", "enum", "unsigned", "signed",
+    "void", "char", "short", "int", "long", "float", "double", "_Bool",
+    "size_t", "ssize_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+    "int8_t", "int16_t", "int32_t", "int64_t", "intptr_t", "uintptr_t",
+})
+
+
+def _ref_tags(type_str: str | None) -> list[str]:
+    """Candidate user-type tags in a C type string (a field or arg type)."""
+    if not type_str:
+        return []
+    s = re.sub(r"[*\[\]()]", " ", type_str)
+    return [t for t in s.split()
+            if re.match(r"^[A-Za-z_]\w*$", t) and t not in _NON_TAG]
+
+
+def validate_depends_on(doc: dict, analysis_root) -> list[str]:
+    """Cross-check ``depends_on`` against member placement and the analysis
+    tree's BY-VALUE type references. Returns error strings (``[]`` = consistent).
+
+    A struct homed to crate A that embeds **by value** an entity homed to crate B
+    needs B's layout, so ``A.depends_on`` must contain B. A missing edge is
+    silent downstream: bindgen derives the ``-sys`` blocklist and the
+    ``pub use <dep>_sys::*`` imports from ``depends_on`` alone, so it mints its
+    own copy of B's type rather than importing B's — two distinct Rust types for
+    one C type, surfacing much later as a mismatch at ``cargo check``.
+
+    Deliberately restricted to ``ref == "value"`` fields. A **pointer** to a
+    foreign type needs no layout (an incomplete type binds fine), so a missing
+    edge there is not a defect — and demanding one would report OpenSSL's real
+    C-level circularity (``libcrypto``'s ``BIO_POLL_DESCRIPTOR.value.ssl`` is an
+    ``SSL *``) as an authoring error, when the only fix would be a crate cycle
+    Rust forbids. Pointer args/returns are excluded for the same reason, so
+    syms.json is not read at all.
+
+    Placement itself is NOT checked here (this reads it as ground truth); a
+    misplaced member moves the reference and its owner together.
+    """
+    from pathlib import Path
+
+    crates = doc.get("crates") or {}
+    owner: dict[str, str] = {}       # member name -> owning crate
+    for crate, c in crates.items():
+        for m in (c.get("modules") or {}).values():
+            for r in (m.get("rs") or {}).values():
+                for names in (r.get("members") or {}).values():
+                    for nm in names or []:
+                        owner.setdefault(nm, crate)
+    if not owner:
+        return []
+
+    declared = {c: set(v.get("depends_on") or []) for c, v in crates.items()}
+    errors: list[str] = []
+    seen: set[tuple[str, str]] = set()   # (crate, dep) — one error per edge
+
+    for p in Path(analysis_root).rglob("types.json"):
+        for t in (json.loads(p.read_text()).get("types") or []):
+            tag = t.get("name") or t.get("type")
+            home = owner.get(tag)
+            if not home:
+                continue
+            for f in t.get("fields") or []:
+                if f.get("ref") != "value":
+                    continue
+                for ref in _ref_tags(f.get("type")):
+                    dep = owner.get(ref)
+                    if (not dep or dep == home
+                            or dep in declared.get(home, ())
+                            or (home, dep) in seen):
+                        continue
+                    seen.add((home, dep))
+                    errors.append(
+                        f"{home}.depends_on is missing {dep!r}: "
+                        f"{tag}.{f.get('name')} embeds {ref!r} by value, and "
+                        f"{ref!r} is homed to {dep}")
     return errors
 
 

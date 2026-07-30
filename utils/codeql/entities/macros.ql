@@ -12,9 +12,11 @@
  *
  * # cols:
  *   name      : the macro's C identifier
- *   head      : everything between the name and the body, excluding
- *               the parentheses; empty string for object-like macros
- *               (e.g. `a, b` for `#define MAX(a, b) ((a) > (b) ? a : b)`)
+ *   head      : the whole head of the `#define`, INCLUDING the name —
+ *               `AF_INET` for an object-like macro, `MAX(a, b)` for a
+ *               function-like one. Never empty for a named macro, so
+ *               "is this callable?" is the presence of a `(`, not
+ *               emptiness (a zero-arg `F()` reads correctly this way)
  *   body      : the replacement-list text, verbatim from the source
  *   def_file  : repository-relative path of the `#define` site's file
  *

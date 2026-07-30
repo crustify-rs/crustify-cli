@@ -2,9 +2,9 @@
 oracle.
 
 ``crates.json`` maps every in-scope C symbol/type to the unique Rust ``.rs``
-that homes it. It is authored OUTSIDE this stage — by hand, or by an
-orchestrator driving ``prompts/scaffolder.md`` — and ``scaffold`` never writes
-it. This command is purely mechanical:
+that homes it. It is authored OUTSIDE this stage — by hand or by an
+orchestrator — and ``scaffold`` never writes it. This command is purely
+mechanical:
 
   - **query** (default) — resolve the selection (``--name`` / ``--file`` /
     ``--dir`` / ``--all``) to its ``.rs`` path(s) and print them. A lookup MISS
@@ -182,7 +182,14 @@ def _field_map(layout) -> dict[str, list[str]]:
 
 def _validate(layout) -> None:
     from crustify import crates
-    errs = crates.validate(crates.load(layout))
+    doc = crates.load(layout)
+    errs = crates.validate(doc)
+    # `depends_on` vs placement + the tree's type references. Needs the analysis
+    # tree, so it only runs once that exists; bindgen derives the -sys blocklist
+    # and the `pub use <dep>_sys::*` imports from `depends_on` alone, and a
+    # missing edge there is silent until `cargo check` much later.
+    if layout.analysis.exists():
+        errs += crates.validate_depends_on(doc, layout.analysis)
     if errs:
         for e in errs:
             print(f"scaffold: {e}", file=sys.stderr)

@@ -51,7 +51,7 @@ scalar/aggregate), `includes`.
 | `types_manifest.py` / `syms_manifest.py` | `types.json` / `syms.json` skeletons + full dependency edges | `analyze types` / `symbols` |
 | `deps_dag.py` | `deps-dag.json` - unified layered types+symbols DAG (cast-centrality + fallback/back-fill edges) | `analyze dag`, wrap/port scheduler |
 | `scaffold_manifest.py` | `crates.json` + `.rs` stub/module tree | `scaffold` |
-| `bindgen_manifest.py` | `<lib>-sys` crate skeletons, allowlists, macro worklists | `bindgen` |
+| `bindgen_manifest.py` | `<lib>-sys` crate scaffolds - per-kind allowlists + include closure (no `fn main`, no shims) | `bindgen` |
 | `audit_manifest.py` | JSON to stdout (per-seed own + naked-ffi surface, tree-wide `global` scan, `totals`); nothing written to disk | `audit` |
 | `manifest_merge.py` | union-by-key merge of agent findings into a manifest | `query --update` |
 | `check_types_consistency.py` | consistency gate (every op homed once; acyclic) | standalone (`python -m`, manual) |

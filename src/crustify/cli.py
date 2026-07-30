@@ -633,7 +633,9 @@ def main() -> None:
             "Scaffold the <lib>-sys FFI crates from the analysis tree "
             "(deterministic; no LLM). Partitions the wrap-scope surface by "
             "owning crate (crates.json) into <target>/rust/crates/<lib>-sys/. "
-            "The macro shims + cargo-check verify loop are the separate agent stage."
+            "Crates come out incomplete: build.rs carries the per-kind "
+            "allowlists but no fn main, and bindgen.h's shim block is "
+            "empty — finishing them needs a compiler in the loop."
         ),
     )
     bindgen_p.add_argument(
@@ -642,9 +644,13 @@ def main() -> None:
              "Default: every in-scope library.",
     )
     bindgen_p.add_argument(
-        "--scaffold-only", action="store_true",
-        help="Run only the deterministic composer (skeletons + allowlists "
-             "+ worklists); skip the macro/global shim agent stage.",
+        "--reset", action="store_true",
+        help="Recompute the composer-owned state from scratch instead of "
+             "accumulating onto it: build.rs's ALLOWED_*/BLOCKLIST_FOREIGN stop "
+             "being a cross-target union (so an entity that left the scope "
+             "leaves the array), and bindgen.h's include block is re-seeded "
+             "(discarding hand ordering). Never touches the "
+             "crustify:allowlist-agent block or the crustify:shims block.",
     )
 
     # -- query -----------------------------------------------------------
@@ -1185,7 +1191,7 @@ def _handle_scaffold(args: argparse.Namespace, target: Path) -> None:
 
 def _handle_bindgen(args: argparse.Namespace, target: Path) -> None:
     from crustify.bindgen import bindgen
-    bindgen(target, libs=args.libs, scaffold_only=args.scaffold_only)
+    bindgen(target, libs=args.libs, reset=args.reset)
 
 
 # -- query dispatch -------------------------------------------------------

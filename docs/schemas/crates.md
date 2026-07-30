@@ -8,9 +8,8 @@ Target-agnostic and cumulative: "which unique Rust `.rs` homes this C entity",
 independent of porting progress. Port/wrap status and per-target scope live in
 `scope.json`, never here.
 
-Authored OUTSIDE crustify — by hand, or by an orchestrator driving
-`prompts/scaffolder.md`. `crustify scaffold` only reads it; an unplaced
-selection is a hard error.
+Authored OUTSIDE crustify — by hand or by an orchestrator. `crustify scaffold`
+only reads it; an unplaced selection is a hard error.
 
 ## crates.\<name\>
 
@@ -85,10 +84,11 @@ for placement; `tu`/`headers` disambiguate.
 | `callbacks` | yes | function-pointer typedefs; verb follows scope like any other member |
 | `macros` | **no** | homed for library attribution only |
 
-Macros are the one deliberate exclusion from porting and wrapping: bindgen owns
-their whole surface — a `crustify_<NAME>` shim for a callable one, a `pub const`
-for a value one — and the C `#define` stays. They are listed so bindgen can
-resolve which library owns them; no `.rs` anchor is ever laid for them.
+Macros are the one deliberate exclusion from porting and wrapping: their whole
+surface belongs to the `-sys` crate — a `crustify_<NAME>` shim for a callable
+one, a `pub const` for a value one — and the C `#define` stays. They are listed
+so bindgen can resolve which library owns each (it puts them in that crate's
+`ALLOWED_MACROS`); no `.rs` anchor is ever laid for them.
 
 **Anonymous types are never members.** CodeQL names every anonymous
 struct/union/enum with one synthetic placeholder (`(unnamed enum)`,
