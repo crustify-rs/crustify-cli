@@ -10,7 +10,7 @@ A type stores **no lifecycle of its own**. Which routines drop, dispose or
 clone it is recorded once on the acting SYMBOL — `syms.json`'s entry-level
 `lifetime` block, which names its subject arg (see
 [syms.md](syms.md#lifetime)) — and read back by reverse lookup:
-`crustify query symbols --lifetime-for <TAG>` groups every such symbol into
+`crustify-cli query symbols --lifetime-for <TAG>` groups every such symbol into
 this type's `dropped_by` / `fields_disposed_by` / `cloned_by` candidates. One
 fact, one home: a routine can never disagree with the type it acts on.
 

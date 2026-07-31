@@ -32,15 +32,25 @@ OUT_SUFFIX_ENV = "CRUSTIFY_OUT_SUFFIX"
 def manifest_name(kind: str) -> str:
     """Per-stem manifest filename for a manifest `kind` (``type``/``types``
     -> ``types.json``; anything else -> ``syms.json``), honoring the
-    ``CRUSTIFY_OUT_SUFFIX`` env var for isolated parallel analyzer runs.
+    ``CRUSTIFY_OUT_SUFFIX`` env var for isolated parallel runs.
 
     With ``CRUSTIFY_OUT_SUFFIX=opus`` the names become ``types_opus.json`` /
     ``syms_opus.json`` so concurrent runs write disjoint files: the canonical
-    (suffix-less) tree is left untouched and downstream consumers
-    (``rglob("types.json")``) ignore the suffixed artifacts. Set by
-    ``analyze types/syms --out-suffix``; read by both the composer emit and
-    every ``crustify query`` the agents shell out to (env inheritance) - the
-    agents pass no path, so the suffix must travel through the environment."""
+    (suffix-less) tree is left untouched, and the stages that consume the
+    analysis rather than produce it (dag, and the wrap/port schedulers) resolve
+    the canonical names only, so they ignore the suffixed artifacts. Set by
+    ``analyze types/syms --out-suffix`` and ``wrap --out-suffix``; read by the
+    composer emit and by every ``crustify-cli query`` the agents shell out to
+    (env inheritance) - the agents pass no path, so the suffix must travel
+    through the environment.
+
+    **Every** manifest access must route through here, reads included. The
+    cross-cutting scans in :mod:`crustify.query` (``--taking``,
+    ``--lifetime-for``, the callee and type-alias indices) used to hardcode
+    ``rglob("syms.json")``, which under a suffix sent writes to the suffixed
+    manifest while reads still came from the canonical one — an agent could not
+    see its own submissions, and the reverse lifecycle lookup stayed empty no
+    matter what it submitted."""
     base = "types" if kind in ("type", "types") else "syms"
     suffix = os.environ.get(OUT_SUFFIX_ENV, "").strip()
     return f"{base}_{suffix}.json" if suffix else f"{base}.json"

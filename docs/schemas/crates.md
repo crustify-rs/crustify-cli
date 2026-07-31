@@ -8,27 +8,20 @@ Target-agnostic and cumulative: "which unique Rust `.rs` homes this C entity",
 independent of porting progress. Port/wrap status and per-target scope live in
 `scope.json`, never here.
 
-Authored OUTSIDE crustify — by hand or by an orchestrator. `crustify scaffold`
-only reads it; an unplaced selection is a hard error.
-
 ## crates.\<name\>
 
 One entry per link unit, keyed by crate name. Crate names ARE the link-unit
-keys — they match `build.json`'s `libraries`, and bindgen uses them as the
+keys — they match `build.json`'s `libraries` or `executables`, and bindgen uses them as the
 library identity.
 
 | field | meaning |
 |---|---|
 | `kind` | `library` (→ staticlib/cdylib) or `executable` (→ bin) |
-| `in_tree` | is the library's SOURCE in this repo? **Provenance only — gates nothing.** |
+| `in_tree` | is the library's SOURCE in this repo? Provenance only — gates nothing. |
 | `crate_path` | repo-relative path of the wrapper crate |
 | `sys_crate` | repo-relative path of the FFI companion. Present for every library with bound entities |
 | `depends_on` | inter-crate edges, from `build.json` `link_dependencies`. A DAG — a cycle between two crates is an error |
 | `modules` | `{}` in a freshly seeded shell |
-
-An out-of-tree dependency (libc, libpthread) is treated like any other: it gets
-a `-sys` crate, a wrapper crate, and wrappers under the same SAFETY discipline.
-The only difference is that its entities have no TU.
 
 ## crates.\<name\>.modules.\<name\>
 

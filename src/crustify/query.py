@@ -1,4 +1,4 @@
-"""crustify query — read-only oracle over the analysis tree.
+"""crustify-cli query — read-only oracle over the analysis tree.
 
 Lists types / symbols filtered by scope, synthetic kind, dag layer,
 name, and source file. It is the policy/inspection surface: the action commands
@@ -156,7 +156,7 @@ def _callee_index(layout) -> dict:
     scope gates emission and not content, this is codebase-wide for every
     emitted record."""
     idx: dict = {}
-    for f in layout.analysis.rglob("syms.json"):
+    for f in layout.analysis.rglob(manifest_name("symbols")):
         try:
             doc = json.loads(f.read_text())
         except (OSError, ValueError):
@@ -193,7 +193,7 @@ def _reaches(start: str, targets: set, idx: dict, hops: int) -> set:
 def _type_aliases(layout, type_name: str) -> set:
     """All spellings of a type (struct tag + typedef(s)) so an arg's ``type``
     string can be matched whichever alias the composer recorded."""
-    for f in layout.analysis.rglob("types.json"):
+    for f in layout.analysis.rglob(manifest_name("types")):
         try:
             doc = json.loads(f.read_text())
         except (OSError, ValueError):
@@ -231,7 +231,7 @@ def _taking(target: Path, spec: str, calling: str | None,
     want = {c.strip() for c in (calling or "").split(",") if c.strip()}
     idx = _callee_index(layout) if want else {}
     rows = []
-    for f in sorted(layout.analysis.rglob("syms.json")):
+    for f in sorted(layout.analysis.rglob(manifest_name("symbols"))):
         try:
             doc = json.loads(f.read_text())
         except (OSError, ValueError):
@@ -288,7 +288,7 @@ def _lifetime_for(target: Path, type_name: str, array_only: bool = False) -> Non
               "array_only": array_only,
               "dropped_by": [], "fields_disposed_by": [], "cloned_by": []}
     seen = set()
-    for f in sorted(layout.analysis.rglob("syms.json")):
+    for f in sorted(layout.analysis.rglob(manifest_name("symbols"))):
         try:
             doc = json.loads(f.read_text())
         except (OSError, ValueError):
@@ -1818,7 +1818,7 @@ def query_dag(
     if not dag_path.exists():
         raise SystemExit(
             f"query dag: no deps-dag.json at {layout.analysis}. "
-            f"Run `crustify {target} analyze dag` first.")
+            f"Run `crustify-cli {target} analyze dag` first.")
     dag = json.loads(dag_path.read_text())
     by_key, by_name = S.load_nodes(dag)
     keep = _scope_predicate(layout, target, wrap_only, port_only)
@@ -1942,7 +1942,7 @@ def query_files(
     if not scope_path.exists():
         raise SystemExit(
             f"error: scope.json not found at {scope_path}. Run "
-            f"`crustify {target} analyze scope --port-only` first.")
+            f"`crustify-cli {target} analyze scope --port-only` first.")
     doc = json.loads(scope_path.read_text())
 
     port_files = wrap_files = None
@@ -1953,7 +1953,7 @@ def query_files(
         if wrap is None:
             raise SystemExit(
                 f"error: scope.json has no `wrap` section at {scope_path}. Run "
-                f"`crustify {target} analyze scope --wrap-only` first "
+                f"`crustify-cli {target} analyze scope --wrap-only` first "
                 f"(composer-only; needs just the `port` section + "
                 f"`analyze extract-ql`).")
         wrap_files = sorted(set(wrap.get("files") or []))

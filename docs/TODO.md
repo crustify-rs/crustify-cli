@@ -1310,7 +1310,7 @@ Any residual open work has been pulled up into the sections above.
 
 ## 2026-06-13 - Deterministic `audit` (entity-seeded, no LLM) -- DONE
 
-`crustify <target> audit` shipped: `src/crustify/audit.py` +
+`crustify-cli <target> audit` shipped: `src/crustify/audit.py` +
 `utils/codeql/compose/audit_manifest.py`, with a `cli.py` `audit` subparser
 (`--name/--file/--dir/--mod/--crate/--all`, naked-FFI search always global).
 Replaced the parked CrustifyAuditAgent proposal (`docs/AUDIT_AGENT.md` deleted).

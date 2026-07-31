@@ -609,10 +609,10 @@ def _isolated_wave(
     materialize the session base once, fork one child per agent, symlink the
     shared read-only artifacts. It does not integrate, validate, commit on an
     agent's behalf, or tear anything down — the agent commits its own work and
-    lands it on the base branch itself (`--ff-only` after rebasing onto the
-    current tip; at most one agent per tip can fast-forward, the rest rebase and
-    retry). Advancing the base needs real mutual exclusion, which git does not
-    provide for a shared worktree — see :mod:`crustify.worktree`.
+    lands it by pushing to the session branch, rebasing and retrying when a
+    sibling got there first. That is race-free without a lock because a push is
+    one atomic ref update; see :mod:`crustify.worktree` for why the branch has no
+    checkout and what fails if it does.
 
     Worktrees survive the wave by design. A child's branch is the record of what
     that agent produced, and a partial or failed wave must stay inspectable
@@ -621,6 +621,7 @@ def _isolated_wave(
     """
     from crustify import config as _cfg
     from crustify import worktree as W
+    from crustify.worktree import _WT_DIR as _WT
     from crustify.layout import Layout
 
     repo = Path(stage.layout.repo_root)
@@ -628,11 +629,10 @@ def _isolated_wave(
     chains = list(by_file.values())
     failures: list[tuple[Batch, BaseException]] = []
 
-    # Once per session, and adopted as-is if it already exists — so a later
-    # dependency layer forks from a base that already holds the earlier layers'
-    # landed work rather than re-snapshotting the untouched main tree.
+    # Once per session, adopted if it already exists — so a later dependency
+    # layer forks from a branch that already holds the earlier layers' landed
+    # work. No checkout: that is what lets agents push to it concurrently.
     base = W.session_base(repo, f"{stage.verb}-{_cfg.SESSION_ID}")
-    W.link_shared(base.path, repo)
 
     def _slug(i: int, chain: list[Batch]) -> str:
         stem = Path(chain[0].file).stem if chain[0].file else "batch"
@@ -651,7 +651,7 @@ def _isolated_wave(
             emit(b)
 
 
-    _cfg.SESSION_BASE = str(base.path)
+    _cfg.SESSION_BASE = base.branch
     try:
         with ThreadPoolExecutor(max_workers=parallel_max if parallelize else 1) as ex:
             # Worktrees are created SEQUENTIALLY in the main thread — `git worktree
@@ -683,7 +683,7 @@ def _isolated_wave(
     # whether an agent committed. Integration is the agents' business, and any
     # summary here would be a guess that reads as a report.
     print(f"[{stage.verb}] {len(chains)} agent worktree(s) under "
-          f"{base.path.parent}; session branch {base.branch}")
+          f"{repo / _WT}; session branch {base.branch}")
 
     if stage.shared_artifact_fn is not None:
         stage.shared_artifact_fn()
@@ -758,7 +758,7 @@ def schedule(
                 f"{stage.verb}: {len(missing)} selected item(s) have no home "
                 f"`.rs` on disk — the scaffolder never materialized them (no "
                 f"crates.json home, or a stale tree). Re-run "
-                f"`crustify <target> scaffold` and retry:\n{listing}")
+                f"`crustify-cli <target> scaffold` and retry:\n{listing}")
 
     if not all_batches:
         print("schedule: no batches produced (nothing to do).")

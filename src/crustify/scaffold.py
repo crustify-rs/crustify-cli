@@ -106,7 +106,7 @@ def scaffold(
         stats = _materialize(layout, entries,
                              _scope_map(layout, target), _field_map(layout))
         mstats = _materialize_manifests(layout, doc)
-        print(f"[crustify scaffold --create] {stats}{mstats} → {layout.rust}")
+        print(f"[crustify-cli scaffold --create] {stats}{mstats} → {layout.rust}")
     else:
         seen: set[str] = set()
         for e in entries:
@@ -194,7 +194,7 @@ def _validate(layout) -> None:
         for e in errs:
             print(f"scaffold: {e}", file=sys.stderr)
         raise SystemExit(1)
-    print(f"[crustify scaffold --validate] crates.json OK ({layout.crates_json})")
+    print(f"[crustify-cli scaffold --validate] crates.json OK ({layout.crates_json})")
 
 
 # --------------------------------------------------------------- entry resolution

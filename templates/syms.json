@@ -1,8 +1,8 @@
 {
  "_comment": [
   "Example records for the per-stem syms.json manifest. Field MEANING lives in",
-  "docs/schemas/syms.md (served by `crustify query syms --schema`); the",
-  "submission shape + rules come from `crustify query syms --update-help`."
+  "docs/schemas/syms.md (served by `crustify-cli query syms --schema`); the",
+  "submission shape + rules come from `crustify-cli query syms --update-help`."
  ],
  "symbols": [
   {

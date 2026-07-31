@@ -81,6 +81,77 @@ _OPENAI_APIKEY = _provider_block(
     "OPENAI_API_KEY")
 
 
+# Reasoning effort per model id: codex never infers one, and its fallback is low
+# either way — `none` for a model missing from its catalog, and the catalog's own
+# `default_reasoning_level` (`low` for the gpt-5.6 family) for one that is in it.
+# Neither suits discovery or codegen. codex does NOT validate
+# the value locally (an unknown one is printed in its banner and fails at the
+# API), so this table is the whitelist.
+#
+# `codex debug models` reports the accepted set per model; for the gpt-5.6
+# family it is low | medium | high | xhigh | max | ultra. Note that codex's
+# catalog names them `gpt-5.6-{sol,terra,luna}` — a bare `gpt-5.6` reaches the
+# API fine but warns "Model metadata not found. Defaulting to fallback
+# metadata", so its context window and auto-compact limits are guesses.
+# Unlisted models keep codex's own default.
+_REASONING_EFFORT = {
+    "gpt-5.6": "high",
+    "gpt-5.6-sol": "high",
+    "gpt-5.6-terra": "high",
+    "gpt-5.6-luna": "high",
+}
+
+
+def _writable_roots(repo_root: Path) -> list[str]:
+    """Directories the sandbox must let the agent write, beyond its work dir.
+
+    ``-s workspace-write`` grants exactly ``[workdir, /tmp, $TMPDIR]``, and the
+    work dir is the *target* directory (``<repo>/ssl``) — so out of the box an
+    agent cannot write the Rust it is asked to emit, cannot commit, and cannot
+    submit a record. Three roots are needed:
+
+    * ``repo_root`` — in an isolated wave this is the agent's worktree: the C
+      tree it reads, ``crustify/rust/`` it writes, and cargo's ``target/``.
+    * the **main checkout** — for two independent reasons. A worktree's ``.git``
+      is a *file* pointing at ``<main>/.git/worktrees/<slug>``, so every commit
+      and the landing push write there; and :func:`crustify.worktree.link_shared`
+      symlinks ``analysis`` / ``targets`` / ``.providers`` / ``tmp`` / the
+      repo-tier JSON stores back to the main checkout, which is where the
+      agent's record submissions and codex's own session rollout land.
+    * ``CARGO_HOME`` — cargo writes its registry cache and lockfiles there.
+
+    The main checkout is derived rather than passed: ``--git-common-dir`` is
+    ``<main>/.git`` from any worktree and ``<repo>/.git`` from a plain checkout,
+    so its parent is the right root either way.
+
+    Seatbelt canonicalizes before matching — verified: with write access granted
+    to a directory only, a write *through* a symlink in it to a target outside
+    still fails ``Operation not permitted``. So granting ``repo_root`` does NOT
+    reach anything ``link_shared`` symlinked out; the main checkout must be
+    named explicitly.
+    """
+    roots = [repo_root]
+    common = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "--git-common-dir"],
+        capture_output=True, text=True,
+    )
+    if common.returncode == 0 and common.stdout.strip():
+        git_dir = Path(common.stdout.strip())
+        if not git_dir.is_absolute():
+            git_dir = (repo_root / git_dir).resolve()
+        roots.append(git_dir.parent)
+    cargo_home = os.environ.get("CARGO_HOME") or str(Path.home() / ".cargo")
+    roots.append(Path(cargo_home))
+
+    seen, out = set(), []
+    for r in roots:
+        r = Path(r).resolve()
+        if r.is_dir() and str(r) not in seen:
+            seen.add(str(r))
+            out.append(str(r))
+    return out
+
+
 def _rollout_path(codex_home: Path, session_id: str) -> Path | None:
     """Locate the session rollout for ``session_id``.
 
@@ -159,12 +230,19 @@ class CodexCliBackend:
         route = resolve(model)
         prompt = prompt_template.format(**arguments)
 
+        repo_root = Path(arguments.get("repo_root", wd)).resolve()
+        roots = json.dumps(_writable_roots(repo_root))
+
         cmd = [exe, "exec", "--skip-git-repo-check",
                "-C", str(wd),
                "-s", "workspace-write",
+               "-c", f"sandbox_workspace_write.writable_roots={roots}",
                "-m", route.model,
                "--ignore-user-config",
                *_TOOL_OFF]
+        effort = _REASONING_EFFORT.get(route.model)
+        if effort:
+            cmd += ["-c", f'model_reasoning_effort="{effort}"']
         if route.provider == "openrouter":
             cmd += _OPENROUTER
             if not os.environ.get("OPENROUTER_API_KEY"):

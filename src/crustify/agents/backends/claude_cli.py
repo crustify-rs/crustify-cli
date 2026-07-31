@@ -1,18 +1,24 @@
 """Drive one crustify stage with the ``claude`` CLI.
 
-One subprocess per agent, invoked in the CLI's own **text** mode so its
-human-readable output lands in ``<stage>.log`` unaltered - crustify writes
-no renderer. Accounting is recovered afterwards from the session
-transcript the CLI persists independently of stdout format, and priced by
-``utils/log_cost.py``.
+One subprocess per agent, invoked with ``--output-format stream-json`` so
+each turn reaches ``<stage>.log`` **as it happens**. The CLI's default text
+mode buffers: it prints the final result and nothing else, so a run that
+takes twenty minutes shows a 0-byte log for twenty minutes and then
+everything at once. That is indistinguishable from a hung agent, and it was
+- watching manifest mtimes was the only way to tell a working run from a
+stalled one. Streaming costs crustify a renderer (:func:`_render`), which
+is the trade the module previously declined; observability during the run
+turned out to be worth more than not owning one.
+
+Accounting still comes from the session transcript the CLI persists
+independently of stdout format, priced by ``utils/log_cost.py``.
 
 Why not ``--output-format json``, which reports ``total_cost_usd``
-directly: a process emits one stream in one format, so taking the machine
-format means owning the rendering. The transcript carries the same token
-counts, and under subscription auth ``total_cost_usd`` is the
-API-equivalent price rather than what is billed anyway - so pricing every
-provider by one method makes the numbers comparable across providers,
-which mixing provider-reported and self-computed dollars would not.
+directly: it is the same buffering problem (one JSON blob at exit), and
+under subscription auth ``total_cost_usd`` is the API-equivalent price
+rather than what is billed - so pricing every provider by one method makes
+the numbers comparable across providers, which mixing provider-reported and
+self-computed dollars would not.
 
 The transcript's one blind spot: auxiliary requests the CLI makes on the
 side (session-title generation) bill to the account but are never written
@@ -33,6 +39,70 @@ import uuid
 from pathlib import Path
 
 from crustify.agentlog import AgentLog
+
+# Tool-result payloads can be a whole file; keep the log readable.
+_RESULT_CLIP = 2000
+
+
+def _render(evt: dict) -> list[str]:
+    """One ``stream-json`` event -> the lines to log, mirroring the shape the
+    codex backend's text mode produces (a tool call, then its output).
+
+    Unknown event types render as nothing rather than raw JSON: the stream
+    carries bookkeeping (init handshakes, partial deltas) that is noise in a
+    log meant to be read. Anything genuinely unparseable is passed through by
+    the caller instead.
+    """
+    out: list[str] = []
+    kind = evt.get("type")
+
+    if kind == "system" and evt.get("subtype") == "init":
+        out.append(f"model: {evt.get('model')}  session: {evt.get('session_id')}"
+                   f"  cwd: {evt.get('cwd')}")
+        return out
+
+    if kind == "assistant":
+        for b in (evt.get("message") or {}).get("content") or []:
+            if b.get("type") == "text" and b.get("text", "").strip():
+                out.append(b["text"].rstrip())
+            elif b.get("type") == "thinking" and b.get("thinking", "").strip():
+                out.append("[thinking] " + b["thinking"].strip()[:400])
+            elif b.get("type") == "tool_use":
+                inp = b.get("input") or {}
+                # Bash is the only tool the backend allowlists; show the command
+                # itself rather than a JSON blob.
+                cmd = inp.get("command")
+                out.append(f"exec {cmd}" if cmd
+                           else f"tool {b.get('name')} {json.dumps(inp)[:300]}")
+        return out
+
+    if kind == "user":
+        for b in (evt.get("message") or {}).get("content") or []:
+            if b.get("type") != "tool_result":
+                continue
+            c = b.get("content")
+            if isinstance(c, list):
+                c = "".join(x.get("text", "") for x in c if isinstance(x, dict))
+            c = (c or "").rstrip()
+            if not c:
+                continue
+            flag = " (error)" if b.get("is_error") else ""
+            clipped = c[:_RESULT_CLIP]
+            out.append(f"  ->{flag} {clipped}"
+                       + ("… [clipped]" if len(c) > _RESULT_CLIP else ""))
+        return out
+
+    if kind == "result":
+        # On success `result` merely repeats the final assistant message, which
+        # has already been logged — print it only when the run ended some other
+        # way, where it carries the reason and nothing else has.
+        if evt.get("subtype") != "success":
+            out.append(f"[result: {evt.get('subtype')}]")
+            if (txt := (evt.get("result") or "").strip()):
+                out.append(txt)
+        out.append(f"[turns: {evt.get('num_turns')}  "
+                   f"duration: {evt.get('duration_ms')}ms]")
+    return out
 
 # Replaces the CLI's own base prompt when ``config.OVERRIDE_BASE_PROMPT``
 # is set (the default). crustify's stage prompt arrives as the user
@@ -134,6 +204,11 @@ class ClaudeCliBackend:
 
         cmd = [
             exe, "-p", prompt,
+            # Stream each turn as it happens; `--verbose` is what the CLI
+            # requires to emit the per-turn events in print mode rather than
+            # only the final result.
+            "--output-format", "stream-json",
+            "--verbose",
             "--model", route.model,
             "--session-id", session_id,
             # One tool. `--tools` is an allowlist, so anything the CLI gains
@@ -183,7 +258,16 @@ class ClaudeCliBackend:
         )
         err_thread.start()
         for line in proc.stdout:
-            log.line(line.rstrip("\n"))
+            line = line.rstrip("\n")
+            if not line.strip():
+                continue
+            try:
+                evt = json.loads(line)
+            except ValueError:
+                log.line(line)          # not an event — pass through verbatim
+                continue
+            for out in _render(evt):
+                log.line(out)
         rc = proc.wait()
         err_thread.join(timeout=5)
 

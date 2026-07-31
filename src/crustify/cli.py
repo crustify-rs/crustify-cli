@@ -109,7 +109,7 @@ def _add_analyze_filter_flags(p: argparse.ArgumentParser) -> None:
              "instead of the canonical types.json / syms.json, isolating this "
              "run from the real tree (and from other suffixed runs). The "
              "composer emits a fresh suffixed skeleton; the agents -- which "
-             "shell out to `crustify query` with no pushed path -- pick up the "
+             "shell out to `crustify-cli query` with no pushed path -- pick up the "
              "suffix via the CRUSTIFY_OUT_SUFFIX env var. Lets several analyzer "
              "runs (e.g. model-comparison instances) execute in parallel "
              "without clobbering; downstream stages (dag/wrap/port) read only "
@@ -188,11 +188,11 @@ def _add_subject_scope_flags(
 def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
     """Flags for `query types`/`query syms` — the read-only oracle, resolved
     from the manifest (dag-free). With no `--name` they enumerate (filtered by
-    scope / synthetic kind / `--file`) as a name list; with `--name T` they
+    scope / `--file`) as a name list; with `--name T` they
     introspect one entry — always the WHOLE record (several names → several
     records). On a type, `--fields`/`--ops` print its windowable lists
     (`facets`). The .rs module of an entry is found via
-    `crustify <target> scaffold --name <X>`, not here."""
+    `crustify-cli <target> scaffold --name <X>`, not here."""
     sc = p.add_mutually_exclusive_group()
     sc.add_argument("--wrap-only", action="store_true", dest="wrap_only",
                     help="Narrow to wrap scope: enumeration → wrap-scope entries; "
@@ -228,8 +228,7 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
     facet.add_argument("--schema", action="store_true", dest="schema",
                        help="Print the record's field/slot DEFINITIONS (the "
                             "_comment_* blocks, the schema authority), then exit. "
-                            "No --name needed. types: struct-analyzer fields only "
-                            "(synthetic string/array-cluster fields excluded).")
+                            "No --name needed.")
     if facets:
         facet.add_argument("--fields", action="store_true",
                            help="Introspect a type: ALL declared fields with their "
@@ -353,6 +352,20 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
              "already-done list; the driver seeds it, crustify just honours it).",
     )
     p.add_argument(
+        "--out-suffix", dest="out_suffix", default=None, metavar="SUFFIX",
+        help="Route the agents' record submissions to syms_<SUFFIX>.json / "
+             "types_<SUFFIX>.json instead of the canonical manifests. Wrap "
+             "agents write to the analysis tree as well as to the Rust tree — "
+             "`--lifetime-for` in discovery mode submits `lifetime` blocks, and "
+             "any wrap agent may correct a record it finds wrong — while every "
+             "worktree in a wave symlinks the ONE shared analysis dir. Worktree "
+             "isolation therefore separates the Rust output of two concurrent "
+             "runs but not their findings; this flag is what separates those "
+             "(e.g. a model comparison). The Rust side needs no flag: each run "
+             "gets its own session branch. Downstream stages read only the "
+             "canonical names, so a suffixed run is promoted by renaming.",
+    )
+    p.add_argument(
         "--parallel-max", type=int, default=8, metavar="N", dest="parallel_max",
         help="Max concurrent agents across disjoint files (with --parallel).",
     )
@@ -368,7 +381,7 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="crustify",
+        prog="crustify-cli",
         description="Multi-agent C-to-Rust translation pipeline.",
     )
     parser.add_argument(
@@ -735,12 +748,12 @@ def main() -> None:
     dag_scope.add_argument(
         "--wrap-only", action="store_true", dest="wrap_only",
         help="Restrict the node set (slice / --loc) to wrap-scope entities "
-             "(scope.json wrap closure ∪ synthetic string/array clusters).",
+             "(scope.json wrap closure).",
     )
     dag_scope.add_argument(
         "--port-only", action="store_true", dest="port_only",
         help="Restrict the node set (slice / --loc) to port-scope entities "
-             "(scope.json port closure; synthetics are never port).",
+             "(scope.json port closure).",
     )
 
     # -- wrap ------------------------------------------------------------
@@ -756,8 +769,20 @@ def main() -> None:
         ),
     )
     _add_wrap_filter_flags(wrap_p)
-
-
+    wrap_p.add_argument(
+        "--lifetime-for", default=None, metavar="SPEC", dest="lifetime_for",
+        help="LIFETIME-DISCOVERY mode: hand one agent the job of wrapping "
+             "SPEC's lifecycle primitives into a Rust lifetime contract (the "
+             "strategy ZST + the smart-pointer Drop/Clone impls a reference to "
+             "SPEC needs to be owned in Rust). The mirror of `analyze symbols "
+             "--lifetime-for SPEC` one stage on: that mode DISCOVERS the "
+             "routines that drop/dispose/clone SPEC and submits their `lifetime` "
+             "blocks, this one reads them back (`query symbols --lifetime-for "
+             "SPEC`) and emits the wrapper. SPEC is a struct tag / typedef, or "
+             "the keyword `void` (raw byte-level, untyped) / `string` "
+             "(NUL-terminated). Run the tiers in order: void -> string -> <tag>, "
+             "since a typed cluster's Drop usually delegates to the untyped "
+             "one's. IS its own selector -- no --name.")
 
     # -- port ------------------------------------------------------------
     port_p = sub.add_parser(
@@ -916,20 +941,7 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
     # narrowing flag support.
     _validate_narrowing(args)
 
-    # --out-suffix isolates this run onto types_<suffix>.json / syms_<suffix>.json.
-    # Export it so the composer emit, the agents' `crustify query` subprocesses
-    # (env-inherited; no path is pushed to them), and reset all resolve the same
-    # suffixed file. Validate as a filename-safe token.
-    out_suffix = getattr(args, "out_suffix", None)
-    if out_suffix:
-        import os
-        import re
-        from crustify.layout import OUT_SUFFIX_ENV
-        if not re.fullmatch(r"[A-Za-z0-9._-]+", out_suffix):
-            print("error: --out-suffix must match [A-Za-z0-9._-]+",
-                  file=sys.stderr)
-            sys.exit(2)
-        os.environ[OUT_SUFFIX_ENV] = out_suffix
+    _export_out_suffix(args)
 
     # Resolve --file basenames to repo-rel paths before building the
     # selection / filter (so composer, agent, and reset all see the
@@ -993,6 +1005,39 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
 
     print(f"error: unknown analyze subject {subject!r}", file=sys.stderr)
     sys.exit(2)
+
+
+def _export_out_suffix(args: argparse.Namespace) -> None:
+    """Publish ``--out-suffix`` into the environment, or do nothing when unset.
+
+    The suffix isolates a run onto ``types_<suffix>.json`` /
+    ``syms_<suffix>.json`` (see :func:`crustify.layout.manifest_name`). It
+    travels by env var rather than by argument because the agents shell out to
+    ``crustify-cli query --update`` with no path pushed to them — the backends
+    hand the subprocess a copy of ``os.environ``, so exporting here is what makes
+    the agent half write to the same suffixed file the composer emitted.
+
+    Both agent-bearing stages call this. ``analyze symbols/types`` needs it for
+    the composer emit; ``wrap`` needs it because its agents submit records too —
+    the lifetime-discovery mode writes `lifetime` blocks straight into
+    ``syms.json``, and a wave's worktrees all symlink ONE shared ``analysis``
+    tree (:data:`crustify.worktree._SHARED`), so worktree isolation does not
+    separate two concurrent runs' findings. Without a suffix, two model-
+    comparison runs merge into one manifest and the later submitter wins every
+    symbol both discovered.
+
+    Validated as a filename-safe token.
+    """
+    out_suffix = getattr(args, "out_suffix", None)
+    if not out_suffix:
+        return
+    import os
+    import re
+    from crustify.layout import OUT_SUFFIX_ENV
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", out_suffix):
+        print("error: --out-suffix must match [A-Za-z0-9._-]+", file=sys.stderr)
+        sys.exit(2)
+    os.environ[OUT_SUFFIX_ENV] = out_suffix
 
 
 def _validate_narrowing(args: argparse.Namespace) -> None:
@@ -1255,6 +1300,16 @@ def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
     selection. One scheduler emits type, string, array, and free-symbol
     wrappers alike — no subject split (the scheduler routes each unit to its
     wrapper prompt by kind)."""
+    # Before any agent spawns: the suffix reaches them through the environment.
+    _export_out_suffix(args)
+    spec = getattr(args, "lifetime_for", None)
+    if spec:
+        # `--lifetime-for SPEC` IS the selection: no --name, no DAG layer, no
+        # batching. Same contract as `analyze symbols --lifetime-for`.
+        from crustify.wrap import wrap_lifetime_for
+        wrap_lifetime_for(target, spec,
+                          dry_run=bool(getattr(args, "dry_run", False)))
+        return
     from crustify.wrap import wrap_types
     wrap_types(
         target,
@@ -1312,7 +1367,7 @@ def _require_artifact(target: Path, filename: str, command: str) -> None:
     if not (Layout.discover(target).root / filename).exists():
         print(
             f"error: missing prerequisite artifact 'crustify/{filename}'.\n"
-            f"       Run: crustify {target} {command}",
+            f"       Run: crustify-cli {target} {command}",
             file=sys.stderr,
         )
         sys.exit(1)

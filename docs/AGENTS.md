@@ -1,8 +1,7 @@
 # AGENTS.md — crustify C→Rust port: always-on principles
 
 The non-negotiable core every porting/wrapping agent must hold in context at all
-times — kept deliberately short, because this is the always-loaded tier (inlined
-into every agent prompt; detail and worked cases live in the separate reference).
+times.
 
 ## Skills
 
@@ -39,20 +38,21 @@ and safe FFI function wrappers for making FFI calls.
  - a setter that moves ownership into `self`, drops the old reference
    and sets the new one using `addr_of_mut!(...)`
  
- - two getters: one which transfers ownership out from `self`, leaving the field valid,
-   and one which borrows the field's shared reference `&T`.
+ - two getters: one which transfers ownership out from `self`, leaving
+   the field valid, and one which borrows the field's shared reference `&T`.
  
  - fields that are embedded by value get a borrow projecting
    getter `&T` over `addr_of(...)`; the caller reads through
    `T`'s own `self` accessors. 
 
-## Functions and callbacks
+## Functions, callbacks, and inline function pointers
 
- **Wrap-scope** functions and callbacks get a safe wrapper that serialize wrapped
+ **Wrap-scope** functions, callbacks, and inline function pointers get a safe
+  wrapper that serialize wrapped
  references before calling their `ffi::` variant, and deserialize results back to
  safe wrappers upon return.
  
- **Port-scope** functions and callbacks are translated to native Rust and call
+ **Port-scope** ones are translated to native Rust and call
  the safe API when needing FFI dependencies.
 
 ## Macros
@@ -67,7 +67,8 @@ its **safe wrapper** (it is very likely already a dep of what you're porting).
 
 - **Function-like macro with no wrapper**: look for a
 `crustify_<NAME>(<ARG_DECLS>)` shim in `ffi::` - bindgen may have emitted one.
-Call it across the FFI seam like any other not-yet-ported C primitive.
+Call it across the FFI seam like any other not-yet-ported C primitive. If the
+shim is absent, then emit it yourself and rerun bindgen.
 
 - **Constant macro**: use the `ffi::` binding directly.
 
@@ -75,10 +76,8 @@ Call it across the FFI seam like any other not-yet-ported C primitive.
 
 To leverage idiomatic Rust features, we express each pointer argument,
 return, field, and variable based on the ownership facets provided by the
-`crustify-oracle` skill via the smart pointers and traits from the `crustify-wrap-crate`
-skill. Use `crustify-oracle` to determine the various properties of a C pointer (ownership,
-singleton vs. array, typed vs. type-erased, nullable, mutable, etc.) and associate it with
-the appropriate smart pointer from `crustify-wrap-crate`.  
+`crustify-oracle` skill via the smart pointers and traits from the 
+`crustify-wrap-crate`skill. 
 
 ## Safety discipline
 
@@ -100,19 +99,12 @@ fully-checked Rust**. This is load-bearing - the steps assume it.
     accessors** (the accessors own the `addr_of!` / `addr_of_mut!`); you **never**
     access a types field's outside the accessors, you use the accessors instead.
     
-    (2) manual memory management for types / pointers whose lifetime / ownership
-    semantics **cannot be expressed** through the smart pointers and traits from
-    `crustify-prim`.
-    
-    (3) calling an `ffi::` routine inside its own safe wrapper or inside Rust-native
+    (2) calling an `ffi::` routine inside its own safe wrapper or inside Rust-native
     functions if the `ffi::` routine does not have a safe wrapper yet. Known routines
     for which we don't emit wrappers yet:
     - system / external.
-    
-    (4) indirect calls through function pointers that do not have a safe callback
-    wrapper.
 
-    (5) calling Rust-native functions declared unsafe. The allowed cases are:
+    (3) calling Rust-native functions declared unsafe. The allowed cases are:
     - calling an unsafe setter that passess a borrowed reference, which requires
     declaring the setter unsafe, is also allowed.
     - calling `assume_init` to promote a partially initialized reference to a
@@ -120,19 +112,15 @@ fully-checked Rust**. This is load-bearing - the steps assume it.
  
 - **Inner-module `raw pointers` are ONLY allowed in the following cases:**
     (1) the above scenarios where `unsafe` blocks are allowed.
-    
-    (2) an out-param address helper (taking the address of a field to pass as an
-    out-pointer).
-    
-    (3) an intrusive-list sibling link the smart pointers cannot yet model.
 
 - **Every `unsafe` block** carries a specific, falsifiable `// SAFETY:` stating the
     safety contract and discipline.
 
 ### Reference borrows
 
-- **Never** instantiate a `&mut` to a wrapped type (in a function's signature or body).
-    **Always** write through `&self` setters - the principle of interior mutability.
+- **Never** instantiate a `&mut` to a wrapped type (in a function's signature
+or body). **Always** write through `&self` setters - the principle of interior 
+mutability.
 
 ### Field accesses
 
@@ -149,16 +137,15 @@ pointer. The constructs that synthesise a borrow are forbidden.
 ## File contract (file-grained - load-bearing)
 
 The `.rs` module for each target and dependency (types/symbols) is found via the
-`crustify scaffold` command, which reflects the pre-established item placement policy.
+`crustify-cli scaffold` command, which reflects the pre-established item placement policy.
 
 Each module is a **shared, file-grained module** - one Rust module per C source
 file, holding the following anchor kinds:
 - `// Replaces:` for port-scope items (functions / globals / types)
 - `// Wraps:` for wrap-scope items
 - `// Field:` for a type's field accessors
-- `// Alias:` for typed-array aliases
 
-Each module includes anchors for **many** elements at once (across batches,
+Each module includes anchors for many elements at once (across batches,
 wrap *and* port). Any one agent owns only the anchors in its workset; the rest
 belong to other batches and the other stage. Each anchor may be followed by
 a `// crustify:todo` placeholder marking remaining work, which gets deleted
@@ -171,3 +158,24 @@ The per-anchor fill contract:
 - a filled anchor's `// <Anchor>:` line is **promoted** to a
   `/// <Anchor>: <C_ITEM> (<file>.c/.h)` doc comment on the emitted item, and its
   `// crustify:todo` is **deleted** (a surviving todo marks still-pending work).
+
+## Ownership analyis
+
+For struct fields and pointer args and return for functions and function pointers.
+Analysis is codebase-wide, unscoped, to catch the complete usage footprint of the
+anlyzed item. For ptr args, walk down the call graph of the target function and
+identify paths that free the arg.
+
+### Decision support
+
+Three independent signals; use whichever is decisive:
+
+  1. **Documentation / API contract.** Headers and reference docs often
+     spell out ownership, lifetime, and buffer contracts directly.
+  2. **Body + callers + name patterns.** What the body does to each
+     pointer (frees, stores in a field, just reads); what representative
+     callers do after the call. Name patterns are hints, never
+     authoritative.
+  3. **CodeQL** against the given db for dataflow / pointer-provenance
+     on non-obvious cases. If you find a reusable gap, save the query
+     under `utils/codeql/` and flag it.

@@ -49,20 +49,20 @@ def bindgen(target: Path, *, libs: list[str] | None = None,
     if not scope_json.exists():
         raise SystemExit(
             f"error: scope.json not found at {scope_json}. Run "
-            f"`crustify {target} analyze scope` first."
+            f"`crustify-cli {target} analyze scope` first."
         )
     analysis_root = layout.analysis
     if not analysis_root.exists():
         raise SystemExit(
             f"error: analysis tree not found at {analysis_root}. Run "
-            f"`crustify {target} analyze` first."
+            f"`crustify-cli {target} analyze` first."
         )
     t1, t2 = layout.t1, layout.t2
     for csv_dir in (t1, t2):
         if not csv_dir.exists():
             raise SystemExit(
                 f"error: CodeQL CSVs not found at {csv_dir}. Run "
-                f"`crustify {target} analyze extract-ql` first."
+                f"`crustify-cli {target} analyze extract-ql` first."
             )
 
     spec = FilterSpec(scope_json_path=scope_json)
@@ -80,10 +80,10 @@ def bindgen(target: Path, *, libs: list[str] | None = None,
             + f"(scaffold must run first) for {analysis_root}."
         )
 
-    print(f"[crustify bindgen] -sys crates: "
+    print(f"[crustify-cli bindgen] -sys crates: "
           f"{sorted(l + '-sys' for l in plan.libs)}")
     for lib, lp in sorted(plan.libs.items()):
-        print(f"[crustify bindgen]   {lib}-sys: "
+        print(f"[crustify-cli bindgen]   {lib}-sys: "
               f"{len(lp.allow_types)} types, {len(lp.allow_funcs)} funcs, "
               f"{len(lp.allow_macros)} macros, {len(lp.allow_vars)} vars, "
               f"{len(lp.allow_callbacks)} callbacks"
@@ -91,10 +91,10 @@ def bindgen(target: Path, *, libs: list[str] | None = None,
 
     stats = write_plan(plan, rust_root, reset=reset)
     print(
-        f"[crustify bindgen] {stats.libs} -sys crate(s), "
+        f"[crustify-cli bindgen] {stats.libs} -sys crate(s), "
         f"{stats.files_written} file(s) written, "
         f"{stats.skipped_existing} preserved → {rust_root}"
     )
-    print("[crustify bindgen] crates are incomplete scaffolds: build.rs has "
+    print("[crustify-cli bindgen] crates are incomplete scaffolds: build.rs has "
           "the allowlists but no fn main; shims go in bindgen.h's "
           "crustify:shims block.")

@@ -63,11 +63,17 @@ class CrustifyWrap(CrustifyAgent):
         fallback_deps: list[str] | None = None,         # deps not wrapped yet → raw ffi::T
         naked_users: list[str] | None = None,           # users to switch onto this wrapper
         # pull path (single struct/union/enum): the agent discovers everything via
-        # `crustify query`/`scaffold`; the scheduler hands only the field window.
+        # `crustify-cli query`/`scaffold`; the scheduler hands only the field window.
         fields_range: list[int] | None = None,          # [lo, hi) into the field list
         # syms batch:
         rs_out: str | None = None,
         syms: list[dict] | None = None,
+        # Lifetime-discovery mode (mirrors `analyze symbols --lifetime-for`):
+        # instead of a resolved worklist, the agent is handed a SPEC and finds
+        # the lifecycle primitives itself. Rides in `syms` as a mode marker so
+        # the prompt has one input to read, exactly as the analyzer's rides in
+        # `manifests`.
+        lifetime_for: str | None = None,
         repo_root: Path | None = None,         # worktree root in an isolated wave
     ) -> None:
         super().__init__(target, repo_root=repo_root)
@@ -87,12 +93,18 @@ class CrustifyWrap(CrustifyAgent):
         self._fields_range = list(fields_range) if fields_range is not None else None
         # syms batch:
         self._rs_out = rs_out or (self._rs_outs[0] if self._rs_outs else "")
-        self._syms = list(syms or [])
+        self._lifetime_for = lifetime_for
+        self._syms = ([{"lifetime_for": lifetime_for}] if lifetime_for
+                      else list(syms or []))
 
     @property
     def stage(self) -> str:  # type: ignore[override]
-        key = (self._tags[0] if self._tags else "batch") if self._batch_kind == "type" else (
-            self._syms[0]["name"] if self._syms else "syms")
+        if self._batch_kind == "type":
+            key = self._tags[0] if self._tags else "batch"
+        elif self._lifetime_for:
+            key = f"lifetime_for__{self._lifetime_for}"
+        else:
+            key = self._syms[0]["name"] if self._syms else "syms"
         return f"wrap_{re.sub(r'[^A-Za-z0-9_]+', '_', key or 'batch')}"
 
     @property
@@ -117,8 +129,11 @@ class CrustifyWrap(CrustifyAgent):
     def _arguments(self) -> dict:
         crustify_root = _PKG_ROOT.parent.parent
         common = {
-            "target":         self.target_rel,
-            "repo_root":      str(self.repo_root),
+            # Base first: `target`, `repo_root`, and `git_base` (the wave's
+            # session branch). Building this dict from scratch silently dropped
+            # every key the base adds — a template naming one dies with KeyError
+            # before the agent issues a request.
+            **super()._arguments(),
             "workspace_root": str(self.layout.rust),
             "analysis_root":  str(self.layout.analysis),
             "build_json":     str(self.layout.build_json),

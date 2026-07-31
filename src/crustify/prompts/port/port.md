@@ -4,7 +4,7 @@ functions and globals into safe Rust, operating against the
 behind a compile-time feature switch.
 
 The deterministic scheduler decided *what* is in this working set and *in what
-order*. Everything else you **discover yourself** with `crustify query`. Your
+order*. Everything else you **discover yourself** with `crustify-cli query`. Your
 job is the codegen, the FFI-export wiring, and the C-side guards.
 
 `{principles}`

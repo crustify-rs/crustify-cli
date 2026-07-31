@@ -53,12 +53,14 @@ class CrustifyPort(CrustifyAgent):
         crate_root = self._dep(
             "crustify-prim", crustify_root / ".." / "crustify-prim")
         return {
+            # Base first: `target`, `repo_root`, `git_base` (see agents/base).
+            **super()._arguments(),
             "target":         self.target_rel,
             "repo_root":      str(self.repo_root),
             # The port divergence: the agent operates at the repo root.
             "workspace_root": str(self.repo_root),
             "analysis_root":  str(self.layout.analysis),
-            # Identity only — the agent pulls the rest via `crustify query`.
+            # Identity only — the agent pulls the rest via `crustify-cli query`.
             "symbols":        json.dumps(self._symbols),
             "feature_file":   self._feature_file,
             "build_json":     str(self.layout.build_json),

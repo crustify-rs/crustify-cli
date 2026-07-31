@@ -33,6 +33,51 @@ if str(_COMPOSE_PARENT) not in sys.path:
 
 
 # ---------------------------------------------------------------------------
+# Suffixed-run fork
+# ---------------------------------------------------------------------------
+
+def fork_manifests(layout: "Layout") -> int:
+    """Under ``--out-suffix``, seed the suffixed manifests from the canonical
+    ones. Returns the number forked (0 when no suffix is set).
+
+    ``analyze --out-suffix`` needs no equivalent: its composer *emits* the
+    suffixed skeleton, so the file the agents read is the file they write. Wrap
+    has no composer — the analysis tree is an input it only annotates — so
+    without this the suffixed manifest simply does not exist, and both halves
+    fail in opposite directions: every ``crustify-cli query`` the agent runs
+    resolves to a missing file and reports the symbol unknown, while its
+    submissions create a manifest holding nothing but its own findings.
+
+    Copying (rather than starting empty) is what makes the fork a real branch of
+    the analysis: the agent reads the full upstream analysis and its writes land
+    beside it, isolated from a concurrent run. Existing suffixed files are left
+    alone so a re-run resumes instead of discarding the previous one's findings.
+    """
+    import shutil
+    from crustify.layout import manifest_name
+
+    forked = 0
+    for kind in ("types", "symbols"):
+        name = manifest_name(kind)
+        canonical = "types.json" if kind == "types" else "syms.json"
+        if name == canonical:            # no suffix set
+            continue
+        for src in layout.analysis.rglob(canonical):
+            dst = src.with_name(name)
+            if not dst.exists():
+                shutil.copyfile(src, dst)
+                forked += 1
+    return forked
+
+
+def _announce_fork(n: int) -> None:
+    if n:
+        from crustify.layout import manifest_name
+        print(f"[crustify-cli wrap] --out-suffix: forked {n} manifests onto "
+              f"{manifest_name('symbols')} / {manifest_name('types')}.")
+
+
+# ---------------------------------------------------------------------------
 # Pre-flight gate
 # ---------------------------------------------------------------------------
 
@@ -44,18 +89,18 @@ def _preflight(target: Path, layout: "Layout") -> Path:
     if not analysis.is_dir() or not any(analysis.rglob("types.json")):
         raise SystemExit(
             f"wrap: no analysis tree at {analysis}. Run "
-            f"`crustify {target} analyze --all` first."
+            f"`crustify-cli {target} analyze --all` first."
         )
     if not layout.deps_dag(target).exists():
         raise SystemExit(
             f"wrap: no deps-dag.json at {layout.deps_dag(target)}. Run "
-            f"`crustify {target} analyze dag` first."
+            f"`crustify-cli {target} analyze dag` first."
         )
     scope_json = layout.scope(target)
     if not scope_json.exists():
         raise SystemExit(
             f"wrap: no scope.json at {scope_json}. Run "
-            f"`crustify {target} analyze scope` first."
+            f"`crustify-cli {target} analyze scope` first."
         )
     # Scaffold the source-file stub tree up-front (idempotent — writes only
     # absent files; module blocks merge). The wrap agents then locate their
@@ -78,7 +123,7 @@ def _check_bindgen(layout: "Layout", target: Path, linked: set[str]) -> None:
     if missing:
         raise SystemExit(
             f"wrap: bindgen -sys crate missing for {missing!r}. Run "
-            f"`crustify {target} bindgen --libs {' '.join(missing)}` first."
+            f"`crustify-cli {target} bindgen --libs {' '.join(missing)}` first."
         )
 
 
@@ -197,7 +242,7 @@ def _wrap_emit(
             ).run()
             return
         # syms-pull: hand the batch's pooled symbol names; the agent pulls each
-        # one's record/deps/.rs via `crustify query sym`/`query dag`.
+        # one's record/deps/.rs via `crustify-cli query sym`/`query dag`.
         syms = [{"name": m.id, "defined_in": m.defined_in} for m in batch.members]
         CrustifyWrap(target, batch_kind="syms", syms=syms,
                      repo_root=layout.repo_root).run()
@@ -208,6 +253,60 @@ def _wrap_emit(
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
+def wrap_lifetime_for(
+    target: Path, spec: str, *, dry_run: bool = False,
+) -> None:
+    """Lifetime-discovery mode: hand ONE wrap agent the job of wrapping
+    ``spec``'s lifecycle primitives.
+
+    The mirror of ``analyze symbols --lifetime-for`` (see
+    :func:`crustify.analyze.analyze_lifetime_for`), one stage later. There the
+    agent DISCOVERS which routines drop/dispose/clone ``spec`` and submits their
+    `lifetime` blocks; here it reads those back
+    (``query symbols --lifetime-for <spec>``) and emits the Rust that turns them
+    into a lifetime contract — the strategy ZST plus the smart-pointer
+    Drop/Clone impls a reference to ``spec`` needs to be owned in Rust.
+
+    Not routed through the DAG scheduler: there is no worklist to select,
+    batch or layer — the SPEC *is* the selection, exactly as in the analyze
+    mode. It still runs in its own worktree and lands on the session branch
+    like every other wrap agent, because it emits code.
+
+    ``spec`` is a struct tag / typedef, or the ``void`` (raw byte-level,
+    untyped) / ``string`` (NUL-terminated) keyword. Run the tiers in the same
+    order the analyze mode does — ``void`` -> ``string`` -> each ``<tag>`` —
+    since a typed cluster's Drop often delegates to the untyped one's.
+    """
+    import crustify._schedule as S
+    from crustify.agents.wrap import CrustifyWrap
+    from crustify.layout import Layout
+
+    layout = Layout.discover(target)
+    if dry_run:
+        print(f"[wrap dry-run] --lifetime-for {spec}: one agent, "
+              f"no composed worklist (the agent discovers the primitives).")
+        return
+    _announce_fork(fork_manifests(layout))
+
+    def emit_factory(t_, l_):
+        def emit(_batch) -> None:
+            CrustifyWrap(t_, batch_kind="syms", lifetime_for=spec,
+                         repo_root=l_.repo_root).run()
+        return emit
+
+    batch = S.Batch(file=f"lifetime-for-{spec}", units=[], members=[],
+                    fields=[], op_range=None, field_range=None)
+    stage = S.Stage(
+        verb="wrap", in_scope=lambda n: True, emit_fn=lambda b: None,
+        max_syms=1, emit_factory=emit_factory, target=target, layout=layout,
+    )
+    failures = S._isolated_wave({batch.file: [batch]}, stage, False, 1)
+    if failures:
+        raise SystemExit(
+            f"wrap --lifetime-for {spec}: agent failed: {failures[0][1]}")
+    print("[crustify-cli wrap] done.")
+
 
 def wrap_types(
     target: Path,
@@ -246,7 +345,7 @@ def wrap_types(
     layout = Layout.discover(target)
     scope_json = _preflight(target, layout)
     dag = json.loads(layout.deps_dag(target).read_text())
-    print(f"[crustify wrap] deps DAG: {dag.get('stats')}")
+    print(f"[crustify-cli wrap] deps DAG: {dag.get('stats')}")
 
     by_key, by_name = S.load_nodes(dag)
 
@@ -293,7 +392,7 @@ def wrap_types(
         hits = [by_key[k] for k in (by_name.get(nm) or []) if base_in_scope(by_key[k])]
         (skipped if (hits and all(_is_macro(n) for n in hits)) else kept).append(nm)
     if skipped:
-        print(f"[crustify wrap] skipping {len(skipped)} macro(s) — bindgen owns "
+        print(f"[crustify-cli wrap] skipping {len(skipped)} macro(s) — bindgen owns "
               f"their -sys shims: {', '.join(sorted(skipped))}")
     sel_names = kept
     if not sel_names:
@@ -322,7 +421,7 @@ def wrap_types(
             f"{'entity is a' if len(bad_port)==1 else 'entities are'} port-scope "
             f"symbol — these belong to the PORT stage (wrap would emit a stray "
             f"FFI shim, not the safe view):\n{listing}\n"
-            f"  Run `crustify {target} port --name …` instead.")
+            f"  Run `crustify-cli {target} port --name …` instead.")
     if bad_oos:
         listing = "\n".join(f"  - {i}" for i in bad_oos)
         raise SystemExit(
@@ -355,6 +454,8 @@ def wrap_types(
         max_syms=max_syms, max_fields=max_fields,
         emit_factory=emit_factory, target=target, layout=layout,
     )
+    if not dry_run:
+        _announce_fork(fork_manifests(layout))
     failures = S.schedule(
         dag=dag, analysis_root=layout.analysis,
         names=sel_names, stage=stage, parallelize=parallel,
@@ -366,4 +467,4 @@ def wrap_types(
             f"wrap stage failed for {len(failures)} batch(es): {labels}. "
             f"Per-agent logs live under crustify/targets/<rel>/logs/<session>/.")
     if not dry_run:
-        print("[crustify wrap] done.")
+        print("[crustify-cli wrap] done.")

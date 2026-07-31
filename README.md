@@ -47,7 +47,7 @@ crustify [--no-console] [--no-file-log] [--model NAME] [--parallel] [--parallel-
 | `propose` | `--reset` | draft `build.json` (LLM) |
 | `execute` | `--reset` | run configure+build+tests+CodeQL, extract T1/T2 CSVs |
 
-**alloc** - `crustify <r> <t> alloc` -> `alloc.json` (feeds the analyze buffer pass).
+**alloc** - `crustify-cli <r> <t> alloc` -> `alloc.json` (feeds the analyze buffer pass).
 
 **analyze** `[--reset]` `<subject>`
 | subject | flags | does |

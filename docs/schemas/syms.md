@@ -2,8 +2,8 @@
 
 Field **meaning** for the per-stem `syms.json` manifests (produced by
 `compose/syms_manifest.py`). This file is the single source of field semantics;
-`crustify query syms --schema` emits it. The exact JSON shape an analyzer submits
--- and its validation rules -- is the *contract*, served separately by `crustify
+`crustify-cli query syms --schema` emits it. The exact JSON shape an analyzer submits
+-- and its validation rules -- is the *contract*, served separately by `crustify-cli
 query syms --update-help`, so meaning and shape never duplicate.
 
 One entry per symbol (function, macro, global, or callback -- a function-pointer
@@ -45,19 +45,13 @@ agents never edit it.
 
 ## kind
 
-The symbol's category. Composer-filled and **terminal** -- the agent never edits
-it. For functions and globals it comes deterministically from CodeQL linkage:
-`function_exported`, `function_static`, `function_inline_header`,
-`function_inline_tu`, `global_static`, `global_extern`. Every `#define` is
-`macro`, and that is a macro's ONLY classification -- what it expands to is not
-stored anywhere; a consumer that needs to know reads the `#define` from the
-source at `defined_in`.
+The symbol's category. Composer-filled -- the agent never edits
+it. The enum is `function_{exported,static,inline_header,inline_tu}`, `macro`,
+`global_{static,extern}`, `callback`.
 
-The enum is `function_{exported,static,inline_header,inline_tu}`, `macro`,
-`global_{static,extern}`, `callback`. Wrap output never carries the TU-bounded
-kinds `function_static`, `function_inline_tu`, `global_static`.
+### kind.callback
 
-**`callback`** -- a function-pointer typedef (CodeQL identifies it
+A callback is a function-pointer typedef (CodeQL identifies it
 deterministically: a typedef whose unwrap chain reaches a RoutineType).
 Composer-filled kind; signature-shaped (carries `ptr_args` / `ptr_ret` /
 `used_by.{call,ref}` / a signature `depends_on`, NO body). `defined_in` is null (a
@@ -90,15 +84,8 @@ for macros (a macro has no type). Composer-filled.
 
 `true` when the function takes a trailing `...` (a C variadic like `printf`),
 `false` otherwise. Composer-filled from CodeQL (`Function.isVarargs()`) and
-**terminal**. Present on function kinds; absent on macros, globals and
+terminal. Present on function kinds; absent on macros, globals and
 callbacks.
-
-Load-bearing because the `type` signature string does not reliably reveal it,
-and a variadic has no safe Rust binding: `extern "C"` variadic functions are
-unstable, so the wrap stage must either bind the `v*`-suffixed `va_list` sibling
-(`vfprintf` for `fprintf`) or emit a fixed-arity C shim. Knowing this before
-codegen is what stops a wrapper being generated against a signature Rust cannot
-express.
 
 ## loc
 
@@ -112,10 +99,7 @@ global, 0 for a macro; 0 when absent (a pre-loc extraction). Composer-filled fro
 The two pointer records at a call boundary. `ptr_args` is a LIST -- one record
 per pointer parameter, ordered by position (empty when the function has no
 pointer params); `ptr_ret` is a single record, or null when the return type
-isn't a pointer. Both carry the SAME fields: we extract identical properties for
-an argument and a return, so there is no reason to fork their schemas. The only
-difference is that a `ptr_args` record also names the parameter (`position` /
-`name`).
+isn't a pointer. Both carry the SAME fields, `position` / `name` for `ptr_args`.
 
 COMPOSER fields (skeleton, always set), at the record's TOP level: on each
 `ptr_args` record `position` and `name` (param name as written, falling back to
@@ -124,26 +108,13 @@ type -- a user tag like `EVP_PKEY`, a primitive like `char`/`void`, or the
 synthetic markers `(routine)`/`(array)`), `const` (is the innermost pointee
 const-qualified?), and `depth` (1 for `T*`, 2 for `T**`, ...).
 
-A **bare** (un-typedef'd) function-pointer parameter reports `type:
-"(routine)"`, depth 1 -- it names nothing depend-able, which is what makes it
-bare, but it IS a pointer crossing the boundary and so carries an ownership
-block like any other. A *typedef'd* callback instead reports the typedef name
-(`SSL_verify_cb`), which routes to that callback's own `kind:"callback"` entry.
-The user types inside a bare signature are not lost: they land on the enclosing
-symbol's `depends_on.types`.
-
 AGENT field -- each record carries a single `ptr` sub-object holding the
-ownership block, the SAME structured block a struct field's
-[`ptr`](types.md#ptr) carries (so a pointer is described identically whether it
-lives in a struct or crosses a call). It nests under `ptr` -- isolated from the
+ownership block. It nests under `ptr` -- isolated from the
 composer's top-level structural keys -- so `--update` replaces `ptr_args[i].ptr`
 / `ptr_ret.ptr` WHOLESALE, and a submitted block must be complete.
 
-The composer emits `ptr: null`, so **`null` means unanalyzed**: whether a pointer
-has been through the analyzer is a null check on one key. (An all-null keyed
-skeleton could not carry that signal -- it is indistinguishable from a block the
-agent filled with nulls -- and would be pointless anyway, since a submission
-replaces the block wholesale rather than patching keys into it.) The keys of a
+The composer emits `ptr: null`, so `null` means unanalyzed: whether a pointer
+has been through the analyzer is a null check on one key. The keys of a
 filled block: 
 
 - **`scalar`** -- Is there any execution path where this pointer references a
@@ -198,16 +169,11 @@ field, see [`lifetime`](#lifetime).
 Which lifecycle-primitive role THIS symbol plays, and on which of its args.
 Agent-filled; `null` in the composer skeleton. Present on functions and
 callbacks (the kinds with a call boundary); absent on globals and macros -- a
-global's ownership has no acting method, and a macro has no args.
-
-The role belongs to the SYMBOL, not to one of its pointer records: `SSL_free` IS
-a dropper. The arg it acts on is named in `for`, so a single block per symbol
-suffices and there is no ambiguity about which pointer the role refers to.
+global's ownership has no acting method, and a macro has no args. The arg it
+acts on is named in `for`.
 
 - **`for`** -- the arg the role acts on, BY NAME, as a bare name (`s`, not
-  `arg:s` and not a position). Same referencing rule as a borrowed pointer's
-  `arg:<name>` source, so every arg-dependent fact in the schema names args one
-  way. Must be one of this symbol's pointer args.
+  `arg:s` and not a position). Must be one of this symbol's pointer args.
 - **`is_dropper`** -- `true` if the symbol frees the arg's own STORAGE (i.e. the
   heap allocation): a full destructor. Requires the arg to be `owned`.
 - **`is_disposer`** -- `true` if the symbol frees the storage of the arg's
@@ -228,10 +194,6 @@ either released or retained, never both. A full destructor is `is_dropper` alone
 allocation is gone; a cleanup that resets the fields in place is `is_disposer`
 alone.
 
-From these each type's `Drop`/`Clone` is reverse-derived: the type-analyzer
-collects the symbols whose `lifetime.for` arg is of that type
-(`query symbols --lifetime-for <TAG>`).
-
 **Invariants** (enforced on `--update`): `null` is both "not a lifecycle
 primitive" and the unanalyzed state, and is always accepted; a non-null block
 must assert at least one role (`is_dropper` | `is_disposer` |
@@ -242,6 +204,54 @@ explicit booleans (never null); `is_dropper` implies that arg is `owned`;
 `is_cloner` implies that arg is `borrowed` -- both checked against the arg's
 `ptr` as it stands AFTER the update, and skipped while that `ptr` is still
 `null` (there is no ownership fact yet to contradict).
+
+### How to disocver lifetime primitives
+
+Unless otherwise stated, we are only interested in storage (i.e. heap allocation)
+droppers/freers, field disposers (for user-defined types taken by-value, i.e.
+embedded or on stack), and their cloners/duplicators. These will then be used
+to implement `Drop` and `Clone` on its future Rust newtypes, allowing references
+to this type to be owned / moved in Rust-native code.
+
+Generally, we record a function as a lifetime primitive only if it has more than 
+one caller / referencer / consumer, or if it is publicly exposed; if it only lives to
+serve as an internal routine with only callers that themselves are lifetime primitives,
+then we can skip recording it. Query `crustify-oracle` to obtain callers / referencers.
+  
+If your target type is:
+
+  - The special keyword `void`, then look for lifetime primitives for raw,
+  byte-level, untyped objects (`void *`). Look first for primitives from the
+  standard library (`free`, `munmap`, `mmap`, `calloc`, `malloc`, `realloc`,
+  `memcpy`, `memmove`, `strdup`, `strndup`, etc.). Then fetch the list of
+  project-defined lifetime primitives by querying `curstify-oracle` for methods
+  calling the standard ones identified in the previous step. Continue looking up
+  a few more hops up the callgraph to identify lifetime primitives that are
+  specialized.  Filter to those taking `void` as argument to narrow the search
+  space. Look for lifetime primitives that process both scalars and arrays. 
+  
+  - The special keyword `string`, then look for lifetime primitives for
+  NUL-terminated strings. You can fetch the list of lifetime candidates by
+  querying `curstify-oracle` for methods taking a `char *`/ `unsigned char *` /
+  `u8 *`/`uint8_t *`/ etc. as an argument AND filtering for those calling one of
+  the raw/void lifetime primitives identified by a previous run. Continue
+  looking up a few more hops up the callgraph to identify more specialized
+  primitives. 
+  
+  - A `<type-tag>`, then look for lifetime primitives that for the given type
+  tag.  You can fetch the list of lifetime candidates by querying
+  `curstify-oracle` for methods taking `<type-tag> *` as an argument AND filter
+  for those that invoke one of the raw/void lifetime primitives identified in a
+  previous run. Explore a few additional hops up the call graph to identify the
+  real, top-level dropper(s)/field disposer(s) and cloner(s) of the type, which
+  might call helpers that in turn call the raw/void lifetime primitives. If a
+  type is a POD disposed through a field disposer of an embedding parent,
+  process the parent disposer. Look for lifetime primitives that process both
+  scalars and arrays. Submit your findings for the symbols schema, not for the
+  types schema. 
+   
+  After identifying your target set, proceed with and analyze them as described
+  in the next sections.
 
 ## ptr / locked_by (globals)
 

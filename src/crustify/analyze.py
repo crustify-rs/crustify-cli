@@ -3,20 +3,20 @@
 The analyze pipeline has four stages, run as separate verbs at the
 CLI level:
 
-  0. ``crustify analyze extract-ql`` — composer-only (no agent).
+  0. ``crustify-cli analyze extract-ql`` — composer-only (no agent).
      Runs the `.ql` batches against the hand-created CodeQL database at
      `<repo_root>/crustify/codeql/db/`; writes the T1/T2 CSVs under
      `<repo_root>/crustify/codeql/{t1,t2}/`. Every stage below reads them.
 
-  1. ``crustify analyze scope``    — composer-only (no agent).
+  1. ``crustify-cli analyze scope``    — composer-only (no agent).
      Reads `<target>/.crustify/config.json`; writes
      `<target>/.crustify/scope.json` (port-scope file list).
 
-  2. ``crustify analyze symbols``  — composer-then-agent.
+  2. ``crustify-cli analyze symbols``  — composer-then-agent.
      Composer (`compose.syms_manifest`) emits per-stem skeleton; the
      `CrustifySymbolAnalyzer` agent annotates semantic fields.
 
-  3. ``crustify analyze types``    — composer-then-agent.
+  3. ``crustify-cli analyze types``    — composer-then-agent.
      Same pattern with `compose.types_manifest` +
      `CrustifyTypeAnalyzer`.
 
@@ -88,7 +88,7 @@ def analyze_extract_ql(target: Path) -> None:
 
     succeeded, failed = extract_t1_t2(db, _CRUSTIFY_ROOT, layout.codeql)
     print(
-        f"[crustify analyze extract-ql] {succeeded} queries ok, "
+        f"[crustify-cli analyze extract-ql] {succeeded} queries ok, "
         f"{failed} failed"
     )
     if failed:
@@ -116,7 +116,7 @@ def _scope(target: Path) -> Path:
     if not (t1 / "functions.csv").is_file():
         print(
             f"error: scope v2 requires CodeQL T1 CSVs at {t1}.\n"
-            f"       Run `crustify <target> analyze extract-ql` first.",
+            f"       Run `crustify-cli <target> analyze extract-ql` first.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -128,7 +128,7 @@ def _scope(target: Path) -> Path:
     out.write_text(json.dumps(manifest, indent=2) + "\n")
     p = manifest["port"]
     print(
-        f"[crustify analyze scope] {len(p['files'])} files / "
+        f"[crustify-cli analyze scope] {len(p['files'])} files / "
         f"{len(p['functions'])} fn / {len(p['globals'])} gv / "
         f"{len(p['macros'])} macro / {len(p['types'])} types → {out}"
     )
@@ -226,7 +226,7 @@ def _build_chains(
     (types were migrated from ``type`` -> ``name``). Both subjects emit
     schema-agnostic identity records (a type's ``{tag, file, scope}``; a
     symbol batch's ``{symbols: [{name, file}]}``) that the agent resolves
-    through `crustify query`; the merge primitive always preserves
+    through `crustify-cli query`; the merge primitive always preserves
     prior-run annotations.
     """
     def mfest_path(rel_dir: Path) -> str:
@@ -239,7 +239,7 @@ def _build_chains(
 
     if per_entry:
         # One chain per ENTRY — same-dir entries run CONCURRENTLY. The agents
-        # write only through `crustify query --update`, which serializes
+        # write only through `crustify-cli query --update`, which serializes
         # same-dir writes under a directory lock + atomic rename (no lost
         # update). So write-safety no longer needs same-path jobs grouped into a
         # sequential chain; each entry is its own chain and the pool runs them
@@ -256,7 +256,7 @@ def _build_chains(
                 if entry_tag_key == "type":
                     # Slim, tag-centric job: identity + the port-touched
                     # analysis surface. The agent pulls its record + the
-                    # types.json to write via `crustify query` (no pushed path).
+                    # types.json to write via `crustify-cli query` (no pushed path).
                     focus = _analysis_focus(e, scope, focus_by_key)
                     record = {"tag": tag, "file": e.get("defined_in"),
                               "scope": scope}
@@ -267,7 +267,7 @@ def _build_chains(
                         record["methods"] = focus["methods"]
                 else:
                     # Symbol identity tuple (schema-agnostic; resolved via
-                    # `crustify query syms`). Symbols normally run per-file
+                    # `crustify-cli query syms`). Symbols normally run per-file
                     # (per_entry=False); this single-symbol shape keeps the
                     # per-entry path consistent if it is ever enabled for syms.
                     record = {"symbols": [{"name": tag,
@@ -427,12 +427,12 @@ def _run_subject_manifests_list(
             key=key_fn,
         )
     print(
-        f"[crustify analyze {subject}] composer: "
+        f"[crustify-cli analyze {subject}] composer: "
         f"{len(entries_by_dir)} dirs → {out_root}"
     )
 
     if not entries_by_dir:
-        print(f"[crustify analyze {subject}] no entries; nothing to do.")
+        print(f"[crustify-cli analyze {subject}] no entries; nothing to do.")
         return
 
     # --compose-only: emit the deterministic skeletons (merged with any prior
@@ -441,7 +441,7 @@ def _run_subject_manifests_list(
     # lifecycle annotation) is the expensive LLM step deliberately skipped here.
     if compose_only:
         print(
-            f"[crustify analyze {subject}] --compose-only: skeletons emitted, "
+            f"[crustify-cli analyze {subject}] --compose-only: skeletons emitted, "
             f"no agent spawned."
         )
         return
@@ -466,14 +466,14 @@ def _run_subject_manifests_list(
     )
     total_jobs = sum(len(c) for c in chains)
     if total_jobs == 0:
-        print(f"[crustify analyze {subject}] no agent jobs derivable; nothing to do.")
+        print(f"[crustify-cli analyze {subject}] no agent jobs derivable; nothing to do.")
         return
     granularity_note = (
         "1 agent/entry" if per_entry else
         ("1 agent/dir, pool-scheduled" if parallel else "single agent over all dirs")
     )
     print(
-        f"[crustify analyze {subject}] spawning {total_jobs} agent job(s) "
+        f"[crustify-cli analyze {subject}] spawning {total_jobs} agent job(s) "
         f"across {len(chains)} chain(s) "
         f"({granularity_note}, max {parallel_max} chain(s) concurrent)"
     )
@@ -503,20 +503,20 @@ def _run_subject_manifests_list(
                 except BaseException as exc:  # noqa: BLE001
                     failures.append((f"chain_{chain_idx}", exc))
                     print(
-                        f"[crustify analyze {subject}] chain_{chain_idx}: "
+                        f"[crustify-cli analyze {subject}] chain_{chain_idx}: "
                         f"CHAIN FAILED — {type(exc).__name__}: {str(exc)[:120]}"
                     )
                     continue
                 for sub_suffix, sub_exc in chain_failures:
                     failures.append((sub_suffix, sub_exc))
                     print(
-                        f"[crustify analyze {subject}] chain_{chain_idx} "
+                        f"[crustify-cli analyze {subject}] chain_{chain_idx} "
                         f"{sub_suffix} FAILED — {type(sub_exc).__name__}: "
                         f"{str(sub_exc)[:120]}"
                     )
                 ok = n_jobs - len(chain_failures)
                 print(
-                    f"[crustify analyze {subject}] chain_{chain_idx}: "
+                    f"[crustify-cli analyze {subject}] chain_{chain_idx}: "
                     f"{ok}/{n_jobs} agents ok"
                 )
     else:
@@ -526,7 +526,7 @@ def _run_subject_manifests_list(
             for sub_suffix, sub_exc in chain_failures:
                 failures.append((sub_suffix, sub_exc))
                 print(
-                    f"[crustify analyze {subject}] {sub_suffix} FAILED "
+                    f"[crustify-cli analyze {subject}] {sub_suffix} FAILED "
                     f"— {type(sub_exc).__name__}: {str(sub_exc)[:120]}"
                 )
 
@@ -622,7 +622,7 @@ def analyze_lifetime_for(
             compose_only=True,
         )
     if compose_only:
-        print(f"[crustify analyze symbols] --lifetime-for {spec}: "
+        print(f"[crustify-cli analyze symbols] --lifetime-for {spec}: "
               f"--compose-only, no agent spawned.")
         return
     from crustify.agents.analyzer import CrustifySymbolAnalyzer
@@ -653,7 +653,7 @@ def analyze_symbols(
     the manifests-list contract — each agent invocation receives a
     `manifests` list of ``{symbols: [{name, file}], scope}`` records
     (one per stem-group dir; the symbols are schema-agnostic identity
-    tuples). The agent reads/writes each symbol through `crustify query
+    tuples). The agent reads/writes each symbol through `crustify-cli query
     syms`, never opening a manifest.
 
     Without `--parallel` a single agent processes every manifest in
@@ -740,7 +740,7 @@ def analyze_dag(target: Path) -> None:
         print(
             f"error: analyze dag requires a populated analysis tree at "
             f"{analysis}.\n"
-            f"       Run `crustify <target> analyze types` (and `symbols`) "
+            f"       Run `crustify-cli <target> analyze types` (and `symbols`) "
             f"first.",
             file=sys.stderr,
         )
@@ -751,7 +751,7 @@ def analyze_dag(target: Path) -> None:
         print(
             f"error: analyze dag needs {scope_path} to narrow wrap-scope "
             f"edges.\n"
-            f"       Run `crustify <target> analyze scope` first.",
+            f"       Run `crustify-cli <target> analyze scope` first.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -762,7 +762,7 @@ def analyze_dag(target: Path) -> None:
     out.write_text(json.dumps(dag, indent=2) + "\n")
     s = dag.get("stats", {})
     print(
-        f"[crustify analyze dag] {s.get('nodes')} nodes "
+        f"[crustify-cli analyze dag] {s.get('nodes')} nodes "
         f"({s.get('types')} types / {s.get('symbols')} syms / "
         f"{s.get('external_syms')} ext) / {s.get('edges')} edges / "
         f"{s.get('layers')} layers / {s.get('sccs_flattened')} cycle(s) "
@@ -794,7 +794,7 @@ def _wrap_scope(target: Path) -> None:
     if not scope_path.exists():
         print(
             f"error: scope.json missing at {scope_path}. Run "
-            f"`crustify {target} analyze scope --port-only` first.",
+            f"`crustify-cli {target} analyze scope --port-only` first.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -802,7 +802,7 @@ def _wrap_scope(target: Path) -> None:
     if not includes_csv.is_file():
         print(
             f"error: includes.csv missing at {includes_csv}. Run "
-            f"`crustify {target} analyze extract-ql` first.",
+            f"`crustify-cli {target} analyze extract-ql` first.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -821,7 +821,7 @@ def _wrap_scope(target: Path) -> None:
     manifest["wrap"] = wrap
     scope_path.write_text(json.dumps(manifest, indent=2) + "\n")
     print(
-        f"[crustify analyze scope --wrap-only] {len(wrap['files'])} files / "
+        f"[crustify-cli analyze scope --wrap-only] {len(wrap['files'])} files / "
         f"{len(wrap['functions'])} fn / {len(wrap['globals'])} gv / "
         f"{len(wrap['macros'])} macro / {len(wrap['types'])} types → {scope_path}"
     )

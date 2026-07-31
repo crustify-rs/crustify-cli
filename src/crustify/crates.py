@@ -95,6 +95,12 @@ def validate(doc: dict) -> list[str]:
         component keeps same-named file-local statics in different TUs apart.
       - **deps DAG** — ``depends_on`` has no cycle (Rust forbids crate cycles).
       - **well-formedness** — every ``depends_on`` names a defined crate.
+      - **module-path collision** — no ``src/x.rs`` beside a ``src/x/`` claimed
+        by another entry. Rust accepts ``x.rs`` OR ``x/mod.rs`` as the body of
+        module ``x``, never both (E0761), and the scaffolder materializes a
+        ``mod.rs`` for every directory it has to wire. The convention is
+        ``src/x/x.rs`` (module ``x::x``), which the workspace's
+        ``clippy::module_inception = "allow"`` exists for.
     """
     errors: list[str] = []
     crates = doc.get("crates") or {}
@@ -113,6 +119,23 @@ def validate(doc: dict) -> list[str]:
                                 f"{seen[key]} AND {crate}/{mod}/{rs}")
                         else:
                             seen[key] = f"{crate}/{mod}/{rs}"
+
+    # `src/x.rs` + `src/x/…` -> two bodies for module `x`. Caught here because
+    # it is a pure property of the authored paths: it needs no tree, and it
+    # otherwise surfaces as a rustc E0761 that blocks `cargo check --workspace`
+    # for every agent, far from its cause.
+    for crate, c in crates.items():
+        rs_paths = {rs for m in (c.get("modules") or {}).values()
+                    for rs in (m.get("rs") or {})}
+        dirs = {rs.rsplit("/", 1)[0] for rs in rs_paths if "/" in rs}
+        for rs in sorted(rs_paths):
+            stem = rs[:-3] if rs.endswith(".rs") else rs
+            if stem in dirs:
+                leaf = stem.rsplit("/", 1)[-1]
+                errors.append(
+                    f"module-path collision: {crate}/{rs} is the body of module "
+                    f"`{leaf}`, but `{stem}/` also holds modules — rustc accepts "
+                    f"only one (E0761). Home it at {stem}/{leaf}.rs instead.")
 
     names = set(crates)
     adj: dict[str, list[str]] = {}

@@ -53,8 +53,14 @@ def _skill_meta(path: Path) -> tuple[str, str, set[str] | None, str | None]:
     return name, " ".join(" ".join(desc).split()), roles, binname
 
 def _resolve_repo_root(target: Path) -> Path:
-    """Repo root = the nearest ancestor of ``target`` containing
-    ``crustify/`` (the repo marker). No config field needed."""
+    """The repo root for ``target``: the one pinned by the CLI
+    (:func:`crustify.layout.set_repo_root`), else ``target`` itself.
+
+    It does NOT walk ancestors looking for a ``crustify/`` marker — an earlier
+    docstring here claimed it did. That matters because `Layout` mkdirs the
+    artifact dirs it is asked for, so constructing an agent for a subdirectory
+    target WITHOUT a pinned root silently creates `<target>/crustify/` and
+    resolves every later path under it."""
     return Layout.discover(target).repo_root
 
 
@@ -106,7 +112,7 @@ class CrustifyAgent:
     def __init__(self, target: Path, *, repo_root: Path | None = None) -> None:
         self.target = target.resolve()
         # An isolated-wave agent passes its WORKTREE as `repo_root` (only when a
-        # worktree is actually in play) so every `crustify <repo_root> …` the
+        # worktree is actually in play) so every `crustify-cli <repo_root> …` the
         # prompt runs — and every artifact path (rust/, logs) — resolves to the
         # worktree, not the pinned main repo. Without it, parallel agents' scaffold
         # writes + commits leak into the shared main checkout. Default (None) keeps
@@ -216,7 +222,7 @@ class CrustifyAgent:
 
     def _arguments(self) -> dict:
         # `target` is the repo-RELATIVE id and `repo_root` the full path —
-        # together the two positionals every `crustify <repo_root> <target> …`
+        # together the two positionals every `crustify-cli <repo_root> <target> …`
         # invocation in a prompt needs. `git_base` is the wave's base worktree,
         # the branch an isolated agent lands its own commit on (empty outside a
         # wave). Supplied to EVERY agent: `str.format` ignores a key the template

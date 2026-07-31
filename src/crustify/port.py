@@ -63,16 +63,16 @@ def _preflight(target: Path, layout: "Layout") -> Path:
     if not analysis.is_dir() or not any(analysis.rglob("types.json")):
         raise SystemExit(
             f"port: no analysis tree at {analysis}. Run "
-            f"`crustify {target} analyze --all` first.")
+            f"`crustify-cli {target} analyze --all` first.")
     if not layout.deps_dag(target).exists():
         raise SystemExit(
             f"port: no deps-dag.json at {layout.deps_dag(target)}. Run "
-            f"`crustify {target} analyze dag` first.")
+            f"`crustify-cli {target} analyze dag` first.")
     scope_json = layout.scope(target)
     if not scope_json.exists():
         raise SystemExit(
             f"port: no scope.json at {scope_json}. Run "
-            f"`crustify {target} analyze scope` first.")
+            f"`crustify-cli {target} analyze scope` first.")
     # Scaffold the source-file stub tree up-front (idempotent — writes only
     # absent files; module blocks merge). The port agents then locate their
     # targets + deps via `scaffold --name` (query mode) and fill them; they
@@ -136,7 +136,7 @@ def _port_emit(target: Path, layout, *, opacify: list[str], feature_file: Path):
     """One :class:`CrustifyPort` per scheduled batch — always a free-symbol pool
     (functions + globals; types and macros are never scheduled for port). The
     agent runs at ``workspace_root = repo_root`` (the port divergence) and pulls
-    each symbol's record / deps / module via ``crustify query`` / ``scaffold``."""
+    each symbol's record / deps / module via ``crustify-cli query`` / ``scaffold``."""
     from crustify.agents.port import CrustifyPort
 
     def emit(batch) -> None:  # batch: _schedule.Batch
@@ -187,7 +187,7 @@ def port(
     layout = Layout.discover(target)
     scope_json = _preflight(target, layout)
     dag = json.loads(layout.deps_dag(target).read_text())
-    print(f"[crustify port] deps DAG: {dag.get('stats')}")
+    print(f"[crustify-cli port] deps DAG: {dag.get('stats')}")
 
     by_key, by_name = S.load_nodes(dag)
 
@@ -254,7 +254,7 @@ def port(
             f"{listing}\n"
             f"  → an external entity belongs in its <lib>-sys crate; "
             f"an in-tree header/value type should be wrapped, not ported.\n"
-            f"  Run `crustify {target} wrap --name …` instead.")
+            f"  Run `crustify-cli {target} wrap --name …` instead.")
 
     # Port operates on FUNCTIONS and GLOBALS only. A named port-scope TYPE is a
     # hard error: wrap owns a type's layout, lifecycle and accessors, and a
@@ -279,7 +279,7 @@ def port(
         {n.id for n in named if _scope_of(n) == "port"
          and str(n.subkind).startswith("macro")})
     if port_macros:
-        print(f"[crustify port] skipping {len(port_macros)} macro(s) — bindgen owns "
+        print(f"[crustify-cli port] skipping {len(port_macros)} macro(s) — bindgen owns "
               f"their ffi:: bindings / crustify_<NAME> shims; the C #define stays: "
               f"{', '.join(port_macros)}", file=sys.stderr)
 
@@ -291,7 +291,7 @@ def port(
     # they port like any free function.
     if port_lifecycle:
         listing = ", ".join(sorted(port_lifecycle))
-        print(f"[crustify port] porting {len(port_lifecycle)} lifecycle op(s) as "
+        print(f"[crustify-cli port] porting {len(port_lifecycle)} lifecycle op(s) as "
               f"free function(s) (explicitly named, bypassing the wrap-method "
               f"guard): {listing}", file=sys.stderr)
 
@@ -344,4 +344,4 @@ def port(
         )
         raise SystemExit(f"port stage failed for {len(failures)} batch(es): {detail}.")
     if not dry_run:
-        print("[crustify port] done.")
+        print("[crustify-cli port] done.")

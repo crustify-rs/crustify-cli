@@ -10,7 +10,7 @@ requires-python = ">=3.13"
 dependencies = []
 
 [project.scripts]
-crustify = "crustify.cli:main"
+crustify-cli = "crustify.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

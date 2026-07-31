@@ -52,7 +52,7 @@ baseline.
 ## 4. Extract the T1/T2 tables
 
 ```
-crustify <repo_root> <target> analyze extract-ql
+crustify-cli <repo_root> <target> analyze extract-ql
 ```
 
 Deterministic, no LLM: runs every `.ql` under `utils/codeql/{entities,edges}/`
@@ -67,7 +67,7 @@ ownership wrappers use **crustify-wrap-crate**. This skill is the
 *orchestration* layer: the stage graph and how to run it. **Exact flags live in
 each command's `--help`** — run it; this is the router.
 
-> Invocation: `crustify <repo_root> <target> <command> …`. Global flags
+> Invocation: `crustify-cli <repo_root> <target> <command> …`. Global flags
 > (`--model`, `--parallel`) **before** `<repo_root>`; stage flags
 > (`--parallel-max`, `--name`, `--dry-run`, `-y`) **after** the subcommand.
 > `<target>` is the dir owning a `scope.json` (e.g. `src/libgit2`); for a

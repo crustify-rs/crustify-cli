@@ -1,5 +1,5 @@
 {
-  "_comment": "Whole-repo crate/module decomposition — the target architecture of the Rust port. Field meaning and the placement algorithm: docs/schemas/crates.md. Authored outside crustify; `crustify scaffold` only reads it.",
+  "_comment": "Whole-repo crate/module decomposition — the target architecture of the Rust port. Field meaning and the placement algorithm: docs/schemas/crates.md. Authored outside crustify; `crustify-cli scaffold` only reads it.",
 
   "crates": {
     "libssl": {

@@ -12,64 +12,71 @@ isolation is not a parallelism optimisation, it is what makes an agent's scoped
 
 Topology
 --------
-Two tiers, both real worktrees on real branches::
+One integration branch with no checkout, and one worktree per agent::
 
-    <session branch>            crustify/session/<verb>-<SESSION_ID>
-      base worktree             crustify/.worktrees/base
-        |
-        +-- child worktree      crustify/.worktrees/<slug>   (one per agent)
-        +-- child worktree      ...
+    session branch    crustify/session/<verb>-<SESSION_ID>   (no worktree)
+      child worktree  crustify/.worktrees/<verb>-<SESSION_ID>-<NN>-<stem>-<hex8>
+      child branch    crustify/agent/<verb>-<SESSION_ID>-<NN>-<stem>-<hex8>
+      ...
 
-Every name carries the session, so concurrent or successive runs never collide::
+Landing
+-------
+An agent commits in its own worktree and lands by pushing to the session branch
+in the LOCAL repository (no remote, no server)::
 
-    session branch    crustify/session/<verb>-<SESSION_ID>
-    base worktree     crustify/.worktrees/base-<verb>-<SESSION_ID>
-    child worktree    crustify/.worktrees/<verb>-<SESSION_ID>-<NN>-<stem>
-    child branch      crustify/agent/<verb>-<SESSION_ID>-<NN>-<stem>
+    G=$(git rev-parse --git-common-dir)
+    until git push -q "$G" "HEAD:refs/heads/<session branch>"; do
+        git rebase <session branch>    # resolve conflicts, --continue, re-check
+    done
 
-The **base** holds the session's integrated state. Each **child** forks from the
-base branch, and the agent lands its own work by merging back into the base —
-`--ff-only` after rebasing onto the current tip. Nothing here does that merging:
-it is the agent's job.
+That is race-free with no lock, because a push is a single atomic ref update
+with the fast-forward check evaluated INSIDE the ref lock: exactly one of N
+concurrent pushes wins and the rest are rejected as non-fast-forward, which is
+the signal to rebase and retry. Rebasing keeps the branch strictly linear.
+Verified with 8 agents landing simultaneously while all editing one shared
+append-only file: 8/8 landed, one parent per commit, every addition preserved.
 
-Two properties of that hand-off are measured, not assumed:
+What does NOT work, so nobody re-derives it:
 
-  - With N children forked from one tip, at most ONE can fast-forward as
-    committed. Every later agent MUST rebase onto the advanced tip and retry;
-    `--ff-only` refusing is the "someone landed first" signal. Re-running its
-    scoped checks after the rebase is what makes the integrated result validated
-    rather than merely merged.
-  - **`git merge` into the base worktree needs an explicit lock.** Git's
-    `index.lock` guards the index WRITE, not the whole checkout, so concurrent
-    `--ff-only` merges into one worktree interleave their working-tree updates
-    and leave it half-applied (observed: one path staged-added, another
-    staged-deleted yet present untracked, from 8 concurrent attempts). The
-    divergence check is a correct CAS on the *ref*; it is not mutual exclusion
-    on the *working tree*. Either serialize the merge on a lock the agents take,
-    or advance the ref with `git update-ref <ref> <new> <old>` — a genuine
-    atomic CAS — from the agent's own worktree and refresh the base checkout
-    separately. `update-ref` does not touch working files.
+  - `git merge --ff-only` run in a shared base worktree. `index.lock` does
+    contend, but its scope is the index WRITE — the merge's fast-forward
+    decision reads HEAD *before* it and the ref update lands *after* it, so a
+    merge that judged the ff legal against a stale HEAD can still take the lock
+    later and apply its tree over the winner's. Measured 3/3 on pristine repos
+    with 8 concurrent merges: one won HEAD, three had checked out their files,
+    and a fourth's index write survived — HEAD, index and working tree in mutual
+    disagreement. A wide merge window only *looks* clean because the loser
+    aborts before reaching its own checkout, so safe-abort vs. inconsistent-base
+    is a timing lottery.
+  - The same push with `receive.denyCurrentBranch=updateInstead`, which exists
+    to allow pushing to a checked-out branch. Concurrent pushes interleaved the
+    checkout, left the base dirty, and its clean-tree precondition then locked
+    everyone out: 1 landed, 7 livelocked.
+  - `git update-ref <ref> <new>` without the old value. It is only a
+    compare-and-swap with `<old>`; the two-argument form exits 0 and leaves a
+    sibling's landed commit unreachable. Push needs no such argument.
 
 Division of labour
 ------------------
-  - **this module** — plumbing only: snapshot the working state onto a session
-    branch, materialize the base worktree, fork a child per agent, symlink the
-    shared read-only artifacts. It never merges and never tears anything down.
-  - **the scheduler** — calls the above, once per session, and spawns agents.
-    Its whole involvement in worktree management is "one worktree per agent".
-  - **the agents** — codegen, commit, rebase, `--ff-only` into base, retry.
+  - **this module** — plumbing only: create the session branch, fork a worktree
+    per agent, symlink the shared read-only artifacts. It never lands, merges,
+    or tears anything down.
+  - **the scheduler** — calls the above and spawns agents. Its whole involvement
+    in worktree management is "one worktree per agent".
+  - **the agents** — codegen, commit, push, rebase-on-rejection, retry.
 
-Nothing removes a worktree, and nothing in this module can. A finished child is
-left in place deliberately: its branch is the record of what that agent produced,
-and a partial or failed wave must stay inspectable (finding F12). Cleaning up is
-a deliberate act outside the pipeline (`git worktree remove`).
+Nothing in this module removes a worktree. An agent purges its OWN child when it
+has landed (`git worktree remove --force .` works from inside it, and the
+`crustify/agent/<slug>` branch survives as the record of what it produced). So a
+child DIRECTORY that outlives a wave marks an agent that did not finish — the
+inspectable-failure guarantee of finding F12, as a signal rather than a pile.
 
 Worktrees fork from **HEAD**: uncommitted changes in the main checkout are not
 carried into them, so a wave is expected to start from a committed tree. What
-HEAD cannot carry either is the gitignored, read-only-across-a-wave
-state (`analysis`, `codeql`, `targets`, `.providers`, `crates.json`,
-`build.json`); :func:`link_shared` symlinks those from the main checkout so a
-worktree is a complete functional crustify tree without duplicating them.
+HEAD cannot carry either is the gitignored, read-only-across-a-wave state
+(`analysis`, `codeql`, `targets`, `.providers`, `crates.json`, `build.json`);
+:func:`link_shared` symlinks those from the main checkout so a worktree is a
+complete functional crustify tree without duplicating them.
 
 The session branch is never merged into the user's own branch here. It is left
 for review — landing it is a deliberate, separate act.
@@ -95,59 +102,46 @@ def _git(repo: Path, *args: str, check: bool = True) -> str:
 
 
 class SessionBase(NamedTuple):
-    """The session's integration point: a real branch with a real worktree."""
+    """The session's integration point: a branch. Nothing is checked out on it —
+    see :func:`session_base`."""
     branch: str
-    path: Path
     commit: str
 
 
 def session_base(repo: Path, session: str) -> SessionBase:
-    """Materialize the session's base: a branch at the current working state,
-    checked out in its own worktree.
+    """Create (or adopt) the session's integration branch at ``HEAD``.
 
-    A **branch**, not a dangling commit, because it is what the agents merge
-    into: `--ff-only` needs a ref to advance, and a commit reachable from no ref
-    is gc-able. A **worktree**, not just a branch, so the integrated state exists
-    on disk to build and inspect.
+    A branch and **no worktree**. Nothing checks it out, which is precisely what
+    lets agents land on it concurrently: `git push <git-common-dir>
+    HEAD:refs/heads/<branch>` is a single atomic ref update with the
+    fast-forward check evaluated INSIDE the ref lock, and git refuses to push to
+    a branch that IS checked out somewhere (because that would desynchronize the
+    checkout). So the absence of a base worktree is load-bearing, not thrift.
 
-    The worktree is NOT itself the concurrency control — see the module
-    docstring: two agents merging into it at once corrupt its state. Whatever
-    advances this branch must be serialized by the agents (a lock they take) or
-    done by ref CAS with the checkout refreshed after.
+    Giving the base a worktree was tried and dropped: nothing read it. Agents
+    land by push and rebase from the branch NAME, so the checkout only ever went
+    stale, needed a refresh command, and needed a never-edit-it rule to make the
+    refresh safe. Materialize one on demand instead::
 
-    Idempotent **within** a session and inert across sessions: both the branch
-    and the worktree path carry ``session``, so a later dependency layer of the
-    same run adopts the existing base — integrating onto the branch that already
-    holds the earlier layers' landed work instead of re-snapshotting the main
-    tree — while the next run gets its own.
+        git worktree add --detach <path> crustify/session/<verb>-<SESSION_ID>
 
-    Session-scoping the PATH is what makes that safe. With a fixed
-    ``.worktrees/base``, a second run adopted the first run's directory and
-    returned its own (never-created) branch name, so the first `add_worktree`
-    off it died on an unknown revision.
+    Idempotent within a session and inert across sessions: the branch name
+    carries ``session``, so a later dependency layer of the same run adopts the
+    branch that already holds the earlier layers' landed work rather than
+    resetting it to HEAD, while the next run gets its own.
 
-    A previous session's landed work lives only on its own branch: a new session
-    snapshots the main checkout, which does not have it. Land the session branch
-    before starting the next run, or the earlier output stays stranded.
+    A previous session's work lives only on its own branch — a new session
+    branches from HEAD, which does not have it. Land the session branch before
+    starting the next run, or the earlier output stays stranded.
     """
     branch = f"crustify/session/{session}"
-    wt = repo / _WT_DIR / f"base-{session}"
-    if wt.exists():
-        on = _git(wt, "rev-parse", "--abbrev-ref", "HEAD")
-        if on != branch:
-            raise RuntimeError(
-                f"session base {wt} has {on} checked out, expected {branch}. "
-                f"Remove it (`git worktree remove --force {wt}`) and re-run.")
-        return SessionBase(branch, wt, _git(wt, "rev-parse", "HEAD"))
+    existing = _git(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}",
+                    check=False)
+    if existing:
+        return SessionBase(branch, existing)
     sha = _git(repo, "rev-parse", "HEAD")
-    wt.parent.mkdir(parents=True, exist_ok=True)
-    # `worktree add -b` creates the branch AND checks it out in one command; a
-    # separate `git branch` first was redundant. Plain `-b`, never `-B`/`--force`:
-    # the session name carries a random suffix, so an existing branch of this name
-    # is a genuine anomaly, and force-moving it would silently abandon whatever
-    # had landed on it.
-    _git(repo, "worktree", "add", "--quiet", "-b", branch, str(wt), sha)
-    return SessionBase(branch, wt, sha)
+    _git(repo, "branch", branch, sha)
+    return SessionBase(branch, sha)
 
 
 def add_worktree(repo: Path, base_ref: str, slug: str) -> Path:
@@ -172,7 +166,7 @@ def add_worktree(repo: Path, base_ref: str, slug: str) -> Path:
 
 
 _SHARED = (".providers", "analysis", "analysis.baseline", "codeql", "targets",
-           "tmp", "crates.json", "build.json")
+           "tmp", "crates.json", "build.json", "config.json")
 
 
 def link_shared(wt: Path, repo: Path) -> None:
@@ -184,11 +178,10 @@ def link_shared(wt: Path, repo: Path) -> None:
     duplicating them. They never change during a wave; agent logs written under
     `targets/` thus land in the shared tree.
 
-    `build.json` is gitignored, so unlike the generated headers (committed, hence
-    carried by HEAD) it reaches a worktree by NO other route. The wrap/port agents only READ it (the build
-    descriptor's `build_commands` + feature wiring); it is written before any
-    wave — so it satisfies the same read-only-across-a-wave contract as
-    `crates.json` below.
+    `build.json` is gitignored, so it reaches a worktree by NO other route. The
+    wrap/port agents only READ it (the build descriptor's `build_commands` +
+    feature wiring); it is written before any wave — so it satisfies the same
+    read-only-across-a-wave contract as `crates.json` below.
 
     ``.providers`` must be here for a subtle reason: the agent backends resolve
     the provider CLI's config home as ``Layout(repo_root).providers(cli)``, and an
@@ -197,6 +190,13 @@ def link_shared(wt: Path, repo: Path) -> None:
     EMPTY provider config instead of crustify's shared one, and the CLI runs
     against it with no error: a silent loss of provider settings, which is the
     worst available failure mode.
+
+    ``config.json`` is here for the same reason as ``build.json``: it is
+    hand-authored, machine-local (absolute paths to crustify, its skills and
+    crustify-prim), and therefore not committed — so HEAD cannot carry it into a
+    worktree. Without the symlink an agent's ``Layout.repo_config`` resolves to a
+    file that is not there and every skill silently disappears from its prompt,
+    which renders as the literal "(no skills configured)" inside AGENTS.md.
 
     ``crates.json`` joins the shared set on the **eager pre-seed** contract:
     the placement oracle must be fully populated for the wave's units BEFORE

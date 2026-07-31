@@ -120,8 +120,10 @@ LOG_TO_FILE: bool = True
 
 
 SESSION_BASE: str = ""
-"""Path to the wave's base worktree, set by the scheduler for the duration of a
-worktree-isolated wave (see :mod:`crustify.worktree`). Exposed to every prompt as
-``{git_base}``: it is where an agent lands its committed work, so the agent needs
-the path and only the scheduler knows it. Empty outside a wave."""
+"""The wave's integration BRANCH (``crustify/session/<verb>-<SESSION_ID>``), set
+by the scheduler for the duration of a worktree-isolated wave (see
+:mod:`crustify.worktree`). Exposed to every prompt as ``{git_base}``: an agent
+lands on it with ``git push <git-common-dir> HEAD:refs/heads/{git_base}`` and
+rebases onto it on rejection, so it needs the ref name -- not a path -- and only
+the scheduler knows it. Empty outside a wave."""
 

@@ -1,6 +1,6 @@
 ---
 name: crustify-oracle
-bin: crustify
+bin: crustify-cli
 roles: [translator, orchestrator, analyzer]
 description: >-
   The crustify analysis oracle for C symbols and types. Query a record /
@@ -23,7 +23,7 @@ for the findings shape) -- argparse is the source of truth and never drifts.
 This skill is the *router*: which command for which intent, grouped by command,
 plus the idioms `--help` can't tell you.
 
-> Invocation shape: `crustify <repo_root> <target> <command> ...`. Global flags
+> Invocation shape: `crustify-cli <repo_root> <target> <command> ...`. Global flags
 > (`--model`, `--parallel`) go **before** `<repo_root>`; a stage's own flags
 > (e.g. `--parallel-max`) go **after** the subcommand. Use the target that owns
 > a `scope.json` (e.g. `src/libgit2`) for scope-aware commands; add `--unscoped`

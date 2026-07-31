@@ -15,7 +15,7 @@ class CrustifySymbolAnalyzer(CrustifyAgent):
 
     The orchestrator passes a `manifests` list, each record
     `{symbols: [{name, file}]}` directing the agent to a batch of identity
-    tuples it resolves through `crustify query symbols`. No scope tag rides
+    tuples it resolves through `crustify-cli query symbols`. No scope tag rides
     along: symbol analysis is a uniform judgement about the C code,
     independent of whether the symbol is later ported or wrapped. The agent
     does no tree walking; the composer + orchestrator have already done both.
@@ -55,6 +55,7 @@ class CrustifySymbolAnalyzer(CrustifyAgent):
         # its identity-tuple worklist, the repo root (for C source), and the
         # CodeQL DB. Scope rides on no path — symbol analysis is scope-agnostic.
         return {
+            **super()._arguments(),
             "target":               self.target_rel,
             "repo_root":            str(self.repo_root),
             "manifests":            json.dumps(self._manifests, indent=2),
@@ -112,10 +113,11 @@ class CrustifyTypeAnalyzer(CrustifyAgent):
 
     def _arguments(self) -> dict:
         root_dir = self.root_store.root
-        # A query-oracle agent: it reads and writes through `crustify query
+        # A query-oracle agent: it reads and writes through `crustify-cli query
         # types`, which owns the schema + file layout. Nothing else is
         # referenced.
         return {
+            **super()._arguments(),
             "target":               self.target_rel,
             "repo_root":            str(self.repo_root),
             "manifests":            json.dumps(self._manifests, indent=2),

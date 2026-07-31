@@ -22,5 +22,7 @@ targets
 tmp
 .worktrees
 build.json
+config.json
 crates.json
 stats.md
+evaluation/

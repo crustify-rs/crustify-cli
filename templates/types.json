@@ -2,8 +2,8 @@
  "_comment": [
   "Example records for the per-stem types.json manifest. Field and",
   "lifecycle-slot MEANING lives in docs/schemas/types.md (served by",
-  "`crustify query --schema`); the submission shape + rules come from",
-  "`crustify query --update-help`."
+  "`crustify-cli query --schema`); the submission shape + rules come from",
+  "`crustify-cli query --update-help`."
  ],
  "types": [
   {
