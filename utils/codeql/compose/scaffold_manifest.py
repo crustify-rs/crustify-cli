@@ -1,6 +1,18 @@
-"""Deterministically scaffold the Rust crate skeleton from the analysis tree.
+"""LEGACY — the retired file-grained scaffold composer.
 
-This is the **scaffold** stage, recast as a pure composer (no LLM agent).
+**Only :func:`sync_workspace` is still live**, called from
+:mod:`compose.bindgen_manifest` to keep the shared `rust/` Cargo workspace's
+member list in sync. Everything else here describes a design that no longer
+runs: placement moved to the `crates.json` oracle in :mod:`crustify.scaffold`,
+which derives the crate, module and `.rs` from that hand-authored file rather
+than from the source directory layout described below, and homes items under
+`crustify/rust/<crate>/` rather than `<target>/rust/crates/`. `crates.json`
+itself has no producer — see `docs/schemas/crates.md` for the schema and the
+placement algorithm.
+
+The rest of this docstring is kept only to explain the surviving code.
+
+Deterministically scaffold the Rust crate skeleton from the analysis tree.
 It mirrors the **vanilla C source directory layout** into a Cargo workspace
 under `<target>/rust/crates/`.
 
@@ -55,8 +67,9 @@ stage uses for `bindgen.h`.
 Within a single dir, a file stem that collides with a child dir name is
 folded into that dir's `mod.rs` (the dir doubles as the file-stem module).
 
-The bindgen wiring (`<top>-sys/` crates) is intentionally NOT done here —
-that is the separate `CrustifyBindingsScaffolder` LLM agent's job.
+The bindgen wiring (`<top>-sys/` crates) is not done here — that is
+:mod:`compose.bindgen_manifest`, a composer like this one (there is no
+bindings-scaffolder agent).
 """
 from __future__ import annotations
 
@@ -595,7 +608,7 @@ def _op_ownership(
 ) -> dict[str, str]:
     """``op-name -> owning type tag`` from the **agent-annotated** on-disk
     ``types.json`` (the fresh T1/T2 composer leaves ``ops`` empty — it is an
-    analyzer-filled field). Scoped to the in-scope manifest dirs. A name owned
+    agent-filled field). Scoped to the in-scope manifest dirs. A name owned
     by several types is assigned to
     the lexicographically smallest tag, so its anchor lands in one file only
     (the other owners merely call it). Name-keyed: a same-named free static in

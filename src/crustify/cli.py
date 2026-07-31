@@ -29,13 +29,15 @@ def _add_analyze_filter_flags(p: argparse.ArgumentParser) -> None:
 
     **Scope**: port-aware analysis uses the target's
     `crustify/targets/<target>/scope.json` automatically (computed from
-    the target, alongside its config.json); there is no flag to pass.
+    the target, alongside its scope-config.json); there is no flag to pass.
     When that scope.json is absent, all entries emit as wrap-shape
     (base only).
 
     **Post-emission filters**: `--port-only` / `--wrap-only` (mutually
     exclusive). Apply after seed/closure logic to keep only entries
     with port additions (port-only) or without (wrap-only).
+
+    Both subjects are composer-only; nothing here spawns an agent.
 
     `--reset` may combine with any of these.
     """
@@ -60,19 +62,19 @@ def _add_analyze_filter_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--name", nargs="+", action="extend", metavar="NAME", default=None,
         help="Seed ONLY the given symbol or type names -- precise, no "
-             "transitive closure (the named entities are emitted/annotated "
+             "transitive closure (the named entities are emitted "
              "alone; use --dir/--file to pull a region's closure). Pass all "
              "names as a space-separated list after a single --name (e.g. "
              "`--name a b c`); repeating the flag keeps only the last group.",
     )
     # Scope selection (mutually exclusive). Default (none set) = --scope-only:
-    # emit + analyze port ∪ wrap. The composer classifies port/wrap into the
+    # emit port ∪ wrap. The composer classifies port/wrap into the
     # per-target scope.json (no per-entry tag); these pick which slice rides.
     post_filter = p.add_mutually_exclusive_group()
     post_filter.add_argument(
         "--scope-only", action="store_true",
-        help="Port ∪ wrap (the default): emit the port-reachable surface and "
-             "analyze it. Explicit form of the default scope.",
+        help="Port ∪ wrap (the default): emit the port-reachable surface. "
+             "Explicit form of the default scope.",
     )
     post_filter.add_argument(
         "--port-only", action="store_true",
@@ -91,29 +93,23 @@ def _add_analyze_filter_flags(p: argparse.ArgumentParser) -> None:
         help="Repo-wide: emit EVERY candidate, skipping the out-of-scope "
              "reachability drop (so dispatch-table-only handlers and their "
              "primitives are present). scope.json still classifies port/wrap. "
-             "Pairs with --compose-only for a cheap comprehensive foundation.",
+             "Optional and orthogonal to the later stages: they read whatever "
+             "the tree holds, and nothing downstream requires the repo-wide "
+             "set. Widens the tree, and the emit cost with it.",
     )
     p.add_argument(
         "--reset", action="store_true",
         help="Delete matching entries before running.",
     )
     p.add_argument(
-        "--compose-only", action="store_true", dest="compose_only",
-        help="Run only the deterministic composer (emit/merge the manifest "
-             "skeletons) and skip the analyzer agent — a fresh analysis tree "
-             "with no LLM spend.",
-    )
-    p.add_argument(
         "--out-suffix", dest="out_suffix", default=None, metavar="SUFFIX",
         help="Write/read manifests as types_<SUFFIX>.json / syms_<SUFFIX>.json "
              "instead of the canonical types.json / syms.json, isolating this "
              "run from the real tree (and from other suffixed runs). The "
-             "composer emits a fresh suffixed skeleton; the agents -- which "
-             "shell out to `crustify-cli query` with no pushed path -- pick up the "
-             "suffix via the CRUSTIFY_OUT_SUFFIX env var. Lets several analyzer "
-             "runs (e.g. model-comparison instances) execute in parallel "
-             "without clobbering; downstream stages (dag/wrap/port) read only "
-             "the canonical names and ignore suffixed artifacts.",
+             "composer emits a fresh suffixed skeleton; anything that shells "
+             "out to `crustify-cli query` picks the suffix up from the "
+             "CRUSTIFY_OUT_SUFFIX env var. Downstream stages (dag/wrap/port) "
+             "read only the canonical names and ignore suffixed artifacts.",
     )
 
 
@@ -213,7 +209,7 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
     facet.add_argument("--manifest", action="store_true",
                        help="Introspect: print the types.json/syms.json that homes this entry.")
     # `--update` is available for BOTH subjects (types AND syms): the schema
-    # boundary through which an analyzer agent merges its findings.
+    # boundary through which a wrapper agent merges its findings.
     facet.add_argument("--update", default=None, metavar="FINDINGS",
                        help="Ingest an agent findings JSON (path or '-' for stdin) "
                             "into the named entry: validate (hard-reject only), then "
@@ -224,7 +220,7 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
     facet.add_argument("--update-help", action="store_true", dest="update_help",
                        help="Print the findings JSON schema that --update expects "
                             "for this subject (types vs syms), then exit. No --name "
-                            "needed — schema discovery for the analyzer agent.")
+                            "needed — schema discovery for the wrapper agent.")
     facet.add_argument("--schema", action="store_true", dest="schema",
                        help="Print the record's field/slot DEFINITIONS (the "
                             "_comment_* blocks, the schema authority), then exit. "
@@ -255,7 +251,7 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
                        help="Window the --fields/--ops/--methods list to [A:B).")
     else:
         # Symbols-only REVERSE lifecycle lookup, parameterized by a TYPE (no
-        # --name). Feeds the type analyzer: which symbols realize TYPE's Drop /
+        # --name). Feeds the type WRAPPER: which symbols realize TYPE's Drop /
         # dispose / Clone, read off each symbol's entry-level lifetime block.
         facet.add_argument(
             "--lifetime-for", default=None, metavar="SPEC", dest="lifetime_for",
@@ -265,7 +261,7 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
                  "type's dropped_by / fields_disposed_by / cloned_by. SPEC is "
                  "a struct tag / typedef, or the keyword `void` (raw byte-level, "
                  "untyped) or `string` (NUL-terminated; the char family or the "
-                 "analyzer's own ptr.string verdict). The subject arg is the one "
+                 "wrapper's own ptr.string verdict). The subject arg is the one "
                  "named by `lifetime.for`, so a symbol that merely TAKES a SPEC "
                  "arg without acting on it is not listed. No --name needed.")
         facet.add_argument(
@@ -394,7 +390,7 @@ def main() -> None:
         "target",
         help="Repo-relative target subdirectory crustify is scoped to "
              "(e.g. ssl/statem), matching its crustify/targets/<target>/ "
-             "config.json. Use . for the repo root; a repo-wide analysis is "
+             "scope-config.json. Use . for the repo root; a repo-wide analysis is "
              "normally driven by --unscoped on a real target.",
     )
     parser.add_argument(
@@ -446,11 +442,7 @@ def main() -> None:
         default=False,
         help="Enable command-specific parallelization. Different "
              "commands interpret this differently — see each command's "
-             "help. For `analyze symbols` and `analyze types` this "
-             "spawns one agent per stem-group manifest dir, capped at "
-             "`--parallel-max`. Composer-only stages "
-             "(`analyze extract-ql`, `analyze scope`, `analyze dag`) "
-             "ignore this flag.",
+             "help. The analyze subjects are composer-only and ignore it.",
     )
     parser.add_argument(
         "--parallel-max",
@@ -534,7 +526,7 @@ def main() -> None:
     analyze_scope_p = analyze_sub.add_parser(
         "scope",
         help="Emit scope.json. With no flag, derives BOTH sections in one "
-             "pass: `port` (the translation set, from config.json) then "
+             "pass: `port` (the translation set, from scope-config.json) then "
              "`wrap` (the FFI import-closure derived from it). Both are "
              "composer-only — no LLM. The --port-only / --wrap-only flags "
              "narrow to one section for re-deriving it alone.",
@@ -542,40 +534,25 @@ def main() -> None:
     analyze_scope_sel = analyze_scope_p.add_mutually_exclusive_group()
     analyze_scope_sel.add_argument(
         "--port-only", action="store_true", dest="port_only",
-        help="Derive only the `port` section from config.json. Leaves any "
+        help="Derive only the `port` section from scope-config.json. Leaves any "
              "existing `wrap` section stale — it is derived FROM `port`.",
     )
     analyze_scope_sel.add_argument(
         "--wrap-only", action="store_true", dest="wrap_only",
         help="Re-derive only the `wrap` import-closure from an existing "
              "`port` section plus the T1/T2 tables. Useful after editing "
-             "config.json's out_of_scope without re-seeding `port`.",
+             "scope-config.json's out_of_scope without re-seeding `port`.",
     )
 
     analyze_symbols_p = analyze_sub.add_parser(
         "symbols",
-        help="Run the syms composer skeleton + symbol analyzer agent.",
+        help="Emit the syms composer skeletons. Deterministic, no LLM.",
     )
     _add_analyze_filter_flags(analyze_symbols_p)
-    analyze_symbols_p.add_argument(
-        "--lifetime-for", default=None, metavar="SPEC", dest="lifetime_for",
-        help="LIFETIME-DISCOVERY mode: hand one agent the job of identifying "
-             "SPEC's lifecycle primitives. There is no composed worklist -- the "
-             "agent discovers candidates itself (`query symbols --taking SPEC "
-             "--calling ... --hops N`), triages them to the routines that really "
-             "drop/dispose/clone SPEC, and submits each one's `lifetime` block "
-             "(naming its subject arg in `for`); "
-             "`query symbols --lifetime-for SPEC` then reverse-derives the "
-             "type's roles. SPEC is a struct tag / typedef (its types.json entry "
-             "is composed first), or the keyword `void` (raw byte-level) / "
-             "`string` (NUL-terminated) -- the untyped tiers, which have no entry. "
-             "Run the tiers in order: void -> string -> <tag>. Compose the symbol "
-             "tree first (--all --unscoped --compose-only): scope gates emission, "
-             "so an unemitted primitive is unfindable.")
 
     analyze_types_p = analyze_sub.add_parser(
         "types",
-        help="Run the types composer skeleton + type analyzer agent.",
+        help="Emit the types composer skeletons. Deterministic, no LLM.",
     )
     _add_analyze_filter_flags(analyze_types_p)
 
@@ -620,7 +597,9 @@ def main() -> None:
         "--name", nargs="+", action="extend", default=None, metavar="NAME",
         help="Resolve the named entit(ies) — type tags and/or symbol names "
              "(e.g. `--name git_odb git_odb_read`) — to the .rs module(s) "
-             "homing their `// Replaces:` (port) / `// Wraps:` (wrap) anchor. Query mode "
+             "homing their `// Replaces:` (port) / `// Wraps:` (wrap) anchor. A name "
+             "with several homes (one per `tu` — a tag defined privately in more than "
+             "one TU, or file-local statics) prints ALL of them. Query mode "
              "prints each homed path (or `not created`); add --create to write "
              "the stub(s). The authoritative way an agent locates a wrapper "
              "module or where a dep lives.",
@@ -774,11 +753,11 @@ def main() -> None:
         help="LIFETIME-DISCOVERY mode: hand one agent the job of wrapping "
              "SPEC's lifecycle primitives into a Rust lifetime contract (the "
              "strategy ZST + the smart-pointer Drop/Clone impls a reference to "
-             "SPEC needs to be owned in Rust). The mirror of `analyze symbols "
-             "--lifetime-for SPEC` one stage on: that mode DISCOVERS the "
-             "routines that drop/dispose/clone SPEC and submits their `lifetime` "
-             "blocks, this one reads them back (`query symbols --lifetime-for "
-             "SPEC`) and emits the wrapper. SPEC is a struct tag / typedef, or "
+             "SPEC needs to be owned in Rust). One agent does both halves: it "
+             "reads back the `lifetime` blocks that exist (`query symbols "
+             "--lifetime-for SPEC`) and, when none do, discovers the routines "
+             "that drop/dispose/clone SPEC and submits their blocks first, "
+             "over a wrap-scope candidate set. SPEC is a struct tag / typedef, or "
              "the keyword `void` (raw byte-level, untyped) / `string` "
              "(NUL-terminated). Run the tiers in order: void -> string -> <tag>, "
              "since a typed cluster's Drop usually delegates to the untyped "
@@ -922,7 +901,7 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
         wrap_only = bool(getattr(args, "wrap_only", False))
         # --reset wipes the whole seed, so it is meaningless with --wrap-only:
         # that re-derives wrap FROM the port section, which the reset would
-        # have just deleted. Both other forms re-seed `port` from config.json.
+        # have just deleted. Both other forms re-seed `port` from scope-config.json.
         if reset_stages and not wrap_only:
             analyze_mod.reset_scope(target)
         analyze_mod.analyze_scope(
@@ -961,17 +940,7 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
     # output. The CLI no longer builds a `selection` grammar string;
     # the composer's narrowing IS the contract.
 
-    parallel = bool(getattr(args, "parallel", False))
-    parallel_max = int(getattr(args, "parallel_max", 8))
-
     if subject == "symbols":
-        lifetime_for = getattr(args, "lifetime_for", None)
-        if lifetime_for:
-            analyze_mod.analyze_lifetime_for(
-                target, lifetime_for,
-                compose_only=getattr(args, "compose_only", False),
-            )
-            return
         if getattr(args, "reset", False):
             analyze_mod.reset_syms(
                 target,
@@ -980,11 +949,7 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
                 files=resolved_files,
                 names=getattr(args, "name", None),
             )
-        analyze_mod.analyze_symbols(
-            target, filter_spec=filter_spec,
-            parallel=parallel, parallel_max=parallel_max,
-            compose_only=getattr(args, "compose_only", False),
-        )
+        analyze_mod.analyze_symbols(target, filter_spec=filter_spec)
         return
 
     if subject == "types":
@@ -996,11 +961,7 @@ def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
                 files=resolved_files,
                 names=getattr(args, "name", None),
             )
-        analyze_mod.analyze_types(
-            target, filter_spec=filter_spec,
-            parallel=parallel, parallel_max=parallel_max,
-            compose_only=getattr(args, "compose_only", False),
-        )
+        analyze_mod.analyze_types(target, filter_spec=filter_spec)
         return
 
     print(f"error: unknown analyze subject {subject!r}", file=sys.stderr)
@@ -1168,7 +1129,7 @@ def _build_filter_spec(
     from compose.filter_spec import FilterSpec
 
     # Scope is the target-tier `crustify/targets/<target>/scope.json`,
-    # computed automatically from the target (alongside its config.json) —
+    # computed automatically from the target (alongside its scope-config.json) —
     # there is no flag. Absent scope.json → scope-blind (base-shape) emit.
     scope_arg = None
     target = getattr(args, "_target_path", None) or args.repo_root
@@ -1305,7 +1266,7 @@ def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
     spec = getattr(args, "lifetime_for", None)
     if spec:
         # `--lifetime-for SPEC` IS the selection: no --name, no DAG layer, no
-        # batching. Same contract as `analyze symbols --lifetime-for`.
+        # batching. The SPEC is the whole selection.
         from crustify.wrap import wrap_lifetime_for
         wrap_lifetime_for(target, spec,
                           dry_run=bool(getattr(args, "dry_run", False)))

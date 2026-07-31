@@ -1,10 +1,10 @@
 # `utils/codeql/compose/` — manifest composers
 
 Deterministic Python that bridges raw CodeQL fact CSVs (Tier 1
-entities + Tier 2 edges) to the factual skeletons of the analyzer's
+entities + Tier 2 edges) to the factual skeletons of the wrap stage's
 manifests. The composer layer exists so scope partitioning,
 typedef-chain walking, reachability rollup, and edge-join logic
-run the same way every analyzer invocation — not as freelance
+run the same way every agent invocation — not as freelance
 prompt code that varies run-to-run.
 
 ## Architecture

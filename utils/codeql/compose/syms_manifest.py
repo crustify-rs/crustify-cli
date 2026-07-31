@@ -400,7 +400,7 @@ def _null_ptr_agent():
     emitted `null` by the composer.
 
     `null` is the UNANALYZED state, so "has this pointer been through the
-    analyzer?" is a null check on one key -- an all-null keyed skeleton would be
+    wrapper?" is a null check on one key -- an all-null keyed skeleton would be
     indistinguishable from a block the agent filled with nulls, and is not
     submittable anyway (a submitted block replaces the prior WHOLESALE and must
     be complete, so the agent never patches individual keys into a skeleton).
@@ -464,7 +464,7 @@ def _base_function(row: dict, reach: Reach) -> dict[str, Any]:
         "ptr_args": _compose_ptr_args(reach, name, def_file),
         "ptr_ret": _compose_ptr_ret(reach, name, def_file),
         # Agent-filled lifecycle role of the WHOLE symbol, naming its subject arg
-        # in `for` (see _null_lifetime). Null until the analyzer sets it.
+        # in `for` (see _null_lifetime). Null until a wrapper sets it.
         "lifetime": _null_lifetime(),
         # Body line span from functions.csv (0 when the column is absent — a
         # pre-`loc` extraction — or for a declaration-only extern). Drives the
@@ -726,7 +726,7 @@ def compose(
         caller writes one `syms.json` per dir under the analysis
         tree root.
       - ``dir_scope``: ``{manifest_dir: "port" | "wrap"}`` parallel
-        map. Orchestrator consumers (e.g. the symbol analyzer's
+        map. Orchestrator consumers (e.g. the symbol wrapper's
         manifests-list input contract) read this to tag each
         manifest with its scope without persisting the tag to disk.
         Assumes a stem-group manifest dir carries entries of a

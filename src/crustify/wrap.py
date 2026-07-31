@@ -260,23 +260,26 @@ def wrap_lifetime_for(
     """Lifetime-discovery mode: hand ONE wrap agent the job of wrapping
     ``spec``'s lifecycle primitives.
 
-    The mirror of ``analyze symbols --lifetime-for`` (see
-    :func:`crustify.analyze.analyze_lifetime_for`), one stage later. There the
-    agent DISCOVERS which routines drop/dispose/clone ``spec`` and submits their
-    `lifetime` blocks; here it reads those back
-    (``query symbols --lifetime-for <spec>``) and emits the Rust that turns them
-    into a lifetime contract — the strategy ZST plus the smart-pointer
+    Discovery AND emission, in one agent. It reads back whatever `lifetime`
+    blocks already exist (``query symbols --lifetime-for <spec>``); when none
+    do, it scouts the codebase for the routines that drop/dispose/clone
+    ``spec`` and submits their blocks through the oracle first (see
+    `prompts/wrapper/symbol_wrapper.md`). Then it emits the Rust that turns
+    them into a lifetime contract — the strategy ZST plus the smart-pointer
     Drop/Clone impls a reference to ``spec`` needs to be owned in Rust.
 
     Not routed through the DAG scheduler: there is no worklist to select,
-    batch or layer — the SPEC *is* the selection, exactly as in the analyze
-    mode. It still runs in its own worktree and lands on the session branch
-    like every other wrap agent, because it emits code.
+    batch or layer — the SPEC *is* the selection. It still runs in its own
+    worktree and lands on the session branch like every other wrap agent,
+    because it emits code.
 
     ``spec`` is a struct tag / typedef, or the ``void`` (raw byte-level,
-    untyped) / ``string`` (NUL-terminated) keyword. Run the tiers in the same
-    order the analyze mode does — ``void`` -> ``string`` -> each ``<tag>`` —
-    since a typed cluster's Drop often delegates to the untyped one's.
+    untyped) / ``string`` (NUL-terminated) keyword. Run the tiers in order —
+    ``void`` -> ``string`` -> each ``<tag>`` — since a typed cluster's Drop
+    often delegates to the untyped one's. The ordinary scope-only analysis tree
+    is the right input: the agent's candidate set is wrap-scope by instruction
+    (`prompts/wrapper/symbol_wrapper.md`), so a primitive the target never
+    reaches is not a gap.
     """
     import crustify._schedule as S
     from crustify.agents.wrap import CrustifyWrap

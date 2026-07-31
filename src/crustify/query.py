@@ -115,7 +115,7 @@ def query(
 # UNTYPED lifecycle tier (no types.json entry of its own):
 #   `void`   -- raw, byte-level objects (the untyped tier; CRYPTO_free/memdup).
 #   `string` -- NUL-terminated strings (CRYPTO_strdup); matched by the char
-#               family OR the analyzer's own `ptr.string` verdict.
+#               family OR the wrapper's own `ptr.string` verdict.
 _SPEC_KEYWORDS = ("void", "string")
 _CHAR_TOKENS = {"char", "uint8_t", "int8_t", "u8"}
 
@@ -125,7 +125,7 @@ def _arg_matches_spec(a: dict, spec: str, aliases: set, *,
     """Does one `ptr_args` record's type match the spec (tag / `void` / `string`)?
 
     `string` has two matchers, and which one is right depends on the caller:
-      - the analyzer's own `ptr.string` VERDICT -- exact, but only on an
+      - the wrapper's own `ptr.string` VERDICT -- exact, but only on an
         analyzed record. This is all `--lifetime-for` (a post-analysis read)
         should trust.
       - the char FAMILY (`structural_string`) -- a structural guess for
@@ -269,7 +269,7 @@ def _lifetime_for(target: Path, type_name: str, array_only: bool = False) -> Non
     """Reverse lifecycle lookup for a type: every symbol whose entry-level
     `lifetime` acts on an ARG of that type, grouped into the type's dropped_by /
     fields_disposed_by / cloned_by candidates (from is_dropper / is_disposer /
-    is_cloner). These are the Drop / dispose / Clone routines the type analyzer
+    is_cloner). These are the Drop / dispose / Clone routines the type wrapper
     records.
 
     The role is SYMBOL-level and names its subject arg in `lifetime.for`, so the
@@ -641,7 +641,7 @@ _LOCKED_BY_KEYS = {"lock", "lock_op", "unlock_op"}
 
 
 def _schema(kind: str) -> str:
-    """Field/slot MEANING for ``--schema`` — display-only markdown the analyzer
+    """Field/slot MEANING for ``--schema`` — display-only markdown the wrapper
     reads at runtime instead of opening the templates. Distinct from
     ``--update-help`` (:func:`_findings_schema`), which gives the submission
     *shape* + rules; meaning and shape are never duplicated.
@@ -680,7 +680,7 @@ def _schema(kind: str) -> str:
 
 
 def _findings_schema(kind: str) -> dict:
-    """The findings JSON an analyzer agent submits through ``--update`` — the
+    """The findings JSON a wrapper agent submits through ``--update`` — the
     schema boundary, returned by ``--update-help`` so the agent discovers it at
     runtime instead of hard-coding it. The top-level key sets are the validator's
     own (``_FINDINGS_TOP`` / ``_SYM_FINDINGS_TOP``), so this never drifts from

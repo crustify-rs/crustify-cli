@@ -34,7 +34,7 @@ vtable serves several). Pass `--raw` to a focused mode to disable
 the exemption and see every overlap.
 
 Detect-only: it flags, it does not resolve. Resolution is the agent's
-job (type_analyzer.md). Parallel agents in separate chains cannot see
+job. Parallel agents in separate chains cannot see
 each other's in-flight writes, so cross-type invariants must be checked
 after the fact (PITFALLS 2026-06-07).
 """

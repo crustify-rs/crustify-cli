@@ -240,7 +240,9 @@ def parse_usage(path, prices):
 
 def kind(fn):
     for p, k in (("port_", "port"), ("wrap_", "wrap"), ("merge", "merge"),
-                 ("scaffolder", "scaffold"), ("type_analyzer", "analyze"),
+                 ("scaffolder", "scaffold"),
+                 # retired agents, kept so historical logs still bucket:
+                 ("type_analyzer", "analyze"),
                  ("symbol_analyzer", "analyze"), ("buffer", "analyze"),
                  ("bindgen", "bindgen")):
         if fn.startswith(p):

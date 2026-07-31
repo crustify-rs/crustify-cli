@@ -9,17 +9,20 @@ inference, codegen, merge). Artifacts for a repo live under
 ## Pipeline
 
 ```
-build -> alloc -> analyze -> scaffold -> bindgen -> wrap -> port
-                                 query / audit  (read-only, anytime)
+(manual: toolchains, build.json, project build, CodeQL db)
+  -> analyze -> scaffold -> bindgen -> wrap -> port
+          query / audit  (read-only, anytime)
 ```
+
+There is no `build` stage. Toolchains, `build.json`, the project build and the
+CodeQL database are the orchestrator's job (see `skills/crustify-pipeline/`);
+crustify picks up at `analyze extract-ql`.
 
 | stage | deterministic composer / scheduler | LLM agents |
 |---|---|---|
-| **build** | `execute`: configure->build->tests->CodeQL->T1/T2 CSVs | `propose`: drafts `build.json` |
-| **alloc** | catalogue the allocator surface -> `alloc.json` | - |
-| **analyze** | `scope` + `dag` (pure); `types`/`symbols` skeleton + full dependency graph | type / symbol / buffer analyzers fill ownership, lifecycle, ptr facets |
-| **scaffold** | `crates.json` -> `.rs` placement (query / create / validate) | `CrustifyScaffolder` authors `crates.json` on a lookup miss |
-| **bindgen** | `<lib>-sys` crate skeletons, allowlists, macro worklists | `CrustifyBindgenShimmer`: macro shims + `cargo check` verify loop |
+| **analyze** | the whole stage: `extract-ql`, `scope`, `types`/`symbols` skeletons + full dependency graph, `dag` | - (the schemas' judgement fields are submitted by the wrap agents) |
+| **scaffold** | `crates.json` -> `.rs` placement (query / create / validate) | - (`crates.json` is authored outside the stage; a lookup miss is a hard error) |
+| **bindgen** | `<lib>-sys` crate skeletons, allowlists, include closure | - (the `fn main`, clang args and shims are completed by hand) |
 | **wrap** | DAG-layered scheduler: scope filter, per-file/per-dep batching, budget slicing, per-wave isolation | per-unit wrapper agents (type / string / array / symbol); per-wave merge agent |
 | **port** | same scheduler (port scope) | per-unit port agents; per-wave merge agent |
 | **query / audit** | graph walks, record reads, surface counts | - (fully deterministic) |
@@ -27,59 +30,66 @@ build -> alloc -> analyze -> scaffold -> bindgen -> wrap -> port
 ## Invocation
 
 ```
-crustify [--no-console] [--no-file-log] [--model NAME] [--parallel] [--parallel-max N] \
+crustify-cli [--no-console] [--no-file-log] [--model NAME] [--parallel] [--parallel-max N] \
          <repo_root> <target> <command> [subcommand] [flags]
 ```
 
 | global flag | effect |
 |---|---|
 | `--no-console` | suppress live agent console output |
-| `--no-file-log` | disable per-agent logs under `.crustify/logs/<session>/` |
-| `--model NAME` | override every agent's model (`claude-opus-4-8`, `codex/gpt-5.5`, ...) |
-| `--parallel` | enable per-command parallelism (analyze: one agent per manifest dir) |
+| `--no-file-log` | disable per-agent logs under `crustify/targets/<target>/logs/<session>/` |
+| `--model NAME` | override every agent's model, named `<provider>/<model>` (`anthropic/claude-opus-4-8`, `openai/gpt-5.6`, ...) |
+| `--parallel` | enable per-command parallelism (wrap / port: concurrent agent chains; the analyze subjects are composer-only and ignore it) |
 | `--parallel-max N` | max concurrent agents (default 8) |
+| `--backend NAME` | force the agent backend instead of deriving it from the model |
+| `--billing subscription\|api` | how the provider CLI authenticates (default `subscription`) |
+| `--override-base-prompt` / `--no-` | replace the provider CLI's own base prompt with crustify's (default: replace) |
 
 ## Commands
-
-**build** - two explicit phases.
-| subcommand | flags | does |
-|---|---|---|
-| `propose` | `--reset` | draft `build.json` (LLM) |
-| `execute` | `--reset` | run configure+build+tests+CodeQL, extract T1/T2 CSVs |
-
-**alloc** - `crustify-cli <r> <t> alloc` -> `alloc.json` (feeds the analyze buffer pass).
 
 **analyze** `[--reset]` `<subject>`
 | subject | flags | does |
 |---|---|---|
+| `extract-ql` | - | run the T1/T2 `.ql` batches against `crustify/codeql/db/` -> `crustify/codeql/{t1,t2}/*.csv` |
 | `scope` | `--port-only` \| `--wrap-only` | port set (config) / wrap import-closure -> `scope.json` |
-| `symbols` | `--all`/`--dir`/`--file`/`--name`, `--port-only`/`--wrap-only` | syms composer skeleton + symbol analyzer |
-| `types` | same as `symbols`, plus `--buffers` | types composer skeleton + type analyzer (`--buffers` = string/array cluster pass only) |
+| `symbols` | `--all`/`--dir`/`--file`/`--name`; `--scope-only` (default)/`--port-only`/`--wrap-only`/`--unscoped`; `--out-suffix` | syms composer skeletons |
+| `types` | same as `symbols` | types composer skeletons |
 | `dag` | - | unified types+symbols dependency DAG -> `deps-dag.json` (scope-agnostic) |
+
+Every subject is composer-only — `analyze` spawns no agent. The schemas'
+judgement fields (pointer facets, ownership, lifetime, locking) are submitted by
+the **wrap** agents via `query …/--update` when the entity is wrapped; the merge
+primitive unions at field level, so re-composing never clobbers them.
+`--unscoped` emits the repo-wide candidate set instead of the port-reachable
+one — optional, and required by no later stage.
 
 **scaffold** - `crates.json`-driven `.rs` oracle. One selector required.
 `--all` \| `--dir DIR` \| `--file FILE` \| `--name N...` \| `--validate`, plus `--create`
-(write stubs; without it, **query mode** prints the homed `.rs` path).
+(write stubs; without it, **query mode** prints the homed `.rs` path — every home
+of a name, since one `(kind, name)` may home once per `tu`).
+`crates.json` is authored outside the stage; an unplaced selection is a hard error.
 
-**bindgen** - deterministic `<lib>-sys` FFI-crate composer + shim agent.
-`--libs LIB...` (restrict), `--scaffold-only` (composer only, skip the shim agent).
+**bindgen** - deterministic `<lib>-sys` FFI-crate composer, no LLM.
+`--libs LIB...` (restrict), `--reset` (recompute the composer-owned allowlists +
+include seed instead of accumulating). Crates come out incomplete: `build.rs` has
+the allowlists but no `fn main`, and `bindgen.h`'s shim block is empty.
 
 **query** - read-only oracle. `<subject>`
 | subject | flags |
 |---|---|
-| `types` / `syms` | enumerate, or `--name` introspect; `--with-details`, `--manifest`, `--update FINDINGS`, `--port-only`/`--wrap-only`, `--strings`/`--arrays`; types: `--fields`/`--ops`/`--methods`/`--accessors`/`--create ENTRY`/`--range A:B`; syms: `--typegens` |
+| `types` / `symbols` (alias `syms`) | enumerate, or `--name` introspect; `--schema`, `--manifest`, `--update FINDINGS`/`--update-help`, `--file`, `--port-only`/`--wrap-only`; types: `--fields`/`--field-touchers`/`--ops`/`--methods`/`--range A:B`; syms: `--fields`, `--array`, `--taking SPEC`/`--calling FN`/`--lifetime-for SPEC` (`--hops N`) |
 | `files` | `--port-only` \| `--wrap-only` (scope file sets) |
-| `dag` | `--name N...` (closure) \| `--layer N` (slice) \| `--name X --scc hi-deps`\|`lo-deps`; `--file`, `--depth N`, `--with-details` |
+| `dag` | `--name N...` (closure) \| `--layer N` (slice) \| `--name X --scc`; `--file`, `--depth N`, `--with-details`, `--loc`, `--port-only`/`--wrap-only` |
 
 **wrap** - emit Rust wrappers for wrap-scope units in dependency-layer order
 (requires `scaffold` + `bindgen` to have run).
-`--name N...` \| `--strings` \| `--arrays`; `--file`, `--wrap-only`/`--port-only`,
-`--max-fields N`, `--max-ops N` (per-agent budgets), `--dag-layer N`, `--skip N...`,
-`--parallel-max N`, `-y`/`--yes`, `--dry-run`.
+`--name N...` \| `--dag-layer N` \| `--lifetime-for SPEC`; `--file`,
+`--wrap-only`/`--port-only`, `--max-fields N`, `--max-syms N` (per-agent budgets),
+`--skip N...`, `--out-suffix`, `--parallel`/`--parallel-max N`, `-y`, `--dry-run`.
 
 **port** - emit ported Rust via the `--name` scheduler.
-`--name N...`, `--file F...`, `--max-syms N`, `--max-fields N`, `--parallel-max N`,
-`-y`/`--yes`, `--dry-run`.
+`--name N...` \| `--dag-layer N`; `--file`, `--max-syms N`, `--max-loc N`,
+`--skip N...`, `--parallel`/`--parallel-max N`, `-y`, `--dry-run`.
 
 **audit** - deterministic (no LLM) unsafe / raw-pointer / naked-FFI surface scan ->
 `audit.json`. One seed selector: `--all` \| `--name N...` \| `--crate C` \| `--mod M`

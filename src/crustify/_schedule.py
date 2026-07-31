@@ -76,7 +76,7 @@ class Node:
 
     @property
     def is_bare(self) -> bool:
-        # the DAG emits "symbol" when the analyzer left `kind` null
+        # the DAG emits "symbol" when nothing has classified `kind` yet
         return self.node_kind == "symbol" and self.subkind == "symbol"
 
 
@@ -146,7 +146,7 @@ def resolve_names(
 
 
 def bare_gate(nodes: list[Node]) -> None:
-    """Refuse to schedule a port-scope symbol the analyzer left unclassified
+    """Refuse to schedule a port-scope symbol left unclassified
     (``kind: null`` → ``subkind == "symbol"``). Moved here from the scaffolder:
     the bare kind only exists in the DAG, never in the fresh composer."""
     bad = sorted({(n.id, n.defined_in or "?") for n in nodes if n.is_bare})

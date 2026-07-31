@@ -2,7 +2,7 @@
 
 Field **meaning** for the per-stem `syms.json` manifests (produced by
 `compose/syms_manifest.py`). This file is the single source of field semantics;
-`crustify-cli query syms --schema` emits it. The exact JSON shape an analyzer submits
+`crustify-cli query syms --schema` emits it. The exact JSON shape a wrapper agent submits
 -- and its validation rules -- is the *contract*, served separately by `crustify-cli
 query syms --update-help`, so meaning and shape never duplicate.
 
@@ -114,7 +114,7 @@ composer's top-level structural keys -- so `--update` replaces `ptr_args[i].ptr`
 / `ptr_ret.ptr` WHOLESALE, and a submitted block must be complete.
 
 The composer emits `ptr: null`, so `null` means unanalyzed: whether a pointer
-has been through the analyzer is a null check on one key. The keys of a
+has been through a wrapper is a null check on one key. The keys of a
 filled block: 
 
 - **`scalar`** -- Is there any execution path where this pointer references a
@@ -286,7 +286,7 @@ reach this entry. By kind: `function_*` -> `{call:[callers], ref:[addr-of users]
 where a site that both calls and takes the address is listed only under `call`;
 `global_*` -> `{call:null, ref:[accessors]}`; `macro_*` -> `{call:[expansion
 sites], ref:[]}`. The composer's default bucketing is fine for most kinds; the
-analyzer may re-bucket `call`<->`ref` when a macro kind justifies it.
+a wrapper may re-bucket `call`<->`ref` when a macro kind justifies it.
 
 ## depends_on
 

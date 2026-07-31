@@ -1,4 +1,4 @@
-"""Derive `<target>/.crustify/scope.json` from `config.json`.
+"""Derive `<target>/scope.json` from `scope-config.json`.
 
 Pure filesystem walk + path predicate — no CodeQL, no agent. The
 target-tier scope manifest is the canonical port-scope file list for
@@ -243,7 +243,7 @@ def compose(config_path: Path, t1_dir: Path, repo_root: Path | None = None) -> d
     compiled under this build configuration.
 
     `repo_root` is discovered by the caller (the `crustify/` marker dir,
-    per the Layout contract); it is **not** read from `config.json`, so the
+    per the Layout contract); it is **not** read from `scope-config.json`, so the
     same in-repo config stays portable across git worktrees. When omitted
     (e.g. standalone `main()`), it is derived from the canonical
     `<repo_root>/crustify/codeql/t1` location of `t1_dir`.
@@ -270,11 +270,11 @@ def compose(config_path: Path, t1_dir: Path, repo_root: Path | None = None) -> d
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Emit <target>/.crustify/scope.json from config.json."
+        description="Emit <target>/scope.json from scope-config.json."
     )
     ap.add_argument(
         "--config", type=Path, required=True,
-        help="Path to <target>/.crustify/config.json.",
+        help="Path to <target>/scope-config.json.",
     )
     ap.add_argument(
         "--t1", type=Path, required=True,

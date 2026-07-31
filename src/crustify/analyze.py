@@ -1,29 +1,31 @@
 """Orchestration for the ``analyze`` command family.
 
-The analyze pipeline has four stages, run as separate verbs at the
-CLI level:
+**Every analyze subject is composer-only — the stage spawns no agent.**
 
-  0. ``crustify-cli analyze extract-ql`` — composer-only (no agent).
+  0. ``crustify-cli analyze extract-ql``
      Runs the `.ql` batches against the hand-created CodeQL database at
      `<repo_root>/crustify/codeql/db/`; writes the T1/T2 CSVs under
      `<repo_root>/crustify/codeql/{t1,t2}/`. Every stage below reads them.
 
-  1. ``crustify-cli analyze scope``    — composer-only (no agent).
-     Reads `<target>/.crustify/config.json`; writes
-     `<target>/.crustify/scope.json` (port-scope file list).
+  1. ``crustify-cli analyze scope``
+     Reads `crustify/targets/<target>/scope-config.json`; writes that target's
+     `scope.json` (port set + wrap import-closure).
 
-  2. ``crustify-cli analyze symbols``  — composer-then-agent.
-     Composer (`compose.syms_manifest`) emits per-stem skeleton; the
-     `CrustifySymbolAnalyzer` agent annotates semantic fields.
+  2. ``crustify-cli analyze symbols`` / ``types``
+     `compose.syms_manifest` / `compose.types_manifest` emit the per-stem
+     skeletons.
 
-  3. ``crustify-cli analyze types``    — composer-then-agent.
-     Same pattern with `compose.types_manifest` +
-     `CrustifyTypeAnalyzer`.
+  3. ``crustify-cli analyze dag``
+     Unified types+symbols dependency DAG from the analysis tree.
 
-Stage 1 depends on 0; stage 2 depends on 1; stage 3 depends on 2 (the
-type analyzer agent reads syms manifests for op-candidate discovery via
-inverted `depends_on.types` lookup). Composers are pure functions of
-T1 + T2 + scope.json — fast, deterministic, run unconditionally.
+Stage 1 depends on 0; stages 2 and 3 depend on 1. Composers are pure
+functions of T1 + T2 + scope.json — fast, deterministic, run unconditionally.
+
+The schemas' judgement fields (pointer facets, ownership, lifetime, locking)
+carry no value out of this stage. They are submitted by the WRAPPER agents
+through `query symbols/types --update` at the point the entity is wrapped;
+the merge primitive unions at field level, so re-composing never clobbers
+them. The retired analyzer agents' prompts are in `prompts/obsolete/`.
 """
 
 from __future__ import annotations
@@ -41,11 +43,6 @@ _CRUSTIFY_ROOT = Path(__file__).resolve().parent.parent.parent
 _COMPOSE_PARENT = _CRUSTIFY_ROOT / "utils" / "codeql"
 if str(_COMPOSE_PARENT) not in sys.path:
     sys.path.insert(0, str(_COMPOSE_PARENT))
-
-# The analyzer agents are imported lazily, inside the subjects that spawn
-# them: importing them pulls in the agent backend, and the composer-only
-# subjects (`extract-ql`, `scope`, `dag`) must stay runnable without it.
-
 
 # ---------------------------------------------------------------- composer wrappers
 
@@ -137,212 +134,6 @@ def _scope(target: Path) -> Path:
 
 # ---------------------------------------------------------------- subject runner
 
-def _slug_tag(tag: str) -> str:
-    """Sanitize a tag into a log-filename-safe stage suffix component."""
-    return "".join(c if (c.isalnum() or c in "_.-") else "_" for c in tag)
-
-
-def _analysis_focus(entry: dict, scope: str,
-                    focus_by_key: dict[tuple[str, str], list[str]] | None = None):
-    """Per-entry analysis surface for the type agent (bound-only).
-
-      - **wrap** → `{fields, methods}`: the port-touched surface the
-        agent must focus on. `fields` = the port-touched field names
-        from the composer's transient `focus_by_key` (NOT the entry's
-        `fields[]`, which now carries the *full* scope-agnostic layout);
-        `methods` = the union of the two footprints (functions touching
-        the type that port-scope code references). The agent bounds its
-        op selection to these.
-      - **port** → `"all"`: analyze the full declared layout and the
-        global footprint, no restriction.
-
-    `focus_by_key` is keyed by `(type tag, defined_in)`. When a wrap
-    entry isn't present (e.g. anonymous-base typedefs, or a port-only
-    fallback), fall back to the entry's own field names — preserving the
-    pre-Option-B behaviour for those entries.
-
-    The agent still applies the §4 keep/drop rules *within* this
-    surface (bound-only — the focus narrows the candidate pool, it
-    does not pre-attribute).
-    """
-    if scope == "port":
-        return "all"
-    key = (entry.get("name") or entry.get("type") or "", entry.get("defined_in") or "")
-    if focus_by_key is not None and key in focus_by_key:
-        fields = list(focus_by_key[key])
-    else:
-        fields = [
-            f["name"] for f in entry.get("fields", [])
-            if isinstance(f, dict) and f.get("name")
-        ]
-    methods: set[str] = set()
-    for grp in ("opaque_in", "non_opaque_in"):
-        for syms in (entry.get(grp) or {}).values():
-            methods.update(syms)
-    return {"fields": sorted(fields), "methods": sorted(methods)}
-
-
-def _build_chains(
-    out_root: Path,
-    manifest_filename: str,
-    entries_by_dir: dict[Path, list[dict]],
-    dir_scope: dict[Path, str],
-    *,
-    entry_tag_key: str,
-    parallel: bool,
-    parallel_max: int,
-    per_entry: bool,
-    focus_by_key: dict[tuple[str, str], list[str]] | None = None,
-) -> list[list[tuple[str, list[dict]]]]:
-    """Build the agent-invocation plan from composer output.
-
-    The plan is a list of **chains**. Each chain is a list of **jobs**
-    that must run sequentially (typically because they target the same
-    on-disk manifest file). Each job is a ``(stage_suffix, manifests)``
-    tuple where ``manifests`` is the list passed to one agent
-    invocation. Chains themselves run in parallel up to
-    ``parallel_max`` (when ``parallel=True``).
-
-    The four cases:
-
-      - ``per_entry=False, parallel=False`` — one chain with one job
-        carrying every manifest dir's record (one agent processes
-        everything).
-      - ``per_entry=False, parallel=True``  — one chain per manifest
-        dir, each chain holds one job carrying that dir's single
-        record (``names: "all"``). The ThreadPoolExecutor schedules
-        ``parallel_max`` chains concurrently; the rest queue. Per-
-        agent workload stays bounded to one stem-group, matching the
-        existing per-dir effort budget for the symbol analyzer.
-      - ``per_entry=True, parallel=False``  — one chain with one job
-        per entry; jobs target potentially many different paths but
-        run sequentially.
-      - ``per_entry=True, parallel=True``   — one chain per manifest
-        path; jobs within a chain share the path and run sequentially
-        (write-safe); chains run in parallel.
-
-    `entry_tag_key` is ``"name"`` for both symbols and types — the key
-    under which each entry carries its unique identity within a manifest
-    (types were migrated from ``type`` -> ``name``). Both subjects emit
-    schema-agnostic identity records (a type's ``{tag, file, scope}``; a
-    symbol batch's ``{symbols: [{name, file}]}``) that the agent resolves
-    through `crustify-cli query`; the merge primitive always preserves
-    prior-run annotations.
-    """
-    def mfest_path(rel_dir: Path) -> str:
-        return str(out_root / rel_dir / manifest_filename)
-
-    def dir_scope_for(rel_dir: Path) -> str:
-        return dir_scope.get(rel_dir, "wrap")
-
-    sorted_dirs = sorted(entries_by_dir.items())
-
-    if per_entry:
-        # One chain per ENTRY — same-dir entries run CONCURRENTLY. The agents
-        # write only through `crustify-cli query --update`, which serializes
-        # same-dir writes under a directory lock + atomic rename (no lost
-        # update). So write-safety no longer needs same-path jobs grouped into a
-        # sequential chain; each entry is its own chain and the pool runs them
-        # in parallel.
-        chains: list[list[tuple[str, list[dict]]]] = []
-        for rel_dir, entries in sorted_dirs:
-            scope = dir_scope_for(rel_dir)
-            slug_base = str(rel_dir).replace("/", "_")
-            for e in entries:
-                tag = e.get(entry_tag_key) or ""
-                if not tag:
-                    continue
-                stage_suffix = f"{slug_base}__{_slug_tag(tag)}"
-                if entry_tag_key == "type":
-                    # Slim, tag-centric job: identity + the port-touched
-                    # analysis surface. The agent pulls its record + the
-                    # types.json to write via `crustify-cli query` (no pushed path).
-                    focus = _analysis_focus(e, scope, focus_by_key)
-                    record = {"tag": tag, "file": e.get("defined_in"),
-                              "scope": scope}
-                    if focus == "all":
-                        record["fields"], record["methods"] = "all", "all"
-                    else:
-                        record["fields"] = focus["fields"]
-                        record["methods"] = focus["methods"]
-                else:
-                    # Symbol identity tuple (schema-agnostic; resolved via
-                    # `crustify-cli query syms`). Symbols normally run per-file
-                    # (per_entry=False); this single-symbol shape keeps the
-                    # per-entry path consistent if it is ever enabled for syms.
-                    record = {"symbols": [{"name": tag,
-                                           "file": e.get("defined_in")}]}
-                chains.append([(stage_suffix, [record])])
-        if not parallel:
-            # Collapse into one big chain so all jobs run serially.
-            flat = [job for ch in chains for job in ch]
-            chains = [flat] if flat else []
-        return chains
-
-    # per_entry=False: each manifest dir contributes one record with
-    # ``names: "all"``.
-    #
-    #   - parallel=False  → one chain, one job, all records in a
-    #     single agent invocation.
-    #   - parallel=True   → one chain per manifest dir, each with one
-    #     job carrying its single record. The ThreadPoolExecutor
-    #     schedules ``parallel_max`` chains concurrently; as each
-    #     finishes the next from the queue starts. Per-agent
-    #     workload stays bounded to one manifest (~one stem-group of
-    #     entries), preserving the existing per-dir effort budget
-    #     while routing through the new manifests-list contract.
-    if not sorted_dirs:
-        return []
-
-    # Symbol records are SCHEMA-AGNOSTIC identity tuples: the agent reads each
-    # symbol via `query syms --name <name> --file <file>` and submits findings
-    # via `--update`, never opening the manifest (mirrors the type analyzer).
-    # `file` is the entry's defining file (None for a header typedef such as a
-    # callback — disambiguated by name). No `scope` rides along: symbol analysis
-    # is uniform, a fact about the C code, independent of what the porter later
-    # does with it.
-    def syms_for(entries: list[dict]) -> list[dict]:
-        return [{"name": e["name"], "file": e.get("defined_in")}
-                for e in entries if e.get("name")]
-
-    if not parallel:
-        all_records = [
-            {"symbols": syms_for(entries)} for rel_dir, entries in sorted_dirs
-        ]
-        return [[("all", all_records)]]
-
-    chains: list[list[tuple[str, list[dict]]]] = []
-    for rel_dir, entries in sorted_dirs:
-        slug = str(rel_dir).replace("/", "_")
-        chains.append([(slug, [{"symbols": syms_for(entries)}])])
-    return chains
-
-
-def _run_chain(
-    target: Path, agent_cls, jobs: list[tuple[str, list[dict]]],
-    agent_kwargs: dict | None = None,
-) -> list[tuple[str, BaseException]]:
-    """Run a chain's jobs sequentially. Continue-then-report on
-    per-job failures so one bad entry doesn't strand its siblings.
-
-    ``agent_kwargs`` are extra per-subject constructor kwargs (e.g. the
-    type analyzer's ``unscoped``); positional so this stays usable from
-    ``ThreadPoolExecutor.submit``.
-    """
-    failures: list[tuple[str, BaseException]] = []
-    for stage_suffix, manifests in jobs:
-        try:
-            agent_cls(
-                target,
-                manifests=manifests,
-                stage_suffix=stage_suffix,
-                **(agent_kwargs or {}),
-            ).run()
-        except BaseException as exc:  # noqa: BLE001 — continue-then-report
-            failures.append((stage_suffix, exc))
-    return failures
-
-
 def _run_subject_manifests_list(
     target: Path,
     repo_root: Path,
@@ -351,73 +142,43 @@ def _run_subject_manifests_list(
     *,
     subject: str,
     filter_spec,
-    parallel: bool,
-    parallel_max: int,
-    per_entry: bool = False,
-    compose_only: bool = False,
 ) -> None:
-    """Unified subject runner using the manifests-list contract.
+    """Unified subject runner — composer only, no agent.
 
-    Runs the composer once (fast, single-threaded), writes the
-    composer output to disk via the merge primitive, then builds and
-    executes the agent-invocation plan via :func:`_build_chains` and
-    :func:`_run_chain`. Continue-then-report on agent failures: every
-    chain runs to completion (or its own failure); a SystemExit is
-    raised at the end summarising any failures.
+    Runs the composer once and writes its output through the merge
+    primitive. Used for both ``symbols`` and ``types``; only the composer
+    module, manifest filename, entries key and merge key differ.
 
-    Used for both ``symbols`` and ``types`` subjects — only the
-    composer module, agent class, manifest filename, entries key, and
-    entry-tag key differ.
-
-    Granularity:
-      - ``per_entry=False`` — manifests-list mode. Without
-        ``--parallel`` a single agent receives every manifest at
-        once; with ``--parallel`` manifests are round-robin
-        partitioned across up to ``parallel_max`` concurrent agents.
-      - ``per_entry=True`` — one agent per composer-identified entry.
-        Same-path agents run sequentially in a chain (write-safe);
-        chains run in parallel up to ``parallel_max``. Each agent's
-        effort budget is bounded to one entry — the structural guard
-        against the overload bail in PITFALLS §2026-06-05.
+    The schema's judgement fields (pointer facets, ownership, lifetime,
+    locking) are NOT filled here. They are submitted by the wrapper agents
+    through ``query symbols/types --update`` when the entity is wrapped, so
+    the analysis is made where its consumer needs it rather than in a
+    separate up-front pass. The merge primitive unions at field level, so
+    re-running this composer never clobbers what a wrapper submitted.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    # Subject dispatch — composer, agent class, schema bits.
-    from crustify.agents.analyzer import (
-        CrustifySymbolAnalyzer,
-        CrustifyTypeAnalyzer,
-    )
-
     if subject == "symbols":
         from compose.syms_manifest import compose as compose_fn
         from compose.syms_manifest import _COMMENT as COMMENT
         from compose.manifest_merge import merge_manifest_file, symbol_key as key_fn
         manifest_filename = manifest_name("symbols")
         entries_key = "symbols"
-        entry_tag_key = "name"
-        agent_cls = CrustifySymbolAnalyzer
     elif subject == "types":
         from compose.types_manifest import compose as compose_fn
         from compose.types_manifest import _COMMENT as COMMENT
         from compose.manifest_merge import merge_manifest_file, type_key as key_fn
         manifest_filename = manifest_name("types")
         entries_key = "types"
-        entry_tag_key = "name"
-        agent_cls = CrustifyTypeAnalyzer
     else:
         raise ValueError(f"unknown subject: {subject!r}")
 
     out_root = Layout(repo_root).analysis
 
-    # 1. Composer (single-threaded, fast).
-    #    `focus_by_key` is the transient per-target analysis surface for
-    #    type entries (port-touched field names by entry identity); empty
-    #    for symbols. It's NOT persisted — only used to bound the agent's
-    #    workset below (the manifest carries the full, scope-agnostic layout).
-    entries_by_dir, dir_scope, focus_by_key = compose_fn(t1, t2, filter_spec)
+    # `focus_by_key` bounded the retired analyzer agent's per-entry workset;
+    # nothing consumes it now (the manifest carries the full, scope-agnostic
+    # layout either way).
+    entries_by_dir, _dir_scope, _focus_by_key = compose_fn(t1, t2, filter_spec)
 
-    # 2. Emit skeletons to disk (merge-primitive semantics preserve
-    #    any prior agent annotations).
+    # Merge-primitive semantics: prior wrapper-submitted annotations survive.
     for rel_dir, entries in sorted(entries_by_dir.items()):
         manifest = {"_comment": COMMENT, entries_key: entries}
         merge_manifest_file(
@@ -430,119 +191,8 @@ def _run_subject_manifests_list(
         f"[crustify-cli analyze {subject}] composer: "
         f"{len(entries_by_dir)} dirs → {out_root}"
     )
-
     if not entries_by_dir:
         print(f"[crustify-cli analyze {subject}] no entries; nothing to do.")
-        return
-
-    # --compose-only: emit the deterministic skeletons (merged with any prior
-    # agent annotations) and stop before spawning any analyzer agent. The
-    # composer side is the fresh-tree generator; the agent pass (ownership /
-    # lifecycle annotation) is the expensive LLM step deliberately skipped here.
-    if compose_only:
-        print(
-            f"[crustify-cli analyze {subject}] --compose-only: skeletons emitted, "
-            f"no agent spawned."
-        )
-        return
-
-    # 3. Build agent-invocation plan. The type analyzer only annotates
-    #    STRUCTS (real structs + generated-container instances, which are
-    #    ordinary structs). Enums and callbacks stay in the manifest
-    #    (composer-filled, deterministic) but carry NO agent worklist entry:
-    #    enums have no fields; callbacks are signature-shaped → the SYMBOL
-    #    analyzer's job.
-    worklist_by_dir = entries_by_dir
-    if subject == "types":
-        worklist_by_dir = {
-            d: kept for d, es in entries_by_dir.items()
-            if (kept := [e for e in es if e.get("kind") == "struct"])
-        }
-    chains = _build_chains(
-        out_root, manifest_filename, worklist_by_dir, dir_scope,
-        entry_tag_key=entry_tag_key,
-        parallel=parallel, parallel_max=parallel_max, per_entry=per_entry,
-        focus_by_key=focus_by_key,
-    )
-    total_jobs = sum(len(c) for c in chains)
-    if total_jobs == 0:
-        print(f"[crustify-cli analyze {subject}] no agent jobs derivable; nothing to do.")
-        return
-    granularity_note = (
-        "1 agent/entry" if per_entry else
-        ("1 agent/dir, pool-scheduled" if parallel else "single agent over all dirs")
-    )
-    print(
-        f"[crustify-cli analyze {subject}] spawning {total_jobs} agent job(s) "
-        f"across {len(chains)} chain(s) "
-        f"({granularity_note}, max {parallel_max} chain(s) concurrent)"
-    )
-
-    # 4. Run chains. Each chain runs sequentially within itself;
-    #    chains run in parallel up to ``parallel_max``.
-    #    The type analyzer's prompt takes a `{scope}` context: `unscoped` when
-    #    the caller passed --unscoped (workset context is codebase-wide),
-    #    `scoped` otherwise (narrowed to wrap-/port-scope items). The symbol
-    #    analyzer's prompt has no such input, so it gets no such kwarg.
-    agent_kwargs: dict = {}
-    if subject == "types":
-        agent_kwargs["unscoped"] = bool(getattr(filter_spec, "unscoped", False))
-
-    failures: list[tuple[str, BaseException]] = []
-    if parallel and len(chains) > 1:
-        with ThreadPoolExecutor(max_workers=parallel_max) as ex:
-            futures = {
-                ex.submit(_run_chain, target, agent_cls, jobs, agent_kwargs):
-                    (idx, len(jobs))
-                for idx, jobs in enumerate(chains)
-            }
-            for fut in as_completed(futures):
-                chain_idx, n_jobs = futures[fut]
-                try:
-                    chain_failures = fut.result()
-                except BaseException as exc:  # noqa: BLE001
-                    failures.append((f"chain_{chain_idx}", exc))
-                    print(
-                        f"[crustify-cli analyze {subject}] chain_{chain_idx}: "
-                        f"CHAIN FAILED — {type(exc).__name__}: {str(exc)[:120]}"
-                    )
-                    continue
-                for sub_suffix, sub_exc in chain_failures:
-                    failures.append((sub_suffix, sub_exc))
-                    print(
-                        f"[crustify-cli analyze {subject}] chain_{chain_idx} "
-                        f"{sub_suffix} FAILED — {type(sub_exc).__name__}: "
-                        f"{str(sub_exc)[:120]}"
-                    )
-                ok = n_jobs - len(chain_failures)
-                print(
-                    f"[crustify-cli analyze {subject}] chain_{chain_idx}: "
-                    f"{ok}/{n_jobs} agents ok"
-                )
-    else:
-        # Serial: walk chains in deterministic order, jobs sequentially.
-        for chain_idx, jobs in enumerate(chains):
-            chain_failures = _run_chain(target, agent_cls, jobs, agent_kwargs)
-            for sub_suffix, sub_exc in chain_failures:
-                failures.append((sub_suffix, sub_exc))
-                print(
-                    f"[crustify-cli analyze {subject}] {sub_suffix} FAILED "
-                    f"— {type(sub_exc).__name__}: {str(sub_exc)[:120]}"
-                )
-
-    if failures:
-        details = "\n".join(
-            f"  - {slug}: {type(exc).__name__}: {str(exc)[:200]}"
-            for slug, exc in failures
-        )
-        raise SystemExit(
-            f"\n{len(failures)} of {total_jobs} {subject} agent "
-            f"invocation(s) failed:\n{details}\n\n"
-            f"Successfully ran {total_jobs - len(failures)}/{total_jobs} "
-            f"agents. The merge primitive's field-level union means a "
-            f"retry (e.g. `--reset --dir <failed_dir>` or "
-            f"`--name <failed_tag>`) only re-runs the failed work."
-        )
 
 
 # ---------------------------------------------------------------- public verbs
@@ -552,7 +202,7 @@ def analyze_scope(
 ) -> None:
     """Emit scope.json's two sections.
 
-      - ``port`` — the translation set, seeded from ``config.json``.
+      - ``port`` — the translation set, seeded from ``scope-config.json``.
       - ``wrap`` — the FFI import-closure *derived from* ``port``: walk port
         entities' forward edges into the items they use, narrowed to the
         header(s) the importing TU ``#include``s.
@@ -575,146 +225,35 @@ def analyze_scope(
         _wrap_scope(target)
 
 
-#: `analyze symbols --lifetime-for` SPECs that name an untyped tier rather than
-#: a struct tag -- these have no types.json entry to compose.
-LIFETIME_SPEC_KEYWORDS = ("void", "string")
+def analyze_symbols(target: Path, *, filter_spec=None) -> None:
+    """Stage 2: compose the syms skeletons. Deterministic, no agent.
 
-
-def analyze_lifetime_for(
-    target: Path, spec: str, *, compose_only: bool = False,
-) -> None:
-    """Lifetime-discovery mode: hand ONE symbol-analyzer agent the job of
-    identifying `spec`'s lifecycle primitives.
-
-    Unlike the normal stages there is no composed worklist -- the point of this
-    mode is that we do NOT know which symbols are primitives yet. The agent
-    discovers them itself (`query symbols --taking <spec> --calling ... --hops
-    N`), triages the pool down to the routines that actually drop / dispose /
-    clone `spec`, analyzes only those, and submits their arg-level `lifetime`
-    flags. `query symbols --lifetime-for <spec>` then reverse-derives the type's
-    Drop/dispose/Clone from what landed.
-
-    So the agent's worklist carries a MODE MARKER instead of entries:
-    ``[{"lifetime_for": "<spec>"}]``. `spec` is a struct tag / typedef, or the
-    `void` / `string` keyword.
-
-    For a real type we first compose its types.json entry (the discovery query
-    resolves the tag's typedef aliases through it, and the type record is what
-    ultimately receives the reverse-derived roles). The `void` / `string` tiers
-    are untyped and have no entry to compose.
-
-    The symbol tree itself is NOT re-composed: it is the discovery surface, and
-    the agent reads it through the oracle. Compose it first (e.g. `analyze
-    symbols --all --unscoped --compose-only`) so out-of-scope primitives are
-    visible -- scope gates emission, so an unemitted primitive is unfindable.
-
-    Tiers are staged: run `void` first, then `string`, then each `<tag>` -- a
-    tier's `--calling` filter names the primitives the previous tier established.
-    """
-    from compose.filter_spec import FilterSpec
-
-    if spec not in LIFETIME_SPEC_KEYWORDS:
-        # Compose the type entry so its aliases resolve and it has a record to
-        # receive the roles. Types-side compose only; no agent.
-        analyze_types(
-            target,
-            filter_spec=FilterSpec(names=[spec], scope_json_path=None),
-            compose_only=True,
-        )
-    if compose_only:
-        print(f"[crustify-cli analyze symbols] --lifetime-for {spec}: "
-              f"--compose-only, no agent spawned.")
-        return
-    from crustify.agents.analyzer import CrustifySymbolAnalyzer
-
-    failures = _run_chain(
-        target, CrustifySymbolAnalyzer,
-        [(f"lifetime_for__{_slug_tag(spec)}", [{"lifetime_for": spec}])],
-    )
-    if failures:
-        raise SystemExit(
-            f"analyze symbols --lifetime-for {spec}: agent failed: "
-            f"{failures[0][1]}"
-        )
-
-
-def analyze_symbols(
-    target: Path, *,
-    filter_spec=None,
-    parallel: bool = False,
-    parallel_max: int = 8,
-    compose_only: bool = False,
-) -> None:
-    """Stage 2: compose syms skeletons + run the symbol analyzer agent.
-
-    `filter_spec` narrows the composer's emission (which manifest dirs
-    and which entries within them survive the seed/closure / scope /
-    name filters). The composer's output is then fed to the agent via
-    the manifests-list contract — each agent invocation receives a
-    `manifests` list of ``{symbols: [{name, file}], scope}`` records
-    (one per stem-group dir; the symbols are schema-agnostic identity
-    tuples). The agent reads/writes each symbol through `crustify-cli query
-    syms`, never opening a manifest.
-
-    Without `--parallel` a single agent processes every manifest in
-    one invocation. With `--parallel` each manifest dir becomes its
-    own chain (one agent invocation per dir, single-manifest
-    workload); the ThreadPoolExecutor schedules ``parallel_max``
-    chains concurrently and queues the rest.
+    `filter_spec` narrows the composer's emission (which manifest dirs and
+    which entries within them survive the seed/closure / scope / name
+    filters). The schema's judgement fields are submitted later by the
+    wrapper agents via `query symbols --update` — see
+    :func:`_run_subject_manifests_list`.
     """
     repo_root = _repo_root_for(target)
-    t1 = Layout(repo_root).t1
-    t2 = Layout(repo_root).t2
-
     _run_subject_manifests_list(
-        target, repo_root, t1, t2,
+        target, repo_root, Layout(repo_root).t1, Layout(repo_root).t2,
         subject="symbols",
         filter_spec=filter_spec,
-        parallel=parallel,
-        parallel_max=parallel_max,
-        per_entry=False,
-        compose_only=compose_only,
     )
 
 
-def analyze_types(
-    target: Path, *,
-    filter_spec=None,
-    parallel: bool = False,
-    parallel_max: int = 8,
-    compose_only: bool = False,
-) -> None:
-    """Stage 3: compose types skeletons + run the type analyzer agent.
+def analyze_types(target: Path, *, filter_spec=None) -> None:
+    """Stage 3: compose the types skeletons. Deterministic, no agent.
 
-    Uses the manifests-list contract. The agent receives a `manifests`
-    list of ``{path, names, scope}`` records and does no selection
-    parsing of its own.
-
-    Granularity is always **per-entry** (one agent per composer-identified
-    STRUCT): structs each carry substantial per-entry analysis work
-    (lifecycle classification, per-field accessors, locking, conditional
-    drop, per-pointer ownership), and one-per-entry bounds the per-agent
-    effort budget. Enums get no type-agent job (callbacks are symbols now —
-    see `_run_subject_manifests_list`). Same-path agents form a chain (sequential;
-    write-safe); chains run in parallel up to `parallel_max` when
-    `--parallel` is set. Without `--parallel` a single chain
-    sequences all jobs.
+    Same contract as :func:`analyze_symbols`. Enums, callbacks and structs
+    are all emitted; per-field ownership, lifecycle and locking are the
+    type wrapper's submissions, not this stage's.
     """
     repo_root = _repo_root_for(target)
-    t1 = Layout(repo_root).t1
-    t2 = Layout(repo_root).t2
-
-    # The per-entry pass analyzes every struct (generated-container instances
-    # included — an instance is just an ordinary struct); enums and callbacks
-    # are filtered out of the worklist.
     _run_subject_manifests_list(
-        target, repo_root, t1, t2,
+        target, repo_root, Layout(repo_root).t1, Layout(repo_root).t2,
         subject="types",
         filter_spec=filter_spec,
-        parallel=parallel,
-        parallel_max=parallel_max,
-        per_entry=True,
-        compose_only=compose_only,
     )
 
 

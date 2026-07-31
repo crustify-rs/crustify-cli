@@ -21,7 +21,7 @@ Both footprints carry the COMPLETE cross-codebase set for port AND wrap
 types — scope-agnostic, like the manifest as a whole. The per-target scope
 view (narrowing to the in-scope universe) is applied at READ time by
 `query --methods`, never baked here. The footprints are the deterministic
-candidate pool from which the type analyzer derives lifecycle + per-field
+candidate pool from which the type wrapper derives lifecycle + per-field
 accessors (no `ops` list on a concrete type).
 
 Field schema (per `fields[]` entry):
@@ -131,7 +131,7 @@ def _null_ptr_skeleton():
     the composer.
 
     `null` is the UNANALYZED state, so "has this field been through the
-    analyzer?" is a null check on one key — an all-null keyed skeleton would be
+    wrapper?" is a null check on one key — an all-null keyed skeleton would be
     indistinguishable from a block the agent filled with nulls, and is not
     submittable anyway (a submitted block replaces the prior WHOLESALE and must
     be complete). Once filled it is the same `{scalar, array, string, owned,
@@ -472,7 +472,7 @@ def _struct_skeleton(
 ) -> dict[str, Any]:
     # `kind` is "struct" or "union" — a union takes the SAME skeleton (it has a
     # member layout, footprints, casts) and only differs in the tag. Unions get
-    # no agent analysis (the type-analyzer worklist is structs-only); their
+    # no agent analysis (only structs carry per-field work); their
     # per-field `ptr` slots stay null.
     return {
         "name": struct_name, "typedef": typedefs, "kind": kind,
@@ -542,7 +542,7 @@ def compose(
       - ``entries_by_dir``: ``{manifest_dir: [entries]}`` ready for the
         merge primitive.
       - ``dir_scope``: ``{manifest_dir: "port" | "wrap"}`` parallel
-        map. Orchestrator consumers (the type analyzer's manifests-list
+        map. Orchestrator consumers (the type wrapper's manifests-list
         input contract) read this to tag each manifest with its scope
         without persisting the tag to disk. Assumes a stem-group
         manifest dir carries entries of a single scope only; the
@@ -614,7 +614,7 @@ def compose(
         # Named struct/union/enum identity comes from the C tag here; the
         # anonymous-typedef loop below mirrors this via the same
         # _build_struct_entry path. A union takes the struct path (member layout
-        # + footprints) but keeps `kind: union` so the analyzer worklist skips it.
+        # + footprints) but keeps `kind: union` so the wrapper worklist skips it.
         if r["kind"] == "enum":
             entry = _enum_skeleton(r["name"], declared_in, defined_in, typedefs_for.get(r["name"], []))
             fields, forward, touched = [], set(), None

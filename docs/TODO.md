@@ -260,8 +260,9 @@ and the rest could live closer to where it's consumed:
   (`analyze scope` regenerates it), so the composer must **merge-preserve** the
   authored section on every regen (input + output share one file: a regen bug
   can clobber the authored scope). Weigh against keeping a tiny scope-def file.
-- `out_of_scope.features` (OPENSSL_NO_* preproc defines) + `version_anchor` --
-  build/preprocessor inputs, not scope. Move to `build.json`.
+- `out_of_scope.features` (OPENSSL_NO_* preproc defines) -- a build/preprocessor
+  input, not scope. Move to `build.json`. (`version_anchor` was listed here too;
+  it has since been deleted outright -- nothing read it.)
 
 Low-risk first step: delete the dead `repo_root` field + rewire `target` off the
 CLI. The scope.json/build.json fold is the larger, riskier change.
@@ -364,9 +365,10 @@ loses cast-free *adopt-from-C* (keeps cast-free *hand-to-C*).
 
 ## Analyze + wrap unions and enums (2026-07-08)
 
-The type-analyzer worklist is **structs-only**: `analyze.py:396` keeps only
-`kind == "struct"` entries, so unions and enums are composed as skeletons but
-never analyzed and never wrapped.
+Unions and enums are composed as skeletons but never wrapped. (Historically
+this was the type-analyzer worklist being structs-only; the analyzer is gone —
+`analyze` is composer-only and the judgement fields are the wrapper's — so the
+gap is now purely on the wrap side.)
 
 - **Unions** carry the struct-like member-layout skeleton (see
   `docs/schemas/types.md` -> `kind`), but their lifecycle / `ptr` slots stay at
@@ -379,7 +381,7 @@ never analyzed and never wrapped.
   them to a real Rust `enum` with the C repr for exhaustive matching instead of
   raw integer compares.
 
-Shape if pursued: (1) extend the analyzer worklist to include unions
+Shape if pursued: (1) extend the wrap worklist to include unions
 (member-pointer ownership + the discriminant field when the union is embedded in
 a tagged struct) and optionally enums (repr + variant mapping); (2) extend the
 type wrapper to emit a Rust `union` / tagged-enum wrapper (discriminant-gated
@@ -1073,6 +1075,10 @@ tables + small enums with no anonymous-aggregate fields.
 
 ## 2026-06-05 - Workload-weighted batching for the per-dir analyzer agents
 
+**OBSOLETE** — the analyze stage spawns no agents; there is no per-dir
+batching left to weight. Kept for the reasoning, which transfers to any
+future per-dir agent scheduling.
+
 ### What
 
 `_run_analyze_parallel` spawns **one agent per manifest dir** and
@@ -1163,7 +1169,8 @@ the guardrail first, then revisit batching if bails persist.
 
 ### What
 
-The analyzers' manifests-list contract carries `scope: "port" | "wrap"`
+(OBSOLETE — the analyzers are gone.) Their manifests-list contract carried
+`scope: "port" | "wrap"`
 as a **per-manifest** tag, not a per-entry one. The orchestrator
 derives this tag from `compose()`'s `dir_scope` map (composer-emitted
 alongside `entries_by_dir`), which records per-stem-group scope based

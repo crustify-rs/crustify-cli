@@ -105,7 +105,7 @@ Three agent-fillable keys ride on a field record:
 ## ptr
 
 Per pointer field. The composer emits `ptr: null`, so **`null` means
-unanalyzed** — whether a field has been through the analyzer is a null check on
+unanalyzed** — whether a field has been through a wrapper is a null check on
 one key. A submitted block replaces the prior WHOLESALE and must be complete,
 so there is nothing to patch into a skeleton. Once filled: 
 

@@ -50,12 +50,13 @@ scalar/aggregate), `includes`.
 | `wrap_closure.py` | the wrap-scope closure reached from port code | scope / wrap scheduling |
 | `types_manifest.py` / `syms_manifest.py` | `types.json` / `syms.json` skeletons + full dependency edges | `analyze types` / `symbols` |
 | `deps_dag.py` | `deps-dag.json` - unified layered types+symbols DAG (cast-centrality + fallback/back-fill edges) | `analyze dag`, wrap/port scheduler |
-| `scaffold_manifest.py` | `crates.json` + `.rs` stub/module tree | `scaffold` |
+| `scaffold_manifest.py` | **legacy** — only `sync_workspace` (the shared `rust/` Cargo workspace member list) is still live, called from `bindgen_manifest`. `crates.json` has no producer: it is authored outside the pipeline (see `docs/schemas/crates.md`), and `.rs` stubs come from `crustify.scaffold` | `bindgen` |
 | `bindgen_manifest.py` | `<lib>-sys` crate scaffolds - per-kind allowlists + include closure (no `fn main`, no shims) | `bindgen` |
 | `audit_manifest.py` | JSON to stdout (per-seed own + naked-ffi surface, tree-wide `global` scan, `totals`); nothing written to disk | `audit` |
 | `manifest_merge.py` | union-by-key merge of agent findings into a manifest | `query --update` |
 | `check_types_consistency.py` | consistency gate (every op homed once; acyclic) | standalone (`python -m`, manual) |
 
 All artifacts are deterministic from the CSVs + `scope.json`; the analyze
-`types`/`symbols` skeletons are then the only ones an LLM agent fills in
+`types`/`symbols` skeletons carry judgement fields that the WRAP-stage
+agents fill in later, via `query --update`
 (ownership, lifecycle, ptr facets) - every other composer output is final.

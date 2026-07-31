@@ -50,7 +50,7 @@ def _load_csv(path: Path) -> list[dict]:
 class Reach:
     """In-memory rollup of all T2 edge CSVs against a port-path set.
 
-    Built once per analyzer run. Methods are read-only after init.
+    Built once per composer run. Methods are read-only after init.
     """
 
     def __init__(
@@ -359,7 +359,7 @@ class Reach:
 
         Dedup against `port_callers_of` to enforce the
         "site in call → not in ref" rule documented in the symbol
-        analyzer prompt.
+        wrapper prompt.
         """
         return {
             enc for enc, access_file in self._fa_inverse.get((target_name, target_def_file), set())
@@ -705,7 +705,7 @@ class Reach:
         self._ltu_forward: dict[tuple[str, str], set[tuple[str, str, str, str]]] = defaultdict(set)
         self._ltu_inverse: dict[tuple[str, str], set[tuple[str, str]]] = defaultdict(set)
         if not path.exists():
-            # local_type_uses.csv is optional — if the analyzer
+            # local_type_uses.csv is optional — if the extraction
             # pipeline ran without it (older T2 set), reach still
             # works but opaque_in will fall back to the
             # signature-only sound subset.

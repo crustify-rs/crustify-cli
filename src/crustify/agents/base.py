@@ -70,14 +70,14 @@ class CrustifyAgent:
     Each agent runs against a *target* (the subdirectory crustify is
     scoped to) and additionally has access to the *repo_root* (the
     repository the target lives in, read from the target-tier
-    ``config.json``). The two coincide for whole-repository ports.
+    ``scope-config.json``). The two coincide for whole-repository ports.
 
     The ``tier`` class attribute decides which ``.crustify/`` directory
     this agent's ``output`` artifact lives in:
 
       - ``tier = "target"`` (default) — `<target>/.crustify/<output>`.
         Used by every agent that produces subsystem-scoped output
-        (analyzer, port, type_wrapper, …).
+        (port, type_wrapper, symbol_wrapper, …).
       - ``tier = "repo_root"`` — `<repo_root>/.crustify/<output>`. Used
         by agents whose artifact is project-wide and target-independent.
 
@@ -89,7 +89,7 @@ class CrustifyAgent:
     name: str         # subclasses set this
     model: str        # subclasses set this
     stage: str        # label used in skip messages + log filename
-    prompt_dir: str | None = None  # optional subdir under prompts/ (e.g. "analyzer");
+    prompt_dir: str | None = None  # optional subdir under prompts/ (e.g. "wrapper");
                                     # the prompt file is prompts/<prompt_dir>/<stage>.md
     output: str | None = None  # path under .crustify/; when set, artifact existence
                                # is the agent-level done signal (skip on re-run).
@@ -190,7 +190,7 @@ class CrustifyAgent:
         When ``output`` is ``None`` the agent has no single on-disk
         artifact to check and always returns ``False``; the agent runs
         every time and is responsible for its own per-entry skip logic
-        (e.g. analyzer agents walk their manifests and skip already-
+        (e.g. wrapper agents walk their manifests and skip already-
         annotated entries). Stage completion is purely data-driven —
         there is no ``state.json``; the artifact's presence on disk
         IS the signal.
@@ -237,7 +237,7 @@ class CrustifyAgent:
         return (_PKG_ROOT.parent / "templates" / name).read_text()
 
     def _repo_config(self) -> dict:
-        """Repo-wide crustify config (``crustify/config.json``): dep paths and
+        """Repo-wide crustify config (``crustify/cli-config.json``): dep paths and
         the SKILL.md set. Memoised; empty dict if the file is absent."""
         cfg = getattr(self, "_repo_cfg_cache", None)
         if cfg is None:

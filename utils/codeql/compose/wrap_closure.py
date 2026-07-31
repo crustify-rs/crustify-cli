@@ -79,7 +79,7 @@ class _Index:
     (``field_type_uses`` + the T1 ``types`` table) — see ``build_type_meta`` /
     ``build_field_edges``. So `types.json` is no longer read here: the type-side
     closure is a pure function of CodeQL facts + scope, independent of whether
-    the type-analyzer agent has annotated anything."""
+    any agent has annotated anything."""
 
     def __init__(self) -> None:
         # (name, defined_in) -> {kind, declared_in}

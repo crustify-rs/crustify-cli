@@ -1,11 +1,11 @@
 ---
 name: crustify-oracle
 bin: crustify-cli
-roles: [translator, orchestrator, analyzer]
+roles: [translator, orchestrator]
 description: >-
   The crustify analysis oracle for C symbols and types. Query a record /
   signature, its emitted Rust module, its dependency closure, the schema, and
-  the unsafe surface of ported code -- and, for the analyzers, submit findings
+  the unsafe surface of ported code -- and, for the wrappers, submit findings
   back through it. Both read and write go THROUGH the oracle (`query`
   syms/types/dag/files, `--schema`, `--update`; `scaffold --name`; `audit`),
   never by touching a manifest file directly (risk of concurrent race).
@@ -29,7 +29,7 @@ plus the idioms `--help` can't tell you.
 > a `scope.json` (e.g. `src/libgit2`) for scope-aware commands; add `--unscoped`
 for a repo-wide, scope-blind pass.
 
-## `query types` -- type records, type-analyzer discover + submit
+## `query types` -- type records, type-wrapper discover + submit
 
 | you need | invocation |
 |----------|------------|
@@ -41,7 +41,7 @@ for a repo-wide, scope-blind pass.
 | enumerate by scope (then `xargs` a stage) | `query types --wrap-only` / `--port-only` |
 | **submit** type findings (WRITE) | `query types --name <tag> --file <file> --update <file>` (or `--update -`) |
 
-## `query symbols` -- symbol records, symbol-analyzer discover + submit
+## `query symbols` -- symbol records, symbol-wrapper discover + submit
 
 (`syms` is a back-compat alias for `symbols`.)
 

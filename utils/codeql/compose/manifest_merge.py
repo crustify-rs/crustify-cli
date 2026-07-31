@@ -9,7 +9,7 @@ Across-target evolution is handled by **field-level merge** rather
 than the older "existing entry wins, ignore new" semantic:
 
   - **New keys** (entries not in the existing manifest) are appended.
-  - **Composer-owned values are refreshed** (a cheap `--compose-only` is a
+  - **Composer-owned values are refreshed** (a cheap re-run of `analyze types`/`symbols` is a
     deterministic structural refresh): a type entry's composer-owned top-level
     keys (`_TYPE_COMPOSER_KEYS` — ``kind`` / ``declared_in`` / ``defined_in`` /
     ``casted`` / footprints) are overwritten from the new run, and each field's
@@ -82,7 +82,7 @@ def _overlay_field(existing: dict, incoming: dict) -> dict:
     (top-level) ``array`` and the *presence* of the ``ptr`` skeleton; the agent
     owns the ``ptr`` block *contents* (``owned`` / ``borrowed`` / ``string`` /
     ``mutable`` / ``container`` / ``owned_elem`` / ``note`` / …). So a
-    ``--compose-only`` refresh re-derives structure — picking up composer fixes
+    a composer re-run re-derives structure — picking up composer fixes
     (e.g. a typedef'd function pointer that used to collapse to a bare scalar
     now surfaces as a pointer) — without discarding ownership analysis:
 

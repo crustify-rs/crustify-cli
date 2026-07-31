@@ -804,7 +804,7 @@ def port_touched_fields(analysis_root: Path, port_syms: set) -> dict[str, set[st
 
     Derived from the port-scope symbols' own ``depends_on.types[].fields``,
     which is exactly "fields this function accesses" — the same quantity the
-    types composer computes transiently as ``focus_by_key`` for the analyzer's
+    types composer computes transiently as ``focus_by_key`` for the wrapper's
     focus. A type absent from the result is reached only opaquely.
     """
     touched: dict[str, set[str]] = {}
