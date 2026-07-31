@@ -74,7 +74,8 @@ inspectable-failure guarantee of finding F12, as a signal rather than a pile.
 Worktrees fork from **HEAD**: uncommitted changes in the main checkout are not
 carried into them, so a wave is expected to start from a committed tree. What
 HEAD cannot carry either is the gitignored, read-only-across-a-wave state
-(`analysis`, `codeql`, `targets`, `.providers`, `crates.json`, `build.json`);
+(`analysis`, `codeql`, `targets`, `.providers`, `crates.json`, `build.json`,
+`cli-config.json`);
 :func:`link_shared` symlinks those from the main checkout so a worktree is a
 complete functional crustify tree without duplicating them.
 
@@ -166,7 +167,13 @@ def add_worktree(repo: Path, base_ref: str, slug: str) -> Path:
 
 
 _SHARED = (".providers", "analysis", "analysis.baseline", "codeql", "targets",
-           "tmp", "crates.json", "build.json", "config.json")
+           "tmp", "crates.json", "build.json", "cli-config.json")
+
+#: Shared entries created ON DEMAND rather than by an earlier stage, so the
+#: main checkout may not hold them yet when the first wave starts. They are
+#: seeded there before linking (see :func:`link_shared`); everything else in
+#: `_SHARED` is produced by a prior stage and its absence is a real error.
+_SHARED_LAZY_DIRS = (".providers", "tmp")
 
 
 def link_shared(wt: Path, repo: Path) -> None:
@@ -191,7 +198,7 @@ def link_shared(wt: Path, repo: Path) -> None:
     against it with no error: a silent loss of provider settings, which is the
     worst available failure mode.
 
-    ``config.json`` is here for the same reason as ``build.json``: it is
+    ``cli-config.json`` is here for the same reason as ``build.json``: it is
     hand-authored, machine-local (absolute paths to crustify, its skills and
     crustify-prim), and therefore not committed — so HEAD cannot carry it into a
     worktree. Without the symlink an agent's ``Layout.repo_config`` resolves to a
@@ -209,6 +216,20 @@ def link_shared(wt: Path, repo: Path) -> None:
     for d in _SHARED:
         src = repo / "crustify" / d
         dst = wt / "crustify" / d
+        # A lazily-created shared dir must be MATERIALIZED in the main checkout
+        # before the link, not skipped for not existing yet. `.providers` is
+        # created on demand by `Layout.providers()` (which mkdirs), so on the
+        # first wave in a fresh tree it is absent here — the `src.exists()`
+        # guard below then skips it, `Layout.providers()` mkdirs a REAL dir
+        # inside the worktree, and the purge takes it with the worktree. That is
+        # exactly the silent failure this docstring warns about, plus a worse
+        # one: codex's session rollout lands in CODEX_HOME, so the run's cost
+        # accounting is destroyed with the worktree ("no session rollout found;
+        # this run is unaccounted"). Only dirs are seeded — the shared FILES
+        # (crates.json / build.json / cli-config.json) must stay skipped when
+        # absent, since an empty stand-in for one of those is worse than none.
+        if not src.exists() and d in _SHARED_LAZY_DIRS:
+            src.mkdir(parents=True, exist_ok=True)
         if src.exists() and not dst.exists():
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.symlink_to(src.resolve())

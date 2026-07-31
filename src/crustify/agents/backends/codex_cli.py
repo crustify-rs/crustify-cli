@@ -102,54 +102,27 @@ _REASONING_EFFORT = {
 }
 
 
-def _writable_roots(repo_root: Path) -> list[str]:
-    """Directories the sandbox must let the agent write, beyond its work dir.
-
-    ``-s workspace-write`` grants exactly ``[workdir, /tmp, $TMPDIR]``, and the
-    work dir is the *target* directory (``<repo>/ssl``) — so out of the box an
-    agent cannot write the Rust it is asked to emit, cannot commit, and cannot
-    submit a record. Three roots are needed:
-
-    * ``repo_root`` — in an isolated wave this is the agent's worktree: the C
-      tree it reads, ``crustify/rust/`` it writes, and cargo's ``target/``.
-    * the **main checkout** — for two independent reasons. A worktree's ``.git``
-      is a *file* pointing at ``<main>/.git/worktrees/<slug>``, so every commit
-      and the landing push write there; and :func:`crustify.worktree.link_shared`
-      symlinks ``analysis`` / ``targets`` / ``.providers`` / ``tmp`` / the
-      repo-tier JSON stores back to the main checkout, which is where the
-      agent's record submissions and codex's own session rollout land.
-    * ``CARGO_HOME`` — cargo writes its registry cache and lockfiles there.
-
-    The main checkout is derived rather than passed: ``--git-common-dir`` is
-    ``<main>/.git`` from any worktree and ``<repo>/.git`` from a plain checkout,
-    so its parent is the right root either way.
-
-    Seatbelt canonicalizes before matching — verified: with write access granted
-    to a directory only, a write *through* a symlink in it to a target outside
-    still fails ``Operation not permitted``. So granting ``repo_root`` does NOT
-    reach anything ``link_shared`` symlinked out; the main checkout must be
-    named explicitly.
-    """
-    roots = [repo_root]
-    common = subprocess.run(
-        ["git", "-C", str(repo_root), "rev-parse", "--git-common-dir"],
-        capture_output=True, text=True,
-    )
-    if common.returncode == 0 and common.stdout.strip():
-        git_dir = Path(common.stdout.strip())
-        if not git_dir.is_absolute():
-            git_dir = (repo_root / git_dir).resolve()
-        roots.append(git_dir.parent)
-    cargo_home = os.environ.get("CARGO_HOME") or str(Path.home() / ".cargo")
-    roots.append(Path(cargo_home))
-
-    seen, out = set(), []
-    for r in roots:
-        r = Path(r).resolve()
-        if r.is_dir() and str(r) not in seen:
-            seen.add(str(r))
-            out.append(str(r))
-    return out
+# The paths a narrower sandbox had to be told about, kept as the record of what
+# `-s danger-full-access` now covers implicitly (see the sandbox comment in
+# `run`). Should the mode ever be narrowed again, these are the three roots:
+#
+#   * the worktree              — the C tree it reads, `crustify/rust/` it
+#                                 writes, cargo's `target/`
+#   * the MAIN checkout         — a worktree's `.git` is a file pointing at
+#                                 `<main>/.git/worktrees/<slug>`, so commits and
+#                                 the landing push write there; and
+#                                 `worktree.link_shared` symlinks analysis /
+#                                 targets / .providers / tmp / the repo-tier
+#                                 JSON stores back to it, which is where record
+#                                 submissions and codex's session rollout land.
+#                                 Derived via `--git-common-dir`, whose parent is
+#                                 the right root from a worktree or a plain
+#                                 checkout alike.
+#   * CARGO_HOME                — cargo's registry cache and lockfiles
+#
+# Naming the main checkout was NOT redundant with the worktree: seatbelt
+# canonicalizes before matching, so a write *through* a `link_shared` symlink to
+# a target outside the granted dir failed `Operation not permitted` (verified).
 
 
 def _rollout_path(codex_home: Path, session_id: str) -> Path | None:
@@ -230,13 +203,26 @@ class CodexCliBackend:
         route = resolve(model)
         prompt = prompt_template.format(**arguments)
 
-        repo_root = Path(arguments.get("repo_root", wd)).resolve()
-        roots = json.dumps(_writable_roots(repo_root))
-
+        # Sandbox: FULL ACCESS, hard-coded.
+        #
+        # `-s workspace-write` grants exactly [workdir, /tmp, $TMPDIR], and the
+        # work dir is the TARGET directory (`<repo>/ssl`) — so out of the box
+        # the agent could not write the Rust it is asked to emit, commit, or
+        # submit a record. It was widened by hand to three roots: the worktree;
+        # the MAIN checkout (a worktree's `.git` is a *file* pointing at
+        # `<main>/.git/worktrees/<slug>`, so every commit and the landing push
+        # write there, and `worktree.link_shared` symlinks analysis / targets /
+        # .providers / the repo-tier JSON stores back to it); and CARGO_HOME.
+        # Enumerating write roots still left the agent unable to navigate the
+        # workspace freely, so the mode is now global.
+        #
+        # This REMOVES the sandbox rather than widening it: the agent can write
+        # anywhere the invoking user can — outside the repo, and into a
+        # concurrent run's worktree or suffixed manifests, which is the
+        # isolation an `--out-suffix` model comparison otherwise relies on.
         cmd = [exe, "exec", "--skip-git-repo-check",
                "-C", str(wd),
-               "-s", "workspace-write",
-               "-c", f"sandbox_workspace_write.writable_roots={roots}",
+               "-s", "danger-full-access",
                "-m", route.model,
                "--ignore-user-config",
                *_TOOL_OFF]
@@ -261,8 +247,17 @@ class CodexCliBackend:
         # --ignore-user-config for config hermeticity.
         env_key_auth = route.provider == "openrouter" or cfg.BILLING == "api"
         if env_key_auth:
+            # RESOLVED, not the raw path. An isolated agent's `repo_root` is its
+            # worktree, where `crustify/.providers` is a symlink into the main
+            # checkout (worktree.link_shared) — so the raw path is only valid
+            # while the worktree exists. The agent PURGES its worktree as the
+            # last step of landing, before this backend does its accounting, so
+            # `_rollout_path` globbing the unresolved path finds nothing and the
+            # run is reported unaccounted even though codex wrote the rollout
+            # safely into the shared tree. Resolving pins both CODEX_HOME and
+            # the later lookup to the real directory, which outlives the wave.
             codex_home = Layout(
-                Path(arguments.get("repo_root", wd))).providers("codex")
+                Path(arguments.get("repo_root", wd))).providers("codex").resolve()
             env["CODEX_HOME"] = str(codex_home)
         else:
             codex_home = Path(env.get("CODEX_HOME") or (Path.home() / ".codex"))
