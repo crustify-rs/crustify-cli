@@ -36,7 +36,7 @@ use std::collections::HashSet;
 const SEAM_FNS: &[&str] = &[
     "as_ptr", "as_mut_ptr", "as_c_ptr", "as_raw", "as_buf_ptr",
     "from_ptr", "from_ptr_mut", "from_raw",
-    "to_ptr", "to_raw", "into_raw", "from_foreign", "into_foreign",
+    "to_ptr", "to_raw", "into_raw",
 ];
 
 fn is_seam_fn(tcx: TyCtxt<'_>, did: DefId) -> bool {

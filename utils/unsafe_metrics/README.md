@@ -47,7 +47,7 @@ the regex pass in `audit.py` for the subset of properties below.
   `crustify::define_type!`). Its `CType<C>` field maps `C` -> "has a wrapper".
 - **wrapper impl** — an `impl` whose self-type (HIR path-resolved) is a wrapper `T`.
 - **seam method** — fn named `as_ptr`/`as_mut_ptr`/`as_c_ptr`/`as_raw`/`from_ptr`/
-  `from_raw`/`to_ptr`/`to_raw`/`into_raw`/`from_foreign`/`into_foreign` (raw ptrs there are the expected boundary).
+  `from_raw`/`to_ptr`/`to_raw`/`into_raw` (raw ptrs there are the expected boundary).
 - **`mod ffi_export`** — any ancestor module named `ffi_export`.
 - **macro-generated vs hand-written** — `Span::from_expansion()` on the unsafe block.
 

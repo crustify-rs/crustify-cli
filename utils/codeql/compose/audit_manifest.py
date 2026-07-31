@@ -162,7 +162,6 @@ _SKIP_CRATE_SUFFIX = "-sys"
 _SEAM_FN_NAMES = (
     "as_ptr", "as_mut_ptr", "as_c_ptr", "as_raw",
     "from_ptr", "from_raw", "to_ptr", "to_raw", "into_raw",
-    "from_foreign", "into_foreign",
 )
 _RE_SEAM_FN = re.compile(
     r"\bfn\s+(?:" + "|".join(_SEAM_FN_NAMES) + r")\b\s*(?:<[^>]*>)?\s*\([^;{]*\{")
