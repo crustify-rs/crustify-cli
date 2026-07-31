@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "Example `<repo_root>/crustify/cli-config.json` (REPO-ROOT tier,",
+    "user-authored). Tells every crustify agent where its OUT-OF-TREE",
+    "dependencies live. Absolute paths only: an agent runs in a git worktree,",
+    "so nothing relative to its cwd resolves the same way twice.",
+    "Machine-local by construction, hence gitignored - it reaches a worktree",
+    "through `worktree.link_shared`, not through git.",
+    "Distinct from the TARGET-tier `targets/<target>/scope-config.json`, which",
+    "defines what to port; this one defines what the agents can reach."
+  ],
+
+  "_comment_deps": [
+    "Absolute path per dependency, resolved by `CrustifyAgent._dep`:",
+    "  * `crustify`      - the crustify checkout. `docs/AGENTS.md` is read from",
+    "                      it for the `{principles}` prompt slot; falls back to",
+    "                      the installed package's own tree when absent.",
+    "  * `crustify-prim` - the wrap-primitive crate. The port/wrap prompts pass",
+    "                      its `src/lib.rs` to the agent as `{crustify_prim}`."
+  ],
+  "deps": {
+    "crustify": "/absolute/path/to/crustify",
+    "crustify-prim": "/absolute/path/to/crustify-prim"
+  },
+
+  "_comment_bins": [
+    "Absolute path per tool a SKILL.md declares via its `bin:` frontmatter key.",
+    "Advertised to the agent beside the skill so it invokes the tool directly",
+    "instead of relying on PATH - an agent's PATH is whatever the provider CLI",
+    "inherited, which is not something crustify controls."
+  ],
+  "bins": {
+    "crustify-cli": "/absolute/path/to/venv/bin/crustify-cli"
+  },
+
+  "_comment_skills": [
+    "SKILL.md files indexed into the `{skills}` prompt slot as a metadata index",
+    "(name, description, on-disk path); the agent reads a body on demand. Each",
+    "skill's frontmatter `roles:` filters it to the agents that have that role,",
+    "so listing one is not the same as forcing it on everyone - an untagged",
+    "skill is universal. Orchestrator-facing skills (roles: [orchestrator], e.g.",
+    "crustify-pipeline) are deliberately NOT listed: they are loaded by the",
+    "harness driving the pipeline, never injected into a translator's prompt."
+  ],
+  "skills": [
+    "/absolute/path/to/crustify/skills/crustify-oracle/SKILL.md",
+    "/absolute/path/to/crustify-prim/SKILL.md"
+  ]
+}

@@ -7,10 +7,10 @@ walking the filesystem — and its artifacts live at ``repo_root/crustify/``:
 
     <repo_root>/
       crustify/
-        build.json                                # repo-tier, project-wide
+        build.json  cli-config.json               # repo-tier, project-wide
         analysis/    codeql/{t1,t2,db}/
         targets/<repo-relative-target>/           # per-target invocation state
-          config.json   scope.json   logs/
+          scope-config.json   scope.json   logs/
         rust/                                     # the shared Rust crates
       ssl/  crypto/  …                            # vanilla C tree (no artifacts)
 
@@ -135,11 +135,15 @@ class Layout:
 
     @property
     def repo_config(self) -> Path:
-        """Repo-wide crustify config — absolute dep paths (crustify-prim,
-        crustify itself) and the SKILL.md set indexed into prompts.
-        Distinct from the per-target :meth:`config`; lives at the
-        ``crustify/`` root so it is shared across targets."""
-        return self.root / "config.json"
+        """Repo-wide crustify config (``cli-config.json``) — absolute dep paths
+        (crustify-prim, crustify itself), the ``crustify-cli`` binary, and the
+        SKILL.md set indexed into prompts. Lives at the ``crustify/`` root so it
+        is shared across targets.
+
+        Named apart from the per-target :meth:`config` (``scope-config.json``)
+        on purpose: two files both called ``config.json``, one repo-tier and one
+        target-tier, are indistinguishable in a diff, a log line or a prompt."""
+        return self.root / "cli-config.json"
 
     @property
     def port_features(self) -> Path:
@@ -161,7 +165,11 @@ class Layout:
         return self.root / "targets" / self.rel_target(target)
 
     def config(self, target: Path) -> Path:
-        return self.target_dir(target) / "config.json"
+        """The target's authored SCOPE definition (``scope-config.json``):
+        ``target``, ``port_files``, ``out_of_scope``. Input to ``analyze
+        scope``, which compiles it into the sibling ``scope.json`` — kept a
+        separate file so a regen of that computed output can never clobber it."""
+        return self.target_dir(target) / "scope-config.json"
 
     def scope(self, target: Path) -> Path:
         return self.target_dir(target) / "scope.json"

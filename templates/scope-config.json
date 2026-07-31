@@ -3,8 +3,8 @@
     "Example crustify/targets/<target>/config.json (user-authored,",
     "TARGET-tier). One per crustify invocation target. Identifies the",
     "repository root, the subdirectory crustify is scoped to (the 'target'),",
-    "the version anchor used for cache keying, and a target-local refinement",
-    "of what's out of scope. Values below illustrate a crustify run scoped to",
+    "and a target-local refinement of what's out of scope. Values below",
+    "illustrate a crustify run scoped to",
     "ssl/statem inside an openssl checkout; substitute for other projects."
   ],
 
@@ -26,30 +26,22 @@
     "build system runs in and that repo-relative paths everywhere else are",
     "interpreted against. Must exist and be a directory."
   ],
-  "repo_root": "/root/git/openssl-crustify-statem",
+  "repo_root": "/absolute/path/to/openssl-crustify",
 
   "_comment_target": [
     "Repo-root-relative path to the subdirectory crustify is scoped to for",
     "this run. Implicitly defines port scope: every source file under",
     "`<repo_root>/<target>/` (modulo `out_of_scope.paths`) is in port scope.",
-    "Headers referenced by port-scope sources that live outside `target` are",
-    "discovered automatically by the file mapper (Phase 2); you do NOT",
-    "enumerate them here. Use `\".\"` to target the entire repository root.",
+    "Headers outside `target` are NOT discovered automatically: a header",
+    "whose implementors are port-scope must be listed in `port_files`",
+    "below (see orchestrator.md, 'Setting up scope targets'), which then",
+    "REPLACES this implicit scope. Use `\".\"` to target the whole repo.",
     "Must exist as a directory relative to repo_root. When the port scope is a",
     "logical SUBSET of `target` rather than a whole subdirectory, enumerate it",
     "explicitly in `port_files` (below), which then takes precedence over this",
     "implicit target-based scope."
   ],
   "target": "ssl/statem",
-
-  "_comment_version_anchor": [
-    "Repo-root-relative path to a file whose contents identify the project",
-    "version (e.g. opensslv.h's version macro header). Used by the",
-    "library-version cache key (Phase 6 reuse layer) and for human-facing",
-    "'what version was this run against' identification. Must exist relative",
-    "to `repo_root`."
-  ],
-  "version_anchor": "include/openssl/opensslv.h",
 
   "_comment_port_files": [
     "OPTIONAL hand-authored port-scope list (repo-root-relative). When present",
@@ -83,9 +75,11 @@
     "via not being reachable from `target` - list them here only if",
     "reachability would otherwise pull them in. `features` lists macro feature",
     "names (typically `OPENSSL_NO_<FEATURE>` or equivalent) the user wants",
-    "treated as disabled; composer unions this with",
-    "`build.json.features.disabled` when computing the effective",
-    "disabled-feature set."
+    "treated as disabled. NOTE: like `build.json`'s `features` block, this",
+    "list is currently DOCUMENTATION ONLY - no composer reads it. Dead code",
+    "is filtered implicitly instead: scope.json is anchored on the T1",
+    "tables, so a body elided by a disabled feature contributes no",
+    "entities and its file never appears in `files`."
   ],
   "out_of_scope": {
     "paths": [
