@@ -70,7 +70,7 @@ def scaffold(
                 f"(see templates/crates.json for the schema) before scaffolding.")
         entries = _all_entries(doc)
     elif name:
-        misses = [n for n in name if crates.lookup(doc, n) is None]
+        misses = [n for n in name if not crates.lookup_all(doc, n)]
         if misses:
             # Split the miss two ways so the message is actionable: a name that is
             # not in scope at all is a typo / wrong target, while an in-scope name
@@ -215,20 +215,24 @@ def _all_entries(doc: dict) -> list[dict]:
 
 
 def _entries_for_names(doc: dict, names: list[str]) -> tuple[list[dict], list[str]]:
+    """Every home of every name. A name with several homes is a real placement
+    fact (one per ``tu``, see :func:`crates.lookup_all`), so all of them ride —
+    returning only the first silently hides a module the caller has to edit."""
     from crustify import crates
     entries, missing, seen = [], [], set()
     for n in names:
-        hit = crates.lookup(doc, n)
-        if hit is None:
+        hits = crates.lookup_all(doc, n)
+        if not hits:
             missing.append(n)
             continue
-        key = (hit["crate"], hit["rs"])
-        if key in seen:
-            continue
-        seen.add(key)
-        c = doc["crates"][hit["crate"]]
-        rr = c["modules"][hit["module"]]["rs"][hit["rs"]]
-        entries.append(_entry(hit["crate"], c, hit["rs"], rr))
+        for hit in hits:
+            key = (hit["crate"], hit["rs"])
+            if key in seen:
+                continue
+            seen.add(key)
+            c = doc["crates"][hit["crate"]]
+            rr = c["modules"][hit["module"]]["rs"][hit["rs"]]
+            entries.append(_entry(hit["crate"], c, hit["rs"], rr))
     return entries, missing
 
 

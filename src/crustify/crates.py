@@ -59,9 +59,9 @@ def save(layout, doc: dict) -> None:
 
 # ------------------------------------------------------------------- lookup
 
-def lookup(doc: dict, name: str, *, file: str | None = None) -> Optional[dict]:
-    """Resolve an entity to its home, or ``None`` on a miss. Returns
-    ``{crate, module, rs, crate_path}``.
+def lookup_all(doc: dict, name: str, *, file: str | None = None) -> list[dict]:
+    """Every home of an entity, in crates.json order. Each is
+    ``{crate, module, rs, crate_path, tu}``.
 
     Matches a member ``name`` in some ``.rs``; ``file`` narrows by provenance,
     matching EITHER the ``tu`` or any of the ``headers``. One qualifier rather
@@ -69,8 +69,14 @@ def lookup(doc: dict, name: str, *, file: str | None = None) -> Optional[dict]:
     to hold — a header-defined struct is looked up by its header, a TU function
     by its ``.c``, and both may name the same ``.rs``.
 
-    With no qualifier the first ``.rs`` containing ``name`` wins — pass ``file``
-    to disambiguate a name collision (file-local statics in different TUs)."""
+    More than one home is legitimate, not a corruption: crates.json's key is
+    ``(kind, name, tu)``, so a tag defined once per TU homes once per TU —
+    ``struct ossl_record_layer_st`` is defined for TLS in
+    ``ssl/record/methods/recmethod_local.h`` and again, privately, in
+    ``ssl/quic/quic_tls.c``. File-local statics collide the same way. Callers
+    that need exactly one (the wrap/port schedulers) pass ``file`` and take
+    :func:`lookup`; callers reporting to a human show them all."""
+    out: list[dict] = []
     for crate, c in (doc.get("crates") or {}).items():
         for mod, m in (c.get("modules") or {}).items():
             for rs, r in (m.get("rs") or {}).items():
@@ -80,9 +86,17 @@ def lookup(doc: dict, name: str, *, file: str | None = None) -> Optional[dict]:
                 if file is not None and file != r.get("tu") and file not in (
                         r.get("headers") or []):
                     continue
-                return {"crate": crate, "module": mod, "rs": rs,
-                        "crate_path": c.get("crate_path")}
-    return None
+                out.append({"crate": crate, "module": mod, "rs": rs,
+                            "crate_path": c.get("crate_path"),
+                            "tu": r.get("tu")})
+    return out
+
+
+def lookup(doc: dict, name: str, *, file: str | None = None) -> Optional[dict]:
+    """First home of an entity, or ``None`` on a miss — :func:`lookup_all` for
+    all of them. Ambiguity is resolved by ``file``, not by this function."""
+    hits = lookup_all(doc, name, file=file)
+    return hits[0] if hits else None
 
 
 # ----------------------------------------------------------------- validate
