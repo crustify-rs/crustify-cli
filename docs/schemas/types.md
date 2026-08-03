@@ -114,16 +114,16 @@ so there is nothing to patch into a skeleton. Once filled:
   value -- the ordinary `T*`) | `{by_ref: {owned, borrowed}}` (points at one
   POINTER -- a `T**`). Under `by_ref`, `owned`/`borrowed` is the INNER pointee's
   ownership (the top-level `owned`/`borrowed` then describes the OUTER slot);
-  each is the same block as the top-level below. May co-exist with `array`;
-  mutually exclusive with `string`.
+  each is the same block as the top-level below. May co-exist with `array`; may
+  co-exist with `string` when type is `void`.
 - **`array`** -- Is there any execution path where this pointer references an array
   of elements? If not, `null`; otherwise `{by_val: true}` (buffer of inline
   values) | `{by_ref: {owned, borrowed}}` (buffer of element pointers -- a
   container). Under `by_ref`, `owned`/`borrowed` is the ELEMENT ownership, and
   EACH is the same block as the top-level `owned`/`borrowed` below -- so a
   container of owned elements carries the element's release/clone bindings.
-  May co-exist with `scalar`; mutually exclusive with `string`. `scalar.by_ref`
-  vs `array.by_ref` differ only in cardinality (one pointer vs a buffer of them).
+  May co-exist with `scalar`; may co-exist with `string` when subject is `void`. 
+  `scalar.by_ref` vs `array.by_ref` differ only in cardinality (one pointer vs a buffer of them).
 - **`string`** -- Is there any execution path where this pointer is a NUL-terminated string?
   If yes, `true`; otherwise `false`.
 - **`owned`** -- `true` if the field is owned by the type, `false` otherwise.
@@ -144,7 +144,8 @@ ownership (owned on one path, borrowed on another); likewise
 `array.by_ref.owned`+`.borrowed`.
 
 **Invariants** (enforced on `--update`): `scalar` and `array` are each null |
-exactly one of `{by_val, by_ref}`; `string` XOR (`array` | `scalar`); a pointer
+exactly one of `{by_val, by_ref}`; `string` XOR (`array` | `scalar`) unless the pointee
+type is `void`; a pointer
 sets at least one of `{scalar, array, string}` (the floor); `string` and `owned`
 are explicit booleans (never null -- a fact left `null` where `false` was meant
 is rejected);

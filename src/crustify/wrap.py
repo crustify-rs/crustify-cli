@@ -21,6 +21,7 @@ for the agent to fill, but per-item idempotency is the agent's concern.
 from __future__ import annotations
 
 import json
+import re as _re
 import sys
 from pathlib import Path
 
@@ -109,6 +110,73 @@ def _preflight(target: Path, layout: "Layout") -> Path:
     from crustify.scaffold import scaffold
     scaffold(target, all=True, create=True)
     return scope_json
+
+
+def _lifetime_by_sym(analysis: Path) -> dict:
+    """``(name, defined_in) -> lifetime block`` for every symbol that HAS one.
+
+    One pass over the analysis tree; the per-symbol loader in :mod:`query`
+    rglobs afresh for each lookup, which is O(files) per name."""
+    import json as _json
+    from crustify.layout import manifest_name
+    out: dict = {}
+    for f in analysis.rglob(manifest_name("symbols")):
+        try:
+            doc = _json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        for e in doc.get("symbols", []):
+            if e.get("lifetime"):
+                out[(e.get("name"), e.get("defined_in"))] = e["lifetime"]
+    return out
+
+
+def _reject_lifetime_primitives(layout: "Layout", target: Path, sel_nodes) -> None:
+    """Refuse a SYMBOL selection that names a lifecycle primitive.
+
+    A symbol carrying a `lifetime` block in syms.json drops, disposes or clones
+    some subject, and its Rust form is a STRATEGY (the ZST a `CBox` / `CVec` /
+    `CrustifyStr` selects its `CDropped` / `CCloned` on) — not the free-standing
+    safe `fn` the symbol wrapper emits. Wrapping it here would produce a second,
+    unrelated surface for one C routine, with nothing downstream to notice: the
+    anchors differ, the files may differ, and `audit` does not look for it.
+
+    The two legitimate routes both exist already, and this points at them.
+    `--lifetime-for void|string` owns the untyped tiers; a typed cluster's
+    droppers/cloners are bound by its TYPE wrapper, from the type's own record.
+    Types are unaffected — the gate is symbol-only.
+    """
+    lf = _lifetime_by_sym(layout.analysis)
+    if not lf:
+        return
+    hits = []
+    for n in sel_nodes:
+        if n.node_kind != "symbol":
+            continue
+        blk = lf.get((n.id, n.defined_in))
+        if blk is None:                      # same name, another TU
+            blk = next((v for (nm, _f), v in lf.items() if nm == n.id), None)
+        if blk:
+            hits.append((n.id, blk))
+    if not hits:
+        return
+    def _role(b: dict) -> str:
+        r = [k[3:] for k in ("is_dropper", "is_disposer") if b.get(k)]
+        if b.get("is_cloner"):
+            r.append("cloner")
+        return "/".join(r) or "lifecycle"
+    listing = "\n".join(
+        f"  - {i} ({_role(b)} on `{b.get('for')}`)" for i, b in sorted(hits))
+    raise SystemExit(
+        f"wrap: {len(hits)} selected symbol"
+        f"{'' if len(hits) == 1 else 's'} carr"
+        f"{'ies' if len(hits) == 1 else 'y'} a `lifetime` block — "
+        f"{'it is a' if len(hits) == 1 else 'these are'} lifecycle "
+        f"primitive{'' if len(hits) == 1 else 's'}, wrapped as a STRATEGY, not "
+        f"as a free function:\n{listing}\n"
+        f"  Untyped tiers: `crustify-cli {target} wrap --lifetime-for void|string`.\n"
+        f"  A typed cluster's droppers/cloners are bound by its type wrapper: "
+        f"`crustify-cli {target} wrap --name <tag>`.")
 
 
 def _check_bindgen(layout: "Layout", target: Path, linked: set[str]) -> None:
@@ -254,10 +322,16 @@ def _wrap_emit(
 # Public entry point
 # ---------------------------------------------------------------------------
 
+#: The untyped tiers this mode covers — mirrors ``cli.LIFETIME_TIERS``. A struct
+#: tag is not one of them: the TYPE wrapper finds a type's own lifecycle ops from
+#: its record while wrapping it.
+LIFETIME_TIERS = ("void", "string")
+
+
 def wrap_lifetime_for(
     target: Path, spec: str, *, dry_run: bool = False,
 ) -> None:
-    """Lifetime-discovery mode: hand ONE wrap agent the job of wrapping
+    """Untyped-tier mode: hand ONE **symbol** wrapper the job of wrapping
     ``spec``'s lifecycle primitives.
 
     Discovery AND emission, in one agent. It reads back whatever `lifetime`
@@ -273,14 +347,26 @@ def wrap_lifetime_for(
     worktree and lands on the session branch like every other wrap agent,
     because it emits code.
 
-    ``spec`` is a struct tag / typedef, or the ``void`` (raw byte-level,
-    untyped) / ``string`` (NUL-terminated) keyword. Run the tiers in order —
-    ``void`` -> ``string`` -> each ``<tag>`` — since a typed cluster's Drop
-    often delegates to the untyped one's. The ordinary scope-only analysis tree
-    is the right input: the agent's candidate set is wrap-scope by instruction
+    ``spec`` is ``void`` (raw byte-level) or ``string`` (NUL-terminated) —
+    :data:`LIFETIME_TIERS`, and nothing else. Run them in that order, since a
+    typed cluster's Drop often delegates to the untyped one's. A struct tag is
+    rejected rather than accepted-and-routed: those two tiers exist because
+    there is no ``types.json`` record to discover them from, whereas a type HAS
+    one, and its droppers / disposers / cloners are found by the TYPE wrapper
+    while it wraps the type. Routing a tag here would run a symbol wrapper over
+    a job the type wrapper owns, and land it in the wrong module.
+
+    The ordinary scope-only analysis tree is the right input: the agent's
+    candidate set is wrap-scope by instruction
     (`prompts/wrapper/symbol_wrapper.md`), so a primitive the target never
     reaches is not a gap.
     """
+    if spec not in LIFETIME_TIERS:
+        raise SystemExit(
+            f"wrap --lifetime-for: expected {' or '.join(LIFETIME_TIERS)}, "
+            f"got {spec!r}; a type's lifecycle ops are the type wrapper's job "
+            f"(wrap --name {spec})."
+        )
     import crustify._schedule as S
     from crustify.agents.wrap import CrustifyWrap
     from crustify.layout import Layout
@@ -311,6 +397,114 @@ def wrap_lifetime_for(
     print("[crustify-cli wrap] done.")
 
 
+#: `// Wraps: <name>` / `// Replaces: <name>`, at any comment depth and with an
+#: optional trailing gloss the wrapper may have added.
+_ANCHOR_RE = _re.compile(r"^\s*//+\s*(?:Wraps|Replaces):\s*([A-Za-z_]\w*)")
+#: `// Field: <name>` — the per-accessor placeholder under a type's anchor.
+_FIELD_RE = _re.compile(r"^\s*//+\s*Field:\s*(\S+)")
+
+
+def _port_fields(layout, target: Path, tag: str, tu: str | None) -> set[str]:
+    """Field names of `tag` that PORT-scope code touches — the accessors a type
+    wrapper actually owes. Empty for an opaque handle, and empty (harmlessly)
+    for a symbol, which has no fields."""
+    try:
+        from crustify.query import _scope_touched_fields
+        return set(_scope_touched_fields(layout, target, tag, tu, "port") or ())
+    except Exception:                    # noqa: BLE001 - never block selection
+        return set()
+
+
+def _closure_names(seeds: list[str], by_key, by_name, keep) -> list[str]:
+    """``--transitive``: every dep of every seed, transitively, that wrap can take.
+
+    BFS over ``dep_types`` + ``dep_syms``, the same forward edges `query dag
+    --name` walks. Expansion goes through EVERY node so a type reachable only
+    via a symbol is still collected (nothing in `ssl/` names `evp_rand_ctx_st`,
+    but `RAND_bytes_ex` traffics in it) -- a types-only walk misses those, which
+    is the whole reason a hand-written name list keeps coming up short. What is
+    KEPT is narrowed by `keep`, so a port-scope dep is traversed but never
+    scheduled: wrap must not take one (the scope gate below would refuse it)."""
+    out, seen = [], set()
+    stack = list(seeds)
+    while stack:
+        nm = stack.pop()
+        if nm in seen:
+            continue
+        seen.add(nm)
+        for k in (by_name.get(nm) or []):
+            n = by_key[k]
+            if keep(n):
+                out.append(nm)
+            stack.extend(n.dep_types)
+            stack.extend(s[0] for s in n.dep_syms)
+    return sorted(set(out))
+
+
+def _pending_names(names: list[str], layout, target: Path) -> tuple[list[str], list[str]]:
+    """Split into (pending, already-wrapped) on the per-item `crustify:todo`.
+
+    `scaffold` lays every item as ``// Wraps: <name>`` followed by a
+    ``// crustify:todo`` placeholder; the wrapper deletes the placeholder when
+    it fills the item, so a SURVIVING one is the on-disk record that the item
+    is still open. Cheaper and more honest than tracking state elsewhere: it
+    lives next to the code it describes and cannot drift from it."""
+    from crustify import crates as _crates
+    from crustify.scaffold import _TODO, _entries_for_names
+    doc = _crates.load(layout)
+    pending, done = [], []
+    for nm in names:
+        entries, missing = _entries_for_names(doc, [nm])
+        if missing:                      # never scaffolded -> nothing filled
+            pending.append(nm)
+            continue
+        open_ = False
+        for e in entries:
+            # `crate_path` is repo-root-relative (`crustify/rust/<crate>`), not
+            # relative to `layout.rust` — joining it there double-prefixes.
+            cp = Path(e["crate_path"] or "")
+            p = (cp if cp.is_absolute() else layout.repo_root / cp) / e["rs"]
+            try:
+                lines = p.read_text().splitlines()
+            except OSError:
+                open_ = True             # home not on disk yet
+                break
+            # The anchor is matched loosely on purpose. `scaffold` lays it as
+            # `// Wraps: <name>`, but a wrapper routinely promotes it to a doc
+            # comment with a trailing gloss — `/// Wraps: stack_st
+            # (crypto/stack/stack.c) — the element-ownership-agnostic surface`
+            # — so an exact-line test reports every filled item as pending.
+            # What is load-bearing is the placeholder BELOW the anchor, not the
+            # anchor's own spelling.
+            hit = False
+            for i, ln in enumerate(lines):
+                m = _ANCHOR_RE.match(ln)
+                if m and m.group(1) == nm:
+                    hit = True
+                    if any(_TODO in l for l in lines[i + 1:i + 3]):
+                        open_ = True
+                    break
+            if not hit:
+                open_ = True             # no anchor here -> nothing emitted yet
+            # A type is not done when its DEFINITION anchor is filled but an
+            # accessor it owes is not. The scaffolder lays a `// Field:` anchor
+            # per DECLARED field, while the wrapper only owes the port-touched
+            # ones (`evp_pkey_st`: 21 anchors, 0 port-scope), so an unfiltered
+            # scan would hold every opaque type open forever on placeholders
+            # nobody will ever fill. Only a port-scope field's todo counts.
+            if not open_:
+                want = _port_fields(layout, target, nm, e.get("tu"))
+                if want:
+                    for i, ln in enumerate(lines):
+                        f = _FIELD_RE.match(ln)
+                        if (f and f.group(1) in want
+                                and any(_TODO in l for l in lines[i + 1:i + 3])):
+                            open_ = True
+                            break
+        (pending if open_ else done).append(nm)
+    return pending, done
+
+
 def wrap_types(
     target: Path,
     *,
@@ -320,6 +514,8 @@ def wrap_types(
     port_only: bool = False,
     dag_layer: int | None = None,
     skip: list[str] | None = None,
+    transitive: bool = False,
+    review: bool = False,
     parallel: bool = False,
     parallel_max: int = 8,
     max_fields: int | None = None,
@@ -363,28 +559,58 @@ def wrap_types(
     sel_names = list(names or [])
     if dag_layer is not None:
         # e2e driver mode: EVERY in-scope unit at dag layer N — types (any
-        # in-scope) and wrap-scope free syms, EXCLUDING lifecycle ops that fold
-        # into a type (they ride with `wrap types` at the type's lower layer)
-        # and macros. So `wrap syms` never re-wraps an already-folded op.
+        # in-scope) and wrap-scope free syms, minus macros and lifecycle
+        # primitives.
+        #
+        # The primitive filter reads the `lifetime` blocks directly rather than
+        # the composer's folded-op set. The fold is derived from those same
+        # blocks, but the WRAP AGENT is what submits them: before a type is
+        # wrapped its ops carry no role, so the fold is empty exactly when the
+        # scheduler needs it and complete only afterwards. Reading the blocks at
+        # selection time has no such ordering problem, and catches the untyped
+        # tiers too (`CRYPTO_free` acts on `void`, so it belongs to no type's
+        # method surface and the fold never held it).
+        #
+        # Skipped rather than refused: `--name`ing a primitive is a mistake and
+        # `_reject_lifetime_primitives` says so, but a layer slice is a bulk
+        # selector — one primitive in the layer must not sink the whole wave.
         _elig = _wrap_eligible_pred(scope_json)
-        _folded = scope.type_method_fns(layout.analysis)
+        _prim = {nm for (nm, _f) in _lifetime_by_sym(layout.analysis)}
         sel_names += sorted({
             n.id for n in by_key.values()
             if n.layer == dag_layer and _elig(n)
             and not (n.node_kind == "symbol"
-                     and ((n.subkind or "").startswith("macro") or n.id in _folded))})
+                     and ((n.subkind or "").startswith("macro") or n.id in _prim))})
+    if transitive:
+        _before = len(sel_names)
+        sel_names = _closure_names(sel_names, by_key, by_name, base_in_scope)
+        print(f"[crustify-cli wrap] --transitive: {_before} seed(s) → "
+              f"{len(sel_names)} unit(s) in the closure.")
     if skip:
         _sk = set(skip)
         sel_names = [s for s in sel_names if s not in _sk]
+    # Already-wrapped items are dropped unless --review asks for them. The
+    # wrapper prompts define what a second visit IS: with agent-owned state on
+    # disk the agent "acts as a reviewer assessing its quality and accuracy",
+    # correcting through the oracle rather than re-emitting. So --review is the
+    # mode, not a force: it schedules filled items precisely to have them
+    # re-examined. Without it a closure selection would re-run everything
+    # already done, which is what makes --transitive usable at all.
+    if not review:
+        sel_names, _done = _pending_names(sel_names, layout, target)
+        if _done:
+            print(f"[crustify-cli wrap] skipping {len(_done)} already-wrapped "
+                  f"item(s); --review to re-examine them: "
+                  f"{', '.join(sorted(_done)[:8])}"
+                  + (" …" if len(_done) > 8 else ""))
     if not sel_names:
         raise SystemExit(
             "wrap: nothing selected — pass --name / --dag-layer N "
-            "(a --skip blocklist may have emptied the selection).")
+            "(a --skip blocklist, or every item being wrapped already, may "
+            "have emptied the selection; --review re-examines filled items).")
 
-    # Macros are header-defined: bindgen owns their <lib>-sys shims, so the wrap
-    # stage never facades them. (The PORT stage still translates port-scope TU
-    # macros — this skip is wrap-only, hence here and not in the shared
-    # scheduler.) Exclude macro_* symbols from selection, and drop any --name
+    # Macros are header-defined: bindgen owns their <lib>-sys shims, so no stage
+    # facades them. Exclude macro_* symbols from selection, and drop any --name
     # that resolves ONLY to macros so it neither schedules a wrap job nor
     # reports as "unknown".
     def _is_macro(n) -> bool:
@@ -436,6 +662,7 @@ def wrap_types(
     # owning library is its crate in crates.json (crate name == link unit);
     # a unit not placed there contributes nothing (skipped).
     sel_nodes, _ = S.resolve_names(sel_names, by_key, by_name, in_scope)
+    _reject_lifetime_primitives(layout, target, sel_nodes)
     from crustify import crates as _crates
     _doc = _crates.load(layout)
 

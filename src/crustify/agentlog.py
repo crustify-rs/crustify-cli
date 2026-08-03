@@ -58,6 +58,21 @@ class AgentLog:
         self._fh: IO[str] | None = None
 
         if log_dir is not None:
+            # RESOLVED, and that is load-bearing. An isolated agent's log dir is
+            # `Layout(<worktree>).logs(target)`, which only reaches the real
+            # directory through the `crustify/targets` symlink `link_shared`
+            # plants in the worktree. The agent PURGES its worktree as the last
+            # step of landing, taking that symlink with it — and `usage()`
+            # writes by PATH, after the agent returns. Unresolved, that write
+            # raised ENOENT on a run that had just succeeded: the exception
+            # surfaced as `agent failed`, the wave recorded a failure, and the
+            # verb exited non-zero with the work correctly landed. Resolving
+            # once here pins both files to the shared tree, which outlives the
+            # worktree. (`.log` survived the purge either way — its handle is
+            # opened below and an open fd keeps its inode after the directory
+            # entry goes. That asymmetry is why a failed run still had a log but
+            # never a usage record.)
+            log_dir = log_dir.resolve()
             log_dir.mkdir(parents=True, exist_ok=True)
             self.path = log_dir / f"{stem}.log"
             self.usage_path = log_dir / f"{stem}.usage.json"

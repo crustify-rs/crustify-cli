@@ -123,15 +123,16 @@ filled block:
   POINTER -- a `T**`, e.g. an out-param). Under `by_ref`, `owned`/`borrowed` is
   the INNER pointee's ownership (the top-level `owned`/`borrowed` then describes
   the OUTER slot -- for an out-param, borrowed); each is the same block as the
-  top-level below. May co-exist with `array`; mutually exclusive with `string`.
+  top-level below. May co-exist with `array`; may co-exist with `string` when subject
+  is `void`.
 - **`array`** -- Is there any execution path where this pointer references an array
   of elements? If not, `null`; otherwise `{by_val: true}` (buffer of inline
   values) | `{by_ref: {owned, borrowed}}` (buffer of element pointers -- a
   container). Under `by_ref`, `owned`/`borrowed` is the ELEMENT ownership, and
   EACH is the same block as the top-level `owned`/`borrowed` below -- so a
   container of owned elements carries the element's release/clone bindings.
-  May co-exist with `scalar`; mutually exclusive with `string`. `scalar.by_ref`
-  vs `array.by_ref` differ only in cardinality (one pointer vs a buffer of them).
+  May co-exist with `scalar`; may co-exist with `string` when subject is `void`. 
+  `scalar.by_ref` vs `array.by_ref` differ only in cardinality (one pointer vs a buffer of them).
 - **`string`** -- Is there any execution path where this pointer is a NUL-terminated string?
   If yes, `true`; otherwise `false`.
 - **`owned`** -- `true` if ownership TRANSFERRED across the call, `false`
@@ -155,8 +156,9 @@ filled block:
 
 **Invariants** (enforced on `--update`): a `ptr` block replaces the record's
 prior block wholesale, so it must be complete -- `scalar` and `array` are each
-null | exactly one of `{by_val, by_ref}`; `string` XOR (`array` | `scalar`);
-`string` and `owned` are explicit booleans (never null); a pointer sets at least
+null | exactly one of `{by_val, by_ref}`;
+`string` and `owned` are explicit booleans (never null); `string` XOR (`array` | `scalar`) unless the pointee
+type is `void`; a pointer sets at least
 one of `{scalar, array, string}` (the floor); a pointer is either owned, or
 borrowed, or both (never none) -- as is each `by_ref` element; a borrowed pointer
 needs a lifetime, and an `arg:<name>` lifetime names a real arg BY NAME;
@@ -236,7 +238,8 @@ If your target type is:
   `u8 *`/`uint8_t *`/ etc. as an argument AND filtering for those calling one of
   the raw/void lifetime primitives identified by a previous run. Continue
   looking up a few more hops up the callgraph to identify more specialized
-  primitives. 
+  primitives. Note that some of the void-tier primitives may also release 
+  / clone NUL-terminated strings, so they ought to be submitted too.
   
   - A `<type-tag>`, then look for lifetime primitives that for the given type
   tag.  You can fetch the list of lifetime candidates by querying

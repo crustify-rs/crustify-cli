@@ -21,6 +21,28 @@ def _parallel_max_type(s: str) -> int:
     return n
 
 
+#: The untyped lifetime tiers `wrap --lifetime-for` accepts, in the order they
+#: must be run — a typed cluster's Drop usually delegates to the untyped one's.
+#: A struct tag is deliberately NOT accepted: a type's own droppers / disposers
+#: / cloners are the TYPE wrapper's job, found from its record while it wraps
+#: the type, not a separate tier run. These two have no record to find them
+#: from — there is no `types.json` entry for "raw bytes" or "NUL-terminated" —
+#: which is the whole reason they need a mode of their own.
+LIFETIME_TIERS = ("void", "string")
+
+
+def _lifetime_tier(s: str) -> str:
+    """argparse type for `wrap --lifetime-for`: one of :data:`LIFETIME_TIERS`."""
+    if s not in LIFETIME_TIERS:
+        raise argparse.ArgumentTypeError(
+            f"--lifetime-for: expected {' or '.join(LIFETIME_TIERS)}, got {s!r}. "
+            f"Only the untyped tiers are wrapped this way; a type's lifecycle "
+            f"ops are discovered by the type wrapper from the type's own record "
+            f"(wrap --name {s})."
+        )
+    return s
+
+
 def _add_analyze_filter_flags(p: argparse.ArgumentParser) -> None:
     """Narrowing flags for `analyze {{symbols,types}}` subjects.
 
@@ -346,6 +368,26 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
         "--skip", nargs="+", action="extend", default=None, metavar="NAME",
         help="Blocklist: drop these names from the selection (manual "
              "already-done list; the driver seeds it, crustify just honours it).",
+    )
+    p.add_argument(
+        "--transitive", action="store_true", dest="transitive",
+        help="Expand each --name through its TRANSITIVE dependency closure "
+             "(the same forward edges `query dag --name` walks), keeping the "
+             "units wrap can take. Expansion crosses symbols, so a type "
+             "reachable only through a function comes along -- which a "
+             "hand-written name list reliably misses. Combines with --skip "
+             "(policy blocklist) and --review; already-wrapped items drop out "
+             "unless --review is set. Check the plan with --dry-run first: a "
+             "high-layer seed can pull in a large closure.",
+    )
+    p.add_argument(
+        "--review", action="store_true", dest="review",
+        help="Also schedule items that are ALREADY wrapped (default: only "
+             "those whose `// crustify:todo` placeholder survives). The "
+             "wrapper prompts make a second visit a REVIEW: with agent-owned "
+             "state on disk the agent assesses its quality and accuracy and "
+             "corrects it through the oracle. Use to re-examine a subtree, "
+             "typically with --transitive.",
     )
     p.add_argument(
         "--out-suffix", dest="out_suffix", default=None, metavar="SUFFIX",
@@ -712,10 +754,6 @@ def main() -> None:
              "deps, …; default: full transitive closure).",
     )
     dag_q.add_argument(
-        "--with-details", action="store_true", dest="with_details",
-        help="Emit full records (kind, layer, depth) instead of bare names.",
-    )
-    dag_q.add_argument(
         "--loc", action="store_true", dest="loc",
         help="LoC view (with --name or --layer): a type seed → its struct "
              "field count + op count; a function seed → its body LoC; "
@@ -749,19 +787,22 @@ def main() -> None:
     )
     _add_wrap_filter_flags(wrap_p)
     wrap_p.add_argument(
-        "--lifetime-for", default=None, metavar="SPEC", dest="lifetime_for",
-        help="LIFETIME-DISCOVERY mode: hand one agent the job of wrapping "
-             "SPEC's lifecycle primitives into a Rust lifetime contract (the "
+        "--lifetime-for", default=None, metavar="TIER", dest="lifetime_for",
+        type=_lifetime_tier,
+        help="UNTYPED-TIER mode: hand one SYMBOL wrapper the job of turning a "
+             "tier's lifecycle primitives into a Rust lifetime contract (the "
              "strategy ZST + the smart-pointer Drop/Clone impls a reference to "
-             "SPEC needs to be owned in Rust). One agent does both halves: it "
+             "it needs to be owned in Rust). One agent does both halves: it "
              "reads back the `lifetime` blocks that exist (`query symbols "
-             "--lifetime-for SPEC`) and, when none do, discovers the routines "
-             "that drop/dispose/clone SPEC and submits their blocks first, "
-             "over a wrap-scope candidate set. SPEC is a struct tag / typedef, or "
-             "the keyword `void` (raw byte-level, untyped) / `string` "
-             "(NUL-terminated). Run the tiers in order: void -> string -> <tag>, "
+             "--lifetime-for TIER`) and, when none do, discovers the routines "
+             "that drop/dispose/clone the tier and submits their blocks first, "
+             "over a wrap-scope candidate set. TIER is `void` (raw byte-level) "
+             "or `string` (NUL-terminated) -- ONLY those two, and in that order, "
              "since a typed cluster's Drop usually delegates to the untyped "
-             "one's. IS its own selector -- no --name.")
+             "one's. A struct tag is NOT accepted: a type's own droppers / "
+             "disposers / cloners are found by the TYPE wrapper from the type's "
+             "record, as part of wrapping it (`wrap --name <tag>`). IS its own "
+             "selector -- no --name.")
 
     # -- port ------------------------------------------------------------
     port_p = sub.add_parser(
@@ -1008,11 +1049,6 @@ def _validate_narrowing(args: argparse.Namespace) -> None:
     --port-only / --wrap-only may combine with either --all or seed
     selectors — they're orthogonal post-emission filters.
     """
-    # `symbols --lifetime-for SPEC` IS its own selector: the SPEC names the
-    # discovery target and the agent finds the worklist itself, so the seed
-    # flags don't apply.
-    if getattr(args, "lifetime_for", None):
-        return
     want_all = bool(getattr(args, "all", False))
     seed = (
         bool(getattr(args, "dir", None))
@@ -1220,7 +1256,6 @@ def _handle_query(args: argparse.Namespace, target: Path) -> None:
             depth=getattr(args, "depth", None),
             scc=getattr(args, "scc", None),
             layer=getattr(args, "layer", None),
-            as_json=bool(getattr(args, "with_details", False)),
             loc=bool(getattr(args, "loc", False)),
             wrap_only=bool(getattr(args, "wrap_only", False)),
             port_only=bool(getattr(args, "port_only", False)),
@@ -1280,6 +1315,8 @@ def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
         port_only=bool(getattr(args, "port_only", False)),
         dag_layer=getattr(args, "dag_layer", None),
         skip=getattr(args, "skip", None),
+        transitive=bool(getattr(args, "transitive", False)),
+        review=bool(getattr(args, "review", False)),
         parallel=bool(getattr(args, "parallel", False)),
         parallel_max=int(getattr(args, "parallel_max", 8)),
         max_fields=getattr(args, "max_fields", None),

@@ -15,9 +15,9 @@ description: >-
 
 `query` owns the manifest schema and the file layout: you read your worklist AND
 submit your findings *through it* -- never write a `syms.json` /
-`types.json` directly. Everything is read-only except the two submit verbs
-(`--update`, `--create`), which validate the findings, map them onto the schema,
-and merge them under a lock (untouched slots left as-is; re-submitting is
+`types.json` directly. Everything is read-only except the submit verb
+`--update`, which validates the findings, maps them onto the schema,
+and merges them under a lock (untouched slots left as-is; re-submitting is
 idempotent). For **exact flags run the command's `--help`** (or `--update-help`
 for the findings shape) -- argparse is the source of truth and never drifts.
 This skill is the *router*: which command for which intent, grouped by command,
@@ -58,9 +58,16 @@ for a repo-wide, scope-blind pass.
 
 | you need | invocation |
 |----------|------------|
-| a symbol/type's transitive **deps** (already emitted; call its safe API, never raw `ffi::`) | `query dag --name <X> [--depth 1] [--with-details]` |
+| a symbol/type's transitive **deps** (already emitted; call its safe API, never raw `ffi::`) | `query dag --name <X> [--depth 1]|
 | flattened-cycle twins you may reference **naked** (higher-layer; target not wrapped yet) | `query dag --name <X> --scc hi-deps` |
 | already-wrapped twins that referenced **you** naked - switch them to your wrapper | `query dag --name <X> --scc lo-deps` |
+
+Output is JSON grouped by kind: `types` / `callbacks` / `functions` / `globals`
+/ `macros`, each entry `{id, layer, defined_in}` plus `depth` in closure mode;
+empty groups are omitted. The groups ARE the routing -- `types` are the type
+wrapper's, `callbacks` and `functions` the symbol wrapper's, `macros` nobody's
+(bindgen owns their `-sys` shims). `layer` and `depth` exist only here;
+everything else about an id is in `query types|symbols`.
 
 ## `query files` -- scope sets
 
@@ -84,10 +91,13 @@ for a repo-wide, scope-blind pass.
 
 - **`query` is enumerate-or-introspect**: no `--name` -> list (filtered) entries;
   `--name X` -> introspect one; several names -> several records.
-- **Submit through the oracle, never the file.** `--update` / `--create`
-  validate (rejecting malformed findings), map onto the schema, and merge under
+- **Submit through the oracle, never the file.** `--update` validates
+  (rejecting malformed findings), maps onto the schema, and merges under
   a lock -- so re-submitting is idempotent and other entries/slots are left
   untouched. Run `--update-help` for the findings shape before your first write.
+  Findings attach to an entry the manifest already holds; a name it does not
+  carry is outside this target's scope. Record what you can on the entries you
+  have and note the gap in your summary.
 - **Never strip `CRUSTIFY_OUT_SUFFIX` from the environment.** It is set by the
   orchestrator when your run is one arm of a parallel matrix, and it redirects
   your writes to `syms/types_<SUFFIX>.json` so concurrent arms do not clobber each

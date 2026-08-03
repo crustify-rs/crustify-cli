@@ -70,19 +70,19 @@ if that's the case, rebuild / reconfigure the target in your worktree to obtain 
 ### Emit safe wrappers
 
 **Functions.** Under each functions's anchor, write a `pub fn` (or `pub unsafe
-  fn` only when the contract genuinely cannot be made safe) that takes/returns typed
-  wrappers and smart-pointers at every boundary respecting the safety
-  discipline, and calls the C symbol through `ffi::<name>` (functions) inside an
-  `unsafe` block carrying a specific, falsifiable `// SAFETY:` note.
+  fn` only when the contract genuinely cannot be made safe) for every wrapper /
+  strategy you emit. The new methods take/return typed wrappers and smart pointers at
+  every boundary respecting our safety established discipline, and call their C
+  symbols through `ffi::<name>` (functions) inside an `unsafe` block carrying a
+  specific, falsifiable `// SAFETY:` note.
 
 **Lifetime primitives.** If your workset contains the special markers `lifetime-for : <spec>`
   with `<spec>` either `void` or
   `string` then for every candidate identified in the discovery step: define a ZST newtype
-  that implements the exclusive-freed lifetime contract/strategy from the
-  `crustify-prim` skill. Home it in the same `<stem>.rs` as the lifetime primitive's.
-  The routines themselves do not get a safe function wrapper, as each call goes through
-  the strategy. If the `<spec>` is a user-defined type name then you don't emit any wrapper
-  or strategy for it -- this is the job of the type wrapper.
+  that implements the suitable release contract/strategy for them from the
+  `crustify-prim` skill. Home it in the same `<stem>.rs` TU as the lifetime primitive's.
+  The routines themselves do not get a safe function wrapper -- each Rust consumer will
+  reach them throgh the strategy.
 
 **Pointer args and returns.** For each method taking or returning a
   reference, fetch the per-field ownership analysis via `crustify-oracle`, pick
@@ -100,7 +100,7 @@ if that's the case, rebuild / reconfigure the target in your worktree to obtain 
   consumers to express both at compile time.
 
 **Type-erased pointers.** If any of your pointers is type-erased then try
-to emit parametric generators via the generic traits or owned smart pointers from
+to emit parametric generators via the generic traits and owned smart pointers from
 `crustify-prim`, allowing them to be monomorphized at compile-time in Rust. Consider
 forking the wrapper if it would allow monomorphization in a subset of cases.
 

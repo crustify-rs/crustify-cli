@@ -38,6 +38,7 @@ import json
 import re
 import secrets
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -602,7 +603,7 @@ def _isolated_wave(
     by_file: dict[str | None, list[Batch]], stage: Stage,
     parallelize: bool, parallel_max: int,
 ) -> list[tuple[Batch, BaseException]]:
-    """Give every chain its own worktree off the session base, run its agent,
+    """Give every BATCH its own worktree off the session base, run its agent,
     and stop there.
 
     The scheduler's whole involvement in worktree management is in this function:
@@ -614,10 +615,31 @@ def _isolated_wave(
     one atomic ref update; see :mod:`crustify.worktree` for why the branch has no
     checkout and what fails if it does.
 
-    Worktrees survive the wave by design. A child's branch is the record of what
-    that agent produced, and a partial or failed wave must stay inspectable
-    (finding F12); tearing them down here would discard a successful agent's work
-    on a sibling's failure.
+    One worktree per batch, created LAZILY — immediately before that batch's
+    agent, not upfront for the whole wave. Two reasons, both learned the hard
+    way (finding F15):
+
+    * A chain's batches used to SHARE one worktree, which made the scheduler
+      depend on the agent leaving it intact. The wrapper prompts tell an agent
+      to purge its worktree once it has landed, so every chain past its first
+      batch died on a missing tree — silently, since the failure is attributed
+      to the chain and the later batches simply never run. Purge-on-success is
+      the agent's contract to keep; nothing may be reused across agents.
+    * Forking at spawn time rather than at wave start means a batch inherits
+      every sibling that has landed meanwhile, not just the wave's starting
+      point — so concurrent agents are as fresh as the session branch allows
+      and the push-rebase path is exercised only for genuine overlap.
+
+    A batch that fails aborts the REST OF ITS CHAIN: same-file batches are
+    ordered, and a later one forking from a branch that never got its
+    predecessor would emit against a half-wrapped module. Sibling chains are
+    unaffected. The failure is reported against the batch that actually failed,
+    not the chain head.
+
+    Nothing is torn down here. A successful agent purges its own worktree, so
+    what survives the wave is exactly the failures — which is the inspection
+    surface a partial wave needs (finding F12); a successful agent's work is on
+    the session branch, which is where it is meant to be read from.
     """
     from crustify import config as _cfg
     from crustify import worktree as W
@@ -634,8 +656,8 @@ def _isolated_wave(
     # work. No checkout: that is what lets agents push to it concurrently.
     base = W.session_base(repo, f"{stage.verb}-{_cfg.SESSION_ID}")
 
-    def _slug(i: int, chain: list[Batch]) -> str:
-        stem = Path(chain[0].file).stem if chain[0].file else "batch"
+    def _slug(i: int, b: Batch) -> str:
+        stem = Path(b.file).stem if b.file else "batch"
         # Unique by construction: session + index + a random suffix. Slugs used to
         # be `<verb>-<NN>-<stem>`, which collides across waves, and `add_worktree`
         # then force-removed the stale directory — silently destroying an earlier
@@ -645,35 +667,44 @@ def _isolated_wave(
                 + re.sub(r"[^A-Za-z0-9]+", "_", stem)[:24]
                 + "-" + secrets.token_hex(4))
 
-    def run_chain_wt(wt: Path, chain: list[Batch]) -> None:
-        emit = stage.emit_factory(wt / rel, Layout(wt))   # bound to the worktree
-        for b in chain:
-            emit(b)
+    # `git worktree add` takes a repo-level lock and is NOT concurrency-safe;
+    # creating worktrees in parallel raced and silently dropped a chain (finding
+    # F14). Setup used to be serialized by living in the main thread; now that it
+    # happens lazily inside the workers, this lock is what keeps that guarantee.
+    # Only the setup is serialized — the agents themselves still run concurrently.
+    wt_lock = threading.Lock()
+    made = 0
 
+    def _fork(i: int, b: Batch) -> Path:
+        nonlocal made
+        with wt_lock:
+            wt = W.add_worktree(repo, base.branch, _slug(i, b))
+            W.link_shared(wt, repo)
+            made += 1
+        return wt
+
+    def run_chain_wt(i0: int, chain: list[Batch]) -> list[tuple[Batch, BaseException]]:
+        for j, b in enumerate(chain):
+            try:
+                wt = _fork(i0 + j, b)
+                stage.emit_factory(wt / rel, Layout(wt))(b)   # bound to the worktree
+            except BaseException as e:                        # noqa: BLE001
+                # Abort the rest of THIS chain (its later batches are ordered
+                # behind this one) and report the batch that actually failed.
+                return [(b, e)]
+        return []
 
     _cfg.SESSION_BASE = base.branch
     try:
         with ThreadPoolExecutor(max_workers=parallel_max if parallelize else 1) as ex:
-            # Worktrees are created SEQUENTIALLY in the main thread — `git worktree
-            # add` takes a repo-level lock and is NOT concurrency-safe; creating
-            # them in parallel raced and silently dropped a chain (finding F14).
-            # Each agent is spawned as soon as its own worktree exists (1 worktree
-            # → 1 agent → next worktree), so the agents themselves still run
-            # concurrently; only the git-worktree setup is serialized.
-            futs = {}
-            for i, ch in enumerate(chains):
-                slug = _slug(i, ch)
-                try:
-                    wt = W.add_worktree(repo, base.branch, slug)
-                    W.link_shared(wt, repo)
-                except BaseException as e:               # noqa: BLE001
-                    failures.append((ch[0], e))          # setup failed; keep the rest
-                    continue
-                futs[ex.submit(run_chain_wt, wt, ch)] = ch
+            futs, i0 = {}, 0
+            for ch in chains:
+                futs[ex.submit(run_chain_wt, i0, ch)] = ch
+                i0 += len(ch)                # slug indices stay unique per batch
             for fut in as_completed(futs):
                 try:
-                    fut.result()
-                except BaseException as e:               # noqa: BLE001
+                    failures.extend(fut.result())
+                except BaseException as e:   # noqa: BLE001
                     failures.append((futs[fut][0], e))
     finally:
         _cfg.SESSION_BASE = ""
@@ -682,7 +713,7 @@ def _isolated_wave(
     # what landed on the base — it does not read the base tip, diff it, or check
     # whether an agent committed. Integration is the agents' business, and any
     # summary here would be a guess that reads as a report.
-    print(f"[{stage.verb}] {len(chains)} agent worktree(s) under "
+    print(f"[{stage.verb}] {made} agent worktree(s) forked under "
           f"{repo / _WT}; session branch {base.branch}")
 
     if stage.shared_artifact_fn is not None:

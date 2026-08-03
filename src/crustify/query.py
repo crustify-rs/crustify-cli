@@ -808,6 +808,27 @@ def _shape_by_ref_element_errors(label: str, slot, name: str) -> list[str]:
     return []
 
 
+#: `string` normally excludes `scalar`/`array` -- a NUL-terminated pointer is
+#: terminator-delimited, so it is not also a counted buffer or a lone pointee.
+#: The exception is a `void` subject: an erased allocation carries no element
+#: type, so the same pointer legitimately reaches C as raw bytes AND as a
+#: string, and both facets are true of it.
+def _erased(type_str: str | None) -> bool:
+    import re as _re
+    return bool(_re.search(r"\bvoid\b", type_str or ""))
+
+
+def _string_shape_errors(label: str, ptr: dict, type_str: str | None) -> list[str]:
+    if not ptr.get("string") or _erased(type_str):
+        return []
+    e = []
+    if ptr.get("array") is not None:
+        e.append(f"{label}: string and array both set (only a `void` subject may be both)")
+    if ptr.get("scalar") is not None:
+        e.append(f"{label}: string and scalar both set (only a `void` subject may be both)")
+    return e
+
+
 def _ptr_invariant_errors(field: str, ptr: dict, field_type: str) -> list[str]:
     """Hard-reject the IMPOSSIBLE / inconsistent shapes in one field's `ptr`
     block. Ownership *dependencies* are STRUCTURAL (unrepresentable otherwise):
@@ -825,10 +846,7 @@ def _ptr_invariant_errors(field: str, ptr: dict, field_type: str) -> list[str]:
     # _shape_slot_errors): scalar points at ONE pointee, array at a buffer.
     e += _shape_slot_errors(flabel, scalar, "scalar")
     e += _shape_slot_errors(flabel, array, "array")
-    if ptr.get("string") and array is not None:
-        e.append(f"{flabel}: string and array both set (must be XOR)")
-    if ptr.get("string") and scalar is not None:
-        e.append(f"{flabel}: string and scalar both set (a string is not a scalar)")
+    e += _string_shape_errors(flabel, ptr, field_type)
     # `string` is the one remaining explicit-bool discriminant (scalar/array are
     # now shape objects) -- reject a null left where false was meant.
     if not isinstance(ptr.get("string"), bool):
@@ -1011,13 +1029,13 @@ def _borrow_arg_ref_errors(label: str, borrowed, valid_args) -> list[str]:
 
 
 def _sym_ptr_invariant_errors(label: str, blk: dict, const: bool,
-                              is_ret: bool, arg_names=None) -> list[str]:
+                              is_ret: bool, arg_names=None,
+                              type_str: str | None = None) -> list[str]:
     """Hard-reject the IMPOSSIBLE shapes in one symbol `ptr_args[*].ptr` /
     `ptr_ret.ptr` (or a global `ptr`) block. These are the SAME structural
     invariants a struct field's `ptr` obeys (see check_types_consistency):
     `scalar`/`array` are null|{by_val}|{by_ref} (scalar = one pointee, array = a
-    buffer); string⊕(scalar|array); string explicit + the {scalar,array,string}
-    floor; borrowed⟹lifetime; owned is an explicit bool; const⟹mutable≠true.
+    buffer); string explicit + the {scalar,array,string} floor; borrowed⟹lifetime; owned is an explicit bool; const⟹mutable≠true.
 
     `owned`+`borrowed` is NOT rejected: an arg or return may be BOTH to mean
     runtime-conditional dual ownership (owned on one path, borrowed on another);
@@ -1033,10 +1051,7 @@ def _sym_ptr_invariant_errors(label: str, blk: dict, const: bool,
     array = blk.get("array")
     e += _shape_slot_errors(label, scalar, "scalar")
     e += _shape_slot_errors(label, array, "array")
-    if blk.get("string") and array is not None:
-        e.append(f"{label}: string and array both set (must be XOR)")
-    if blk.get("string") and scalar is not None:
-        e.append(f"{label}: string and scalar both set (a string is not a scalar)")
+    e += _string_shape_errors(label, blk, type_str)
     if not isinstance(blk.get("string"), bool):
         e.append(f"{label}: string must be an explicit boolean (true/false, not null)")
     if not (scalar is not None or array is not None or blk.get("string")):
@@ -1286,7 +1301,8 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                     errors.append(f"ptr: unknown key(s) {sorted(bad)}")
                 errors.extend(_sym_ptr_invariant_errors(
                     "ptr", gptr, "const" in (entry.get("type") or ""),
-                    is_ret=False, arg_names=set()))
+                    is_ret=False, arg_names=set(),
+                    type_str=entry.get("type")))
         if "locked_by" in f and f["locked_by"] is not None:
             if not is_global:
                 errors.append(
@@ -1356,7 +1372,8 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                 errors.extend(_sym_ptr_invariant_errors(
                     f"{where}ptr_args[{pos}].ptr", blk,
                     bool(arg_by_pos[str(pos)].get("const")), is_ret=False,
-                    arg_names=valid_args))
+                    arg_names=valid_args,
+                    type_str=arg_by_pos[str(pos)].get("type")))
             if ret_f is not None:
                 if not isinstance(ret_f, dict):
                     errors.append(f"{where}ptr_ret: must be an object")
@@ -1376,7 +1393,8 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                         errors.extend(_sym_ptr_invariant_errors(
                             f"{where}ptr_ret.ptr", blk,
                             bool(entry["ptr_ret"].get("const")), is_ret=True,
-                            arg_names=valid_args))
+                            arg_names=valid_args,
+                            type_str=entry["ptr_ret"].get("type")))
                     elif blk is not None:
                         errors.append(f"{where}ptr_ret.ptr: must be an object")
 
@@ -1782,6 +1800,20 @@ def _scope_predicate(layout, target, wrap_only: bool, port_only: bool):
     return keep
 
 
+def _group_of(n) -> str:
+    """Which output group a dag node belongs to (see :func:`query_dag`)."""
+    if n.node_kind == "type":
+        return "types"
+    sk = n.subkind or ""
+    if sk == "callback":
+        return "callbacks"
+    if sk.startswith("macro"):
+        return "macros"
+    if sk.startswith("global"):
+        return "globals"
+    return "functions"          # function_*, plus bare/external symbols
+
+
 def query_dag(
     target: Path,
     *,
@@ -1790,7 +1822,6 @@ def query_dag(
     depth: int | None = None,
     scc: str | None = None,
     layer: int | None = None,
-    as_json: bool = False,
     loc: bool = False,
     wrap_only: bool = False,
     port_only: bool = False,
@@ -1825,29 +1856,47 @@ def query_dag(
 
     # ── mode: LoC view ─────────────────────────────────────────────────
     if loc:
-        _dag_loc(by_key, by_name, names, files, layer, as_json, keep)
+        _dag_loc(by_key, by_name, names, files, layer, False, keep)
         return
 
     def _emit(rows: list) -> None:
-        """rows: list[(node, depth|None)] — print bare ids, or --json records."""
+        """rows: list[(node, depth|None)] -> JSON grouped by what the caller
+        does with each kind.
+
+        The groups ARE the routing: `types` go to the type wrapper, `callbacks`
+        and `functions` to the symbol wrapper, `macros` to nobody -- bindgen
+        owns their `-sys` shims, so no stage facades them. They stay a group
+        rather than being dropped so a caller can see the closure is complete;
+        every wrap/port consumer just ignores the key.
+
+        `layer` and `depth` are emitted unconditionally because they exist
+        NOWHERE else: a types.json / syms.json record carries neither, so
+        piping an id into `query types` cannot recover them. Everything else a
+        caller might want (fields, ops, ownership, casts) IS in those records,
+        which is why this view stays thin -- `id` + `defined_in` is enough to
+        look one up unambiguously, including a file-local static whose name
+        repeats across TUs.
+        """
         rows.sort(key=lambda r: (r[0].layer, r[0].id) if r[1] is None
                   else (r[1], r[0].layer, r[0].id))
-        if as_json:
-            recs = []
-            for n, d in rows:
-                rec = {"id": n.id, "kind": n.node_kind, "subkind": n.subkind,
-                       "layer": n.layer, "defined_in": n.defined_in}
-                if d is not None:
-                    rec["depth"] = d
-                recs.append(rec)
-            print(json.dumps(recs, indent=2))
-            return
+        out: dict[str, list] = {k: [] for k in
+                                ("types", "callbacks", "functions",
+                                 "globals", "macros")}
         seen: set[str] = set()
-        for n, _d in rows:
+        for n, d in rows:
             if n.id in seen:
                 continue
             seen.add(n.id)
-            print(n.id)
+            # `defined_in` already falls back to declared_in[0] upstream: the
+            # dag composer fills it when the manifest entry has no definition
+            # site (239 such entries here — the DEFINE_STACK_OF instances and
+            # friends). What stays null is only `external` / `builtin`, which
+            # has no manifest entry to fall back to.
+            rec = {"id": n.id, "layer": n.layer, "defined_in": n.defined_in}
+            if d is not None:
+                rec["depth"] = d
+            out[_group_of(n)].append(rec)
+        print(json.dumps({k: v for k, v in out.items() if v}, indent=2))
 
     # ── mode: layer slice ──────────────────────────────────────────────
     if layer is not None:

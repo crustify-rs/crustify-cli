@@ -23,7 +23,8 @@ Checks run by the GATE:
 
   - op-uniqueness      a non-lifecycle op belongs to at most one type.
   - ptr-invariants     per pointer field: owned and/or borrowed, never neither;
-                       borrowed => lifetime set; string XOR array; const =>
+                       borrowed => lifetime set; string excludes scalar/array
+                       unless the subject is `void`; const =>
                        mutable != true. (owned+borrowed MAY co-occur --
                        runtime-conditional dual ownership.)
 
@@ -42,6 +43,7 @@ after the fact (PITFALLS 2026-06-07).
 import argparse
 import csv
 import json
+import re
 import sys
 from pathlib import Path
 from collections import defaultdict, namedtuple
@@ -206,8 +208,8 @@ def check_ptr_invariants(by_type) -> list[Finding]:
                 # Ownership dependencies are STRUCTURAL: lifetime nests under
                 # `borrowed`, element-ownership under `array.by_ref`. `owned` and
                 # `borrowed` may BOTH be set (runtime-conditional dual ownership).
-                # Only shape validity, the string/array mutex,
-                # borrowed-requires-lifetime, and const/mutable remain.
+                # Only shape validity, borrowed-requires-lifetime, and
+                # const/mutable remain.
                 # `scalar` and `array` share one by_val/by_ref grammar (scalar =
                 # ONE pointee, e.g. a `T**` out-param via scalar.by_ref; array = a
                 # buffer). Validate both the same way.
@@ -218,10 +220,14 @@ def check_ptr_invariants(by_type) -> list[Finding]:
                         bad(f"{sname} must be null or {{by_val|by_ref}}")
                     elif len([k for k in ("by_val", "by_ref") if slot.get(k)]) != 1:
                         bad(f"{sname} needs exactly one of by_val / by_ref")
-                if string and array is not None:
-                    bad("string and array both set (must be XOR)")
-                if string and scalar is not None:
-                    bad("string and scalar both set (a string is not a scalar)")
+                # A `void` subject carries no element type, so the same erased
+                # pointer is legitimately raw bytes AND a string; any other
+                # subject is one or the other.
+                if string and not re.search(r"\bvoid\b", fld.get("type") or ""):
+                    if array is not None:
+                        bad("string and array both set (only a `void` subject may be both)")
+                    if scalar is not None:
+                        bad("string and scalar both set (only a `void` subject may be both)")
                 if isinstance(borrowed, dict) and not borrowed.get("lifetime"):
                     bad("borrowed set but lifetime unset")
                 if owned is not None and not isinstance(owned, bool):

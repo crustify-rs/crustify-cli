@@ -157,11 +157,16 @@ class CrustifyWrap(CrustifyAgent):
         # field-accessor window. The lifecycle (reverse-derived droppers /
         # disposers / cloners) and the cast graph are pulled from the record;
         # field accessors are the only windowed surface.
+        # Single-type mode. `_fields_range` still SELECTS this mode (the
+        # scheduler hands one struct per batch) but is no longer handed to the
+        # agent: a wrap-scope type carries only the port-touched fields — the
+        # type composer shapes it that way — so its accessor surface is bounded
+        # by scope rather than by a window, and telling the agent to stay inside
+        # a slice of an already-narrow list only invited it to skip fields.
         if self._fields_range is not None:
             common.update({
-                "tag":          self._tags[0],
-                "kind":         self._kind,
-                "fields_range": f"{self._fields_range[0]}:{self._fields_range[1]}",
+                "tag":  self._tags[0],
+                "kind": self._kind,
             })
             return common
         common.update({
