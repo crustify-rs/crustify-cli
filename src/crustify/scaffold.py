@@ -25,6 +25,13 @@ import re
 import sys
 from pathlib import Path
 
+# The composer package lives at ``utils/codeql/compose/`` in the crustify
+# checkout, not as an installed package. Mirrors wrap.py / port.py.
+_CRUSTIFY_ROOT = Path(__file__).resolve().parent.parent.parent
+_COMPOSE_PARENT = _CRUSTIFY_ROOT / "utils" / "codeql"
+if str(_COMPOSE_PARENT) not in sys.path:
+    sys.path.insert(0, str(_COMPOSE_PARENT))
+
 _BLOCK_START = "// crustify:modules:start"
 _BLOCK_END = "// crustify:modules:end"
 
@@ -104,7 +111,7 @@ def scaffold(
     # --- act
     if create:
         stats = _materialize(layout, entries,
-                             _scope_map(layout, target), _field_map(layout))
+                             _scope_map(layout, target), _field_map(layout, target))
         mstats = _materialize_manifests(layout, doc)
         print(f"[crustify-cli scaffold --create] {stats}{mstats} → {layout.rust}")
     else:
@@ -157,16 +164,57 @@ def _scope_map(layout, target: Path) -> dict[str, str]:
     return out
 
 
-def _field_map(layout) -> dict[str, list[str]]:
+def _port_touched(layout, target) -> dict[str, set] | None:
+    """``type tag -> {field names touched by PORT-scope code}``, or None when
+    scope cannot be resolved (then every field is anchored, as before).
+
+    Delegates to the oracle rather than re-deriving from the CSVs: the same
+    answer `query types --fields --port-only` gives, so an anchor set and the
+    field workset an agent is handed can never disagree. `scope_touched_index`
+    is one pass over both access edges, cached — the per-type
+    `_scope_touched_fields` would rescan them once per type.
+    """
+    from crustify.query import scope_touched_index
+
+    # Only a genuinely ABSENT input returns None (a tree scaffolded before
+    # `analyze scope` / `extract-ql` has run). Anything else is allowed to
+    # raise: None means "anchor every field", so swallowing an error here would
+    # quietly restore the over-anchoring this function exists to prevent, and
+    # look like it worked.
+    if not layout.scope(target).exists():
+        return None
+    idx = scope_touched_index(layout, target, "port")
+    return {tag: {f for s in by_file.values() for f in s}
+            for tag, by_file in idx.items()} or None
+
+
+def _field_map(layout, target=None) -> dict[str, list[str]]:
     """``type tag -> [field names]`` from the analysis tree's ``types.json`` — the
     source for a type's ``// Field:`` accessor anchors (crates.json / scope.json
-    carry no field lists). The field set is already scope-shaped by the type
-    composer (wrap = port-touched subset, port = full layout). Empty when the
-    analysis tree is absent."""
+    carry no field lists). Empty when the analysis tree is absent.
+
+    Narrowed to the fields PORT-scope code actually touches, because an anchor
+    is a request for an ACCESSOR and only the port side consumes one. The
+    manifest's ``fields`` is the full declared layout for every type -- this
+    function used to take it verbatim on the belief that the type composer had
+    already scope-shaped it, which it never did. The cost of that was concrete:
+    ``bio_st`` carried 16 anchors against 0 port-touched fields, ``ossl_provider_st``
+    30 against 0, and agents filled them, so two thirds of the accessors emitted
+    tree-wide serve only code inside the type's own module.
+
+    Layout compatibility is unaffected -- a field still has to EXIST in the Rust
+    struct, which the type's own definition anchor covers. This governs only
+    which fields are owed a public accessor.
+
+    The narrowing is near-total for wrap-scope types (53 of 1,223 fields
+    port-touched) and near-nil for port-scope ones (2,158 of 2,214): a ported
+    type is translated wholesale, so its own ported code touches its fields.
+    """
     out: dict[str, list[str]] = {}
     tree = layout.analysis
     if not tree.exists():
         return out
+    touched = _port_touched(layout, target) if target is not None else None
     for p in tree.rglob("types.json"):
         try:
             doc = json.loads(p.read_text())
@@ -174,9 +222,14 @@ def _field_map(layout) -> dict[str, list[str]]:
             continue
         for e in doc.get("types", []):
             tag = e.get("name") or e.get("type")
-            if tag:
-                out[tag] = [f["name"] for f in (e.get("fields") or [])
-                            if isinstance(f, dict) and f.get("name")]
+            if not tag:
+                continue
+            names = [f["name"] for f in (e.get("fields") or [])
+                     if isinstance(f, dict) and f.get("name")]
+            if touched is not None:
+                keep = touched.get(tag, set())
+                names = [n for n in names if n in keep]
+            out[tag] = names
     return out
 
 
@@ -411,8 +464,30 @@ def _merge_anchors(rs_path: Path, e: dict,
                 new += [f"// {verb}: {nm}", _TODO, ""]
                 if kind == "types":
                     for fld in field_map.get(nm, ()):
-                        new += [f"// Field: {fld}", _TODO, ""]
+                        new += [f"// Field: {nm}.{fld}", _TODO, ""]
                 added += 1
+            elif kind == "types" and field_map.get(nm):
+                # The type is already anchored, but a field can ENTER port scope
+                # after the file was written (scope-config change, or a composer
+                # fix that made previously-invisible accesses visible). Anchor
+                # the newcomers so the type stops reading as complete.
+                #
+                # Appended at the end of the file rather than slotted next to
+                # its neighbours: by now an agent has promoted anchors to `///`,
+                # moved them into `impl` blocks and forked some in two, so there
+                # is no position that is right in general — whereas the end of
+                # the file is always valid, and `// crustify:todo` is a plain
+                # comment, so it is inert wherever it lands. The agent moves it
+                # when it fills it.
+                #
+                # Presence is an exact match on the OWNER-QUALIFIED name, so no
+                # positional attribution is needed and none of its failure modes
+                # apply: another type's identically-named field, or an
+                # intervening symbol anchor, cannot be mistaken for this one.
+                for fld in field_map.get(nm, ()):
+                    if not _has_field_anchor(text, nm, fld):
+                        new += [f"// Field: {nm}.{fld}", _TODO, ""]
+                        added += 1
     if new:
         if not text.endswith("\n"):
             text += "\n"
@@ -423,6 +498,25 @@ def _merge_anchors(rs_path: Path, e: dict,
 
 
 _TODO = "// crustify:todo"  # matches _schedule._TODO; a surviving one = pending
+
+def _has_field_anchor(text: str, tag: str, fld: str) -> bool:
+    """Is ``<tag>.<fld>`` already anchored in ``text``, filled or not?
+
+    One exact match, because the anchor names its own owner
+    (``docs/AGENTS.md``: ``// Field: <C_ITEM>.<field>``). The unqualified form
+    this replaced could only be attributed by POSITION, which needed a walk that
+    tracked the enclosing item anchor and had two failure modes -- a sibling
+    type in the same module with the same field name, and a symbol's anchor
+    sitting between a type and its accessors.
+
+    The name is terminated explicitly rather than with ``\\b``: a field path is
+    itself dotted for a flattened anonymous member, and ``\\b`` is satisfied by a
+    ``.``, so ``ssl_session_st.ext`` would match ``ssl_session_st.ext.hostname``
+    and a genuinely missing anchor would be skipped.
+    """
+    return re.search(
+        rf"(?m)^\s*//+\s*Field:\s*{re.escape(tag)}\.{re.escape(fld)}(?:\s|$)",
+        text) is not None
 
 
 def _stub(e: dict, scope_map: dict[str, str] | None = None,
@@ -457,7 +551,7 @@ def _stub(e: dict, scope_map: dict[str, str] | None = None,
             lines += [f"// {verb}: {nm}", _TODO, ""]
             if kind == "types":
                 for fld in field_map.get(nm, ()):
-                    lines += [f"// Field: {fld}", _TODO, ""]
+                    lines += [f"// Field: {nm}.{fld}", _TODO, ""]
             any_member = True
     if not any_member:
         lines.append("// (no members homed here yet)")

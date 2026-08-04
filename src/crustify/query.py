@@ -519,32 +519,77 @@ def _introspect(
     return _records(target, kind, names, files)
 
 
+_TOUCHED_CACHE: dict = {}
+
+
+def scope_touched_index(layout, target, which: str) -> dict:
+    """``{tag: {def_file|"": {field}}}`` — every field some `which`-scope
+    (port|wrap) function touches, in ONE pass. Cached per (target, which).
+
+    The UNION of both access edges, because they answer different questions and
+    a type can owe an accessor under either:
+
+    ``t2/fa_with_root``     the outermost NAMED container plus a dotted member
+                            path. The only edge that resolves an anonymous
+                            aggregate embedded in a named struct, so without it
+                            ``ssl_session_st`` narrows to 32 of its 41 fields,
+                            losing the whole ``ext.*`` group.
+
+    ``t2/field_accesses``   the IMMEDIATE declaring type. The only edge that
+                            names a by-value-embedded struct: ``s->ts_msg_read.t``
+                            is `ssl_connection_st`/`ts_msg_read.t` to the walk
+                            above, but `OSSL_TIME`/`t` here — and per
+                            ``docs/AGENTS.md`` both owe something, the container
+                            a projecting getter and the embedded type its own
+                            field accessor.
+
+    Taking either alone loses the other's case; ``fa_with_root`` is not a
+    superset of ``field_accesses``, which is the trap this docstring exists to
+    stop someone (me, twice) falling into.
+    """
+    import csv as _csv
+    from compose import scope as _sc
+
+    key = (str(layout.repo_root), str(target), which)
+    if key in _TOUCHED_CACHE:
+        return _TOUCHED_CACHE[key]
+    sj = layout.scope(target)
+    if not sj.exists():
+        return {}
+    funcs = {k[0] for k in _sc.scope_membership(
+        sj, which, kinds=("functions", "globals", "macros"))}
+    out: dict = {}
+
+    def add(tag, def_file, field):
+        if tag and field:
+            out.setdefault(tag, {}).setdefault(def_file or "", set()).add(field)
+
+    for name, tag_col, file_col, fld_col in (
+            ("fa_with_root.csv", "root_struct_name", "root_struct_def_file",
+             "field_path"),
+            ("field_accesses.csv", "struct_name", "struct_def_file",
+             "field_name")):
+        fac = layout.t2 / name
+        if not fac.exists():
+            continue
+        with fac.open() as fh:
+            for r in _csv.DictReader(fh):
+                if r.get("enclosing_name") in funcs:
+                    add(r.get(tag_col), r.get(file_col), r.get(fld_col))
+    _TOUCHED_CACHE[key] = out
+    return out
+
+
 def _scope_touched_fields(layout, target, tag: str, defined_in: str | None,
                           which: str) -> set:
     """Field names of `tag` touched by some function in scope `which`
-    (port|wrap) — raw ``t2/field_accesses`` ∩ scope.json membership.
-    Empty if no scope.json. Drives the --port-only/--wrap-only narrowing for
-    --fields and --field-touchers."""
-    import csv as _csv
-    from compose import scope as _sc
-    sj = layout.scope(target)
-    if not sj.exists():
-        return set()
-    funcs = {k[0] for k in _sc.scope_membership(
-        sj, which, kinds=("functions", "globals", "macros"))}
-    out: set = set()
-    fac = layout.t2 / "field_accesses.csv"
-    if fac.exists():
-        with fac.open() as fh:
-            for r in _csv.DictReader(fh):
-                if r.get("struct_name") != tag:
-                    continue
-                if defined_in and r.get("struct_def_file") \
-                        and r["struct_def_file"] != defined_in:
-                    continue
-                if r.get("enclosing_name") in funcs and r.get("field_name"):
-                    out.add(r["field_name"])
-    return out
+    (port|wrap). Empty if no scope.json. Drives the --port-only/--wrap-only
+    narrowing for --fields and --field-touchers, and — through
+    `scope_touched_index` — which fields the scaffolder anchors."""
+    by_file = scope_touched_index(layout, target, which).get(tag) or {}
+    if defined_in and defined_in in by_file:
+        return set(by_file[defined_in])
+    return {f for s in by_file.values() for f in s}
 
 
 def _field_keep_set(layout, target, tag: str, defined_in: str | None, *,

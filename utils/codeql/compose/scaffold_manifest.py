@@ -109,8 +109,7 @@ _MANAGED = "//! crustify:managed"
 
 # Classification is by kind *prefix*: `function_*` / `global_*` get a
 # re-export / safe-view `// Replaces:` anchor. `macro*` gets NONE — macros are
-# neither ported nor wrapped, bindgen owns their whole surface. `Mirrors` is
-# retained on the anchor grammar for the port stage's own use. These never
+# neither ported nor wrapped, bindgen owns their whole surface. These never
 # anchor (no manifest entry exists to place):
 _SKIP_KINDS: frozenset[str] = frozenset({"external", "builtin"})
 
@@ -416,12 +415,28 @@ def compose_files(
 
 def _type_block(tm: "TypeMod") -> str:
     """One type's anchor block: the ``// Replaces:`` item anchor followed by its
-    ``// Field:`` accessor anchors. Shared by the fresh-stub and reconcile paths."""
-    typedef = f"  [typedef: {tm.typedef}]" if tm.typedef else ""
-    sc = f"  ({tm.scope})" if tm.scope else ""
-    block = f"// Replaces: {tm.tag}{typedef}{sc}\n{_TODO}"
+    ``// Field:`` accessor anchors. Shared by the fresh-stub and reconcile paths.
+
+    A field anchor is OWNER-QUALIFIED (``// Field: <tag>.<field>``, per
+    ``docs/AGENTS.md``). Unqualified, it only identifies its type by POSITION --
+    the nearest preceding item anchor -- and position is not reliable here: a
+    module routinely homes several types (37 of 75 in the openssl tree) which
+    share field names freely (`data`, `flags`, `refcnt`), and a symbol's own
+    anchor can sit between a type and its accessors. Qualified, presence is an
+    exact string match and neither ambiguity exists.
+
+    Splits cleanly despite a field path itself being dotted for a flattened
+    anonymous member (`ssl_session_st.ext.hostname`): a C tag contains no dot,
+    so the owner is everything before the FIRST one.
+
+    No ``[typedef: ...]`` / ``(<scope>)`` annotations: nothing ever parsed them,
+    the scope is already carried by the verb (``Replaces`` = port, ``Wraps`` =
+    wrap) and could contradict it, and their only real effect was forcing the
+    anchor-name matcher to exclude ``[`` and ``(``.
+    """
+    block = f"// Replaces: {tm.tag}\n{_TODO}"
     for f in tm.fields:
-        block += f"\n// Field: {f}\n{_TODO}"
+        block += f"\n// Field: {tm.tag}.{f}\n{_TODO}"
     return block
 
 
@@ -449,13 +464,20 @@ def _file_stub(st: FileStub) -> str:
 
 
 # Matches an emitted item anchor of either flavour: ``// Replaces: <name>`` /
-# ``/// Replaces: <name>`` / ``// Mirrors: <name>``. The captured name is the
-# bare tag (anything up to the first whitespace / ``[typedef`` / ``(`` suffix),
-# so a filled or unfilled anchor reads identically. Leading whitespace is
-# allowed: a *filled* anchor is routinely an indented ``///`` doc comment inside
-# an ``impl`` / ``define_type!`` block, not a column-0 line — missing those would
-# make the reconcile pass re-append a duplicate stub for already-done work.
-_ANCHOR_RE = re.compile(r"^\s*/{2,3}\s*(?:Replaces|Mirrors):\s*([^\s\[(]+)", re.M)
+# ``// Replaces: <name>`` / ``// Wraps: <name>``, filled (``///``) or not. The
+# captured name runs to the first whitespace, so a filled anchor — which appends
+# its defining file and sometimes a gloss — reads identically to an unfilled one.
+# Leading whitespace is allowed: a *filled* anchor is routinely an indented
+# ``///`` doc comment inside an ``impl`` / ``define_type!`` block, not a column-0
+# line — missing those would make the reconcile pass re-append a duplicate stub
+# for already-done work.
+#
+# ``Wraps`` was missing here while every other reader accepted it, so this
+# matcher alone could not see a wrap-scope anchor. ``Mirrors`` was present here
+# and nowhere else — no emitter, no other reader, no anchor in any tree — so it
+# is gone; the verb set is exactly what the scaffolder writes.
+_ANCHOR_RE = re.compile(
+    r"^\s*/{2,3}\s*(?:Replaces|Wraps):\s*(\S+)", re.M)
 
 
 def _existing_anchor_names(text: str) -> set[str]:

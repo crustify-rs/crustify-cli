@@ -400,19 +400,13 @@ def wrap_lifetime_for(
 #: `// Wraps: <name>` / `// Replaces: <name>`, at any comment depth and with an
 #: optional trailing gloss the wrapper may have added.
 _ANCHOR_RE = _re.compile(r"^\s*//+\s*(?:Wraps|Replaces):\s*([A-Za-z_]\w*)")
-#: `// Field: <name>` — the per-accessor placeholder under a type's anchor.
-_FIELD_RE = _re.compile(r"^\s*//+\s*Field:\s*(\S+)")
-
-
-def _port_fields(layout, target: Path, tag: str, tu: str | None) -> set[str]:
-    """Field names of `tag` that PORT-scope code touches — the accessors a type
-    wrapper actually owes. Empty for an opaque handle, and empty (harmlessly)
-    for a symbol, which has no fields."""
-    try:
-        from crustify.query import _scope_touched_fields
-        return set(_scope_touched_fields(layout, target, tag, tu, "port") or ())
-    except Exception:                    # noqa: BLE001 - never block selection
-        return set()
+#: `// Field: <owner>.<field>` — the per-accessor placeholder, OWNER-QUALIFIED
+#: (`docs/AGENTS.md`). Both halves are captured: the owner disambiguates a
+#: module that homes several types (37 of 75 in the openssl tree) which share
+#: field names, and the field half stays dotted for a flattened anonymous
+#: member (`ssl_session_st` . `ext.hostname`) — a C tag carries no dot, so the
+#: split is on the FIRST one.
+_FIELD_RE = _re.compile(r"^\s*//+\s*Field:\s*([A-Za-z_]\w*)\.(\S+)")
 
 
 def _closure_names(seeds: list[str], by_key, by_name, keep) -> list[str]:
@@ -487,20 +481,28 @@ def _pending_names(names: list[str], layout, target: Path) -> tuple[list[str], l
             if not hit:
                 open_ = True             # no anchor here -> nothing emitted yet
             # A type is not done when its DEFINITION anchor is filled but an
-            # accessor it owes is not. The scaffolder lays a `// Field:` anchor
-            # per DECLARED field, while the wrapper only owes the port-touched
-            # ones (`evp_pkey_st`: 21 anchors, 0 port-scope), so an unfiltered
-            # scan would hold every opaque type open forever on placeholders
-            # nobody will ever fill. Only a port-scope field's todo counts.
+            # accessor it owes is not.
+            #
+            # The ANCHOR'S EXISTENCE is the authorization -- no scope query
+            # here. The scaffolder lays a `// Field:` anchor only for a field
+            # port-scope code touches, so every anchor present is one the
+            # wrapper owes. This used to intersect with a port-scope field set
+            # because the scaffolder anchored every DECLARED field, and without
+            # that filter an opaque type (`evp_pkey_st`: 21 anchors, 0
+            # port-scope) stayed pending forever on placeholders nobody would
+            # fill. Narrowing emission removed the reason for it.
+            #
+            # Matching is OWNER-QUALIFIED: `f.group(1) == nm` keeps a sibling
+            # type's identically-named field in the same module from holding
+            # THIS type open, which the previous unqualified match could not
+            # distinguish.
             if not open_:
-                want = _port_fields(layout, target, nm, e.get("tu"))
-                if want:
-                    for i, ln in enumerate(lines):
-                        f = _FIELD_RE.match(ln)
-                        if (f and f.group(1) in want
-                                and any(_TODO in l for l in lines[i + 1:i + 3])):
-                            open_ = True
-                            break
+                for i, ln in enumerate(lines):
+                    f = _FIELD_RE.match(ln)
+                    if (f and f.group(1) == nm
+                            and any(_TODO in l for l in lines[i + 1:i + 3])):
+                        open_ = True
+                        break
         (pending if open_ else done).append(nm)
     return pending, done
 
@@ -520,7 +522,6 @@ def wrap_types(
     parallel_max: int = 8,
     max_fields: int | None = None,
     max_syms: int | None = None,
-    yes: bool = False,
     dry_run: bool = False,
     emit_fn=None,
 ) -> None:
@@ -689,7 +690,7 @@ def wrap_types(
     failures = S.schedule(
         dag=dag, analysis_root=layout.analysis,
         names=sel_names, stage=stage, parallelize=parallel,
-        parallel_max=parallel_max, yes=yes, dry_run=dry_run,
+        parallel_max=parallel_max, dry_run=dry_run,
     )
     if failures:
         labels = ", ".join(b.label() for b, _ in failures)
