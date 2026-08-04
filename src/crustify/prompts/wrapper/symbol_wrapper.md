@@ -196,10 +196,10 @@ smart pointers / traits. Fix them, unless justified.
 ### Merge your worktree
 
 Note that other agents may be working on the same files in their worktrees simultaneously.
-Use the following procedure to avoid race conditions and land your changes cleanly: 
+Use the following procedure to avoid race conditions and land your changes cleanly:
 
-1. Commit your changeset in your worktree
+1. Commit your changeset in your worktree; one commit.
 2. Push to base branch's `HEAD` using `--git-common-dir` (DO NOT push on remote)
-3. If rejected, it means base got updated -- rebase onto base tip,
-revalidate and retry push until landing 
-4. Purge your worktree after landing successfully in base
+3. If rejected, it means base got updated -- rebase onto base tip, revalidate and retry
+push until landing
+4. Purge your worktree after landing successfully in base; do not delete the branch

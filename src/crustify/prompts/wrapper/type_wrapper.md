@@ -35,7 +35,7 @@ definition, lifecycle ops, and implement field accessors.
 ### Scope
 
 **Fields.** You process your type's fields that are port-scope only, i.e. touched
-by port-scope symbols, leaving the rest of them as TODO for a future session.
+by port-scope symbols, leaving the rest of them untouched for a future session.
 
 **Lifetime primitives.** You process all the lifetime primitives of your type,
 regarless of scope.
