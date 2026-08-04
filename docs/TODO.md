@@ -474,6 +474,71 @@ lower priority than it looks.
 
 ---
 
+## `orchestrator.md` names config files that do not exist (2026-08-04)
+
+`prompts/orchestrator.md` refers to both tiers of config by the wrong filename,
+so an orchestrator following it verbatim authors files nothing reads:
+
+| orchestrator.md says | actual (`src/crustify/layout.py`) |
+|---|---|
+| `crustify/config.json` (L22) | **`cli-config.json`** (`layout.py:146`) |
+| `crustify/targets/<target>/config.json` (L44) | **`scope-config.json`** (`layout.py:172`) |
+| `config.json.port_files` (L46) | `scope-config.json.port_files` |
+| "`config.json` when all files are port-scope" (L48) | same |
+
+The irony is that `layout.py:143-145` documents *exactly* this trap in the
+`cli_config` docstring -- "Named apart from the per-target `config`
+(`scope-config.json`) on purpose: two files both called `config.json`, one
+repo-tier and one ..." -- i.e. the two files were deliberately renamed to avoid
+the ambiguity, and the prompt still carries the pre-rename names.
+
+Failure mode is silent-ish rather than loud: the pipeline errors with a missing
+`scope-config.json` at `analyze scope`, which is several manual steps (build,
+CodeQL DB creation, `extract-ql`) after the file was authored, so the fix is
+cheap but the feedback loop is long.
+
+**Fix:** s/`config.json`/`cli-config.json`/ at L22 and
+s/`config.json`/`scope-config.json`/ at L44/L46/L48.
+
+**While in the file** (same class, not tracked separately): L63 points at
+`docs/crates.md`, which is at **`docs/schemas/crates.md`**. Worth a grep for
+other stale paths in `prompts/` at the same time -- these were all found by one
+orchestrator run, so the prompt tree has probably not been path-checked since
+the renames.
+
+Surfaced driving the full pipeline on the libgit2 `src` target.
+
+---
+
+## `templates/scope-config.json` mis-names itself in its own `_comment` (2026-08-04)
+
+The template's first `_comment` line reads:
+
+```
+"Example crustify/targets/<target>/config.json (user-authored,"
+```
+
+but the file is `scope-config.json`, and that is the name `layout.py:172` looks
+for. So the one artifact whose job is to show the user what to author tells
+them to author it under a name the loader will not find.
+
+Worse than the `orchestrator.md` case above ([same rename drift]): a template is
+normally copied verbatim, and the `_comment` is the only place a reader would
+check the intended filename -- there is no schema doc for this file to
+cross-check against. Anyone who trusts the comment over the filename gets a
+`scope-config.json`-shaped file named `config.json`.
+
+**Fix:** one-word edit in the `_comment`. Then sweep the other templates for the
+same self-description drift -- `templates/cli-config.json`'s `_comment` is
+correct today, but nothing enforces that a template's `_comment` agrees with its
+own basename, and both files were renamed at the same time. A trivial test
+(assert each `templates/*.json` `_comment[0]` mentions its own basename) would
+close the class permanently and is cheaper than re-finding this by hand.
+
+Surfaced driving the full pipeline on the libgit2 `src` target.
+
+---
+
 **Parked / deferred** -- design notes and known gaps, older; each keeps its
 surfaced-date tag.
 
