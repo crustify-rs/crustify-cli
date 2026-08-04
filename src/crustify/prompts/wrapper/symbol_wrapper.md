@@ -30,25 +30,24 @@ translations across multiple port sessions.
 
 ### Discover your items 
 
-For each item in your target set use `crustify-oracle` to fetch its analysis record,
+**Analysis oracle.** For each item in your target set use `crustify-oracle` to fetch its analysis record,
 including the pointer analysis of its args and return (ownership, mutability, nullability,
-type, cardinality, etc.).
-
-If the agent-owned analysis for an item exists, then you act as a reviewer assessing its quality
-and accuracy by verifying its claims against our principles and instructions. If you notice
-any inconsistencies, submit your findings through the oracle, justifying why they fix the existing
-state.
-
-If any of your work items lacks the agent-owned analysis, then you must do that first
+type, cardinality, etc.). If any of your work items lacks the agent-owned analysis, then you must do that first
 before proceeding with the wrappers. Use our established principles and the
-meaning of each agent-owned field.
+meaning of each agent-owned block.
 
-If your target set contains the special marker `lifetime-for : <spec>` then
+**Lifetime primitives.** If your target set contains the special marker `lifetime-for : <spec>` then
 use the appropriate `crustify-oracle` command to fetch existing records
 for `<spec>` and assess correctness. If no lifetime records for `<spec>`
 exist then you enter discovery mode and scout the codebase for them using
 our recommended heuristics, then submit your findings through the oracle.
-Your candidate set should be scoped to wrap-scope candidates only.
+Narrow your lifetime primitives set to wrap-scope candidates only.
+
+**Reviewer mode.** If the agent-owned analysis of one of your items exists already, 
+or if its safe wrappers have already been emitted, then you act as a reviewer assessing their
+quality and accuracy by verifying its claims against our principles and instructions. If
+you notice any inconsistencies, submit your new findings through the oracle, and fix / extend its
+existing safe wrappers if necessary, justifying why they fix the existing state. 
 
 ### Locate your files
 
@@ -182,6 +181,9 @@ errors that occur during testing; fix them if they do.
 
 Emit the anchors for your items and delete the placehodler anchors. You **must**
 follow this precisely so we can keep track of work done.
+
+If you emitted more than one wrapper for the same item then duplicate its anchor
+so we can account them.
 
 ### Validate
 

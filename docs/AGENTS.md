@@ -23,52 +23,55 @@ and safe FFI function wrappers for making FFI calls.
 
 ## Types
 
- Both **port- and wrap-scope** types stay layout-compatible with C, having their
- definition wrapped in newtypes and field accessors placed in `impl` blocks on the type.
- 
- Lifecycle primitives of **port-scope** types are translated as free functions
- to native Rust. Field accessors and the type's definition stay behind wrappers
- and accessors. 
+ Both **port- and wrap-scope** types stay layout-compatible with C until they can be
+ opacified, which is mainly applicable to port-scope structs. The types that must stay
+ interoperable with C
+ have their definition wrapped in newtypes and field accessors placed in `impl` blocks
+ on the type.
  
  Rust consumers of types use the safe type's API instead of raw pointers or
  `unsafe` blocks.
 
-**Pointer fields.** Every field that is an owned reference, gets:
+**Pointer fields.** Every in-scope field that is an owned reference, gets at least:
  
- - a setter that moves ownership into `self`, drops the old reference
-   and sets the new one using `addr_of_mut!(...)`
+ - a setter that moves ownership into `self`, dropping the old reference
+   and setting the new one using `addr_of_mut!(...)`
  
  - two getters: one which transfers ownership out from `self`, leaving
    the field valid, and one which borrows the field's shared reference `&T`.
  
  - fields that are embedded by value get a borrow projecting
    getter `&T` over `addr_of(...)`; the caller reads through
-   `T`'s own `self` accessors. 
+   `T`'s own `self` accessors.
+
+   A field may have multiple accessor variants, depending on its type resolution,
+   ownership semantics, cardinality, etc.
 
 ## Functions, callbacks, and inline function pointers
 
- **Wrap-scope** functions, callbacks, and inline function pointers get a safe
-  wrapper that serialize wrapped
- references before calling their `ffi::` variant, and deserialize results back to
- safe wrappers upon return.
+ **Wrap-scope** functions, callbacks, and inline function pointers get one or more safe
+  wrappers that serialize wrapped references before calling their `ffi::` variant,
+  and deserialize results back to safe wrappers upon return.
  
- **Port-scope** ones are translated to native Rust and call
- the safe API when needing FFI dependencies.
+ **Port-scope** ones are translated to native Rust and call the safe API when
+ needing FFI dependencies.
 
 ## Macros
 
 We DO NOT port/wrap C macros in native Rust. When a body you port/wrap uses one,
-resolve it **at the call site**:
+resolve it at the call site:
 
 - **Macro that aliases a symbol**: check the macro's definition in the codebase
 and extract the underlying symbol(s) it expands to; bindgen already created a
 binding for the underlying symbol(s), so it shows up as an ordinary dep - call
-its **safe wrapper** (it is very likely already a dep of what you're porting).
+its safe wrapper (it is very likely already a dep of what you're porting).
 
 - **Function-like macro with no wrapper**: look for a
 `crustify_<NAME>(<ARG_DECLS>)` shim in `ffi::` - bindgen may have emitted one.
 Call it across the FFI seam like any other not-yet-ported C primitive. If the
-shim is absent, then emit it yourself and rerun bindgen.
+shim is absent, then emit it yourself and rerun bindgen. Then implement a safe
+wrapper for it like for regular functions, emitting an anchor for it according
+to our conventions.
 
 - **Constant macro**: use the `ffi::` binding directly.
 
@@ -83,26 +86,25 @@ return, field, and variable based on the ownership facets provided by the
 
 ### `unsafe` blocks and raw pointers
 
-They are confined to the few roles below; **everywhere else is idiomatic,
-fully-checked Rust**. This is load-bearing - the steps assume it.
+They are confined to the few roles below; everywhere else is idiomatic,
+fully-checked Rust. This is load-bearing - the steps assume it.
 
-- **The per-file `mod ffi_export` is the *only* raw C-ABI gateway.**
+- **The per-file `mod ffi_export` is the only raw C-ABI gateway.**
     Each ported file's re-exports live in a `mod ffi_export { use super::*; ...
-    }` submodule **in that same file**, by the functions they export. A raw C
-    signature (`*mut`/`*const ffi::T`, out-pointers) appears **only** inside
+    }` submodule in that same file, by the functions they export. A raw C
+    signature (`*mut`/`*const ffi::T`, out-pointers) appears only inside
     `mod ffi_export`, in the `#[no_mangle] extern "C"` re-export. That boundary
-    **reconstructs the safe wrappers** from the raw params and then **calls the
-    idiomatic `pub(crate) fn`** (its `super::` sibling).
+    reconstructs the safe wrappers from the raw params and then calls the
+    idiomatic `pub(crate) fn` (its `super::` sibling).
     
 - **Inner-module `unsafe` blocks are ONLY allowed in the following cases:**
-    (1) inside `impl T` blocks for reaching a wrapped type's state **through its
-    accessors** (the accessors own the `addr_of!` / `addr_of_mut!`); you **never**
+    (1) inside `impl T` blocks for reaching a wrapped type's state through its
+    accessors (the accessors own the `addr_of!` / `addr_of_mut!`); you never
     access a types field's outside the accessors, you use the accessors instead.
     
     (2) calling an `ffi::` routine inside its own safe wrapper or inside Rust-native
-    functions if the `ffi::` routine does not have a safe wrapper yet. Known routines
-    for which we don't emit wrappers yet:
-    - system / external.
+    functions if the `ffi::` routine does not have a safe wrapper yet (e.g. SCC cut cycles
+    of the DAG).
 
     (3) calling Rust-native functions declared unsafe. The allowed cases are:
     - calling an unsafe setter that passess a borrowed reference, which requires
@@ -118,14 +120,14 @@ fully-checked Rust**. This is load-bearing - the steps assume it.
 
 ### Reference borrows
 
-- **Never** instantiate a `&mut` to a wrapped type (in a function's signature
-or body). **Always** write through `&self` setters - the principle of interior 
+- Never instantiate a `&mut` to a wrapped type (in a function's signature
+or body). Always write through `&self` setters - the principle of interior 
 mutability.
 
 ### Field accesses
 
 Always read and write through `addr_of!` / `addr_of_mut!`, never through a bare
-`(*ptr).field` place expression. These are the *only* forms permitted for field access through a raw
+`(*ptr).field` place expression. These are the only forms permitted for field access through a raw
 pointer. The constructs that synthesise a borrow are forbidden.
 
 | Construct | Synthesises a borrow? | Use? |
@@ -139,11 +141,11 @@ pointer. The constructs that synthesise a borrow are forbidden.
 The `.rs` module for each target and dependency (types/symbols) is found via the
 `crustify-cli scaffold` command, which reflects the pre-established item placement policy.
 
-Each module is a **shared, file-grained module** - one Rust module per C source
+Each module is a shared, file-grained module - one Rust module per C source
 file, holding the following anchor kinds:
-- `// Replaces:` for port-scope items (functions / globals / types)
-- `// Wraps:` for wrap-scope items
-- `// Field:` for a type's field accessors
+- `// Replaces: <C_ITEM>` for port-scope items (functions / globals / types)
+- `// Wraps: <C_ITEM>` for wrap-scope items
+- `// Field: <C_ITEM>.<field>` for the `<C_ITEM>` type's `<field>` accessors
 
 Each module includes anchors for many elements at once (across batches,
 wrap *and* port). Any one agent owns only the anchors in its workset; the rest
@@ -153,15 +155,15 @@ once the target is processed.
 
 The per-anchor fill contract:
 
-- a target is **located** by its `// <Anchor>:` **item** anchor;
-- an assigned anchor is **filled** in place, every other left exactly as-is;
-- a filled anchor's `// <Anchor>:` line is **promoted** to a
-  `/// <Anchor>: <C_ITEM> (<file>.c/.h)` doc comment on the emitted item, and its
-  `// crustify:todo` is **deleted** (a surviving todo marks still-pending work).
+- a target is located by its `// <Anchor>:` item anchor;
+- an assigned anchor is filled in place, every other left exactly as-is;
+- a filled anchor's `// <Anchor>: <C_ITEM>` line is promoted to a
+  `/// <Anchor>: <C_ITEM>{.<field>}` doc comment on the emitted item, and its
+  `// crustify:todo` is deleted (a surviving todo marks still-pending work).
 
 ## Ownership analyis
 
-For struct fields and pointer args and return for functions and function pointers.
+For struct fields, pointer args and return (both functions and function pointers).
 Analysis is codebase-wide, unscoped, to catch the complete usage footprint of the
 anlyzed item. For ptr args, walk down the call graph of the target function and
 identify paths that free the arg.

@@ -32,27 +32,20 @@ definition, lifecycle ops, and implement field accessors.
 
 ## Steps
 
-### Scope
-
-**Fields.** You process your type's fields that are port-scope only, i.e. touched
-by port-scope symbols, leaving the rest of them untouched for a future session.
-
-**Lifetime primitives.** You process all the lifetime primitives of your type,
-regarless of scope.
-
 ### Discover your items 
-
 
 **Analysis oracle.** For each item in your target set use `crustify-oracle` to fetch its analysis record,
 including the pointer analysis of its fields (ownership, mutability, nullability, type,
 cardinality, etc.). If any of your work items lacks the agent-owned analysis, then you must do that first
 before proceeding with the wrappers. Use our established principles and the meaning of
-each agent-owned block.
+each agent-owned block. You process your type's fields that are port-scope only, i.e. touched
+by port-scope symbols, leaving the rest of them untouched for a future session.
 
 **Lifetime primitives.** Fetch the lifetime primitives for the types in your workset, which you will need for
 implementing the wrapper newtypes. If no lifetime records for them exist then you enter
 discovery mode and scout the codebase for them using our recommended heuristics, then
-submit your findings through the oracle.
+submit your findings through the oracle. You process all the lifetime primitives of your type,
+regarless of scope.
 
 **Reviewer mode.** If the agent-owned analysis of one of your items exists already, 
 or if its safe wrappers have already been emitted, then you act as a reviewer assessing their
@@ -197,6 +190,9 @@ during testing; fix them if they do.
 
 Emit the anchors for your items and delete the placehodler anchors. You **must** follow
 this precisely so we can keep track of work done.
+
+If you emitted more than one newtype wrapper for the same type or field accessor
+for the same field, duplicate their anchors so we can account them.
 
 If any of the lifetime strategies you emitted lives now in a different file than it's op's
 anchor (e.g. with the newtype's defintion), then replace the todo anchor with a thin cross-file
