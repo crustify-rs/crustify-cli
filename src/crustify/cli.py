@@ -1193,18 +1193,10 @@ def _build_filter_spec(
 # -- port dispatch --------------------------------------------------------
 
 def _handle_port(args: argparse.Namespace, target: Path) -> None:
-    from crustify.port import port
-    port(
-        target,
-        names=getattr(args, "name", None),
-        files=getattr(args, "files", None),
-        dag_layer=getattr(args, "dag_layer", None),
-        skip=getattr(args, "skip", None),
-        parallel=bool(getattr(args, "parallel", False)),
-        parallel_max=int(getattr(args, "parallel_max", 8)),
-        max_syms=getattr(args, "max_syms", None),
-        max_loc=getattr(args, "max_loc", None),
-        dry_run=bool(getattr(args, "dry_run", False)),
+    raise SystemExit(
+        "port: not implemented.\n"
+        "  The command and its flags are kept so a driver that already calls "
+        "them keeps parsing; nothing is emitted."
     )
 
 

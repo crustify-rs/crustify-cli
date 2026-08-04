@@ -24,7 +24,7 @@ crustify picks up at `analyze extract-ql`.
 | **scaffold** | `crates.json` -> `.rs` placement (query / create / validate) | - (`crates.json` is authored outside the stage; a lookup miss is a hard error) |
 | **bindgen** | `<lib>-sys` crate skeletons, allowlists, include closure | - (the `fn main`, clang args and shims are completed by hand) |
 | **wrap** | DAG-layered scheduler: scope filter, per-file/per-dep batching, budget slicing, per-wave isolation | per-unit wrapper agents (type / string / array / symbol); per-wave merge agent |
-| **port** | same scheduler (port scope) | per-unit port agents; per-wave merge agent |
+| **port** | not implemented | - |
 | **query / audit** | graph walks, record reads, surface counts | - (fully deterministic) |
 
 ## Invocation
@@ -89,9 +89,8 @@ the allowlists but no `fn main`, and `bindgen.h`'s shim block is empty.
 `--review` (also schedule already-wrapped units), `--out-suffix`,
 `--parallel`/`--parallel-max N`, `--dry-run`.
 
-**port** - emit ported Rust via the `--name` scheduler.
-`--name N...` \| `--dag-layer N`; `--file`, `--max-syms N`, `--max-loc N`,
-`--skip N...`, `--parallel`/`--parallel-max N`, `--dry-run`.
+**port** - not implemented. The command and its flags still parse; nothing is
+emitted.
 
 **audit** - deterministic (no LLM) unsafe / raw-pointer / naked-FFI surface scan ->
 `audit.json`. One seed selector: `--all` \| `--name N...` \| `--crate C` \| `--mod M`
