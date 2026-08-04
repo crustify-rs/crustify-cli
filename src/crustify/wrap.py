@@ -338,7 +338,7 @@ def wrap_lifetime_for(
     blocks already exist (``query symbols --lifetime-for <spec>``); when none
     do, it scouts the codebase for the routines that drop/dispose/clone
     ``spec`` and submits their blocks through the oracle first (see
-    `prompts/wrapper/symbol_wrapper.md`). Then it emits the Rust that turns
+    `prompts/symbols.md`). Then it emits the Rust that turns
     them into a lifetime contract — the strategy ZST plus the smart-pointer
     Drop/Clone impls a reference to ``spec`` needs to be owned in Rust.
 
@@ -358,7 +358,7 @@ def wrap_lifetime_for(
 
     The ordinary scope-only analysis tree is the right input: the agent's
     candidate set is wrap-scope by instruction
-    (`prompts/wrapper/symbol_wrapper.md`), so a primitive the target never
+    (`prompts/symbols.md`), so a primitive the target never
     reaches is not a gap.
     """
     if spec not in LIFETIME_TIERS:

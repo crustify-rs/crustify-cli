@@ -3,10 +3,10 @@
 One agent for every wrap unit the ``--name`` scheduler produces:
 
   * a **type** batch (a struct / union / enum + a budget slice of its field
-    accessors) — the lifecycle + field-accessor recipe in ``type_wrapper.md``;
+    accessors) — the lifecycle + field-accessor recipe in ``types.md``;
     synthetic string / array clusters use their own prompts, and
   * a **free-symbol** batch (functions / globals not bound to one type) —
-    ``symbol_wrapper.md``: a thin safe view over the FFI surface, no
+    ``symbols.md``: a thin safe view over the FFI surface, no
     field-access discipline (the symbol stays in C; you only add the safe
     wrapper).
 
@@ -29,12 +29,12 @@ from crustify.agents.base import CrustifyAgent, _PKG_ROOT
 
 # struct/union/enum share the type recipe.
 _PROMPT_BY_KIND: dict[str, str] = {
-    "struct":           "type_wrapper.md",
-    "union":            "type_wrapper.md",
-    "enum":             "type_wrapper.md",
+    "struct":           "types.md",
+    "union":            "types.md",
+    "enum":             "types.md",
 }
 # Type kinds with no wrapper codegen yet. Callbacks are NOT here: they route as
-# sym-units (see _schedule.form_units) to symbol_wrapper.md §3.
+# sym-units (see _schedule.form_units) to symbols.md §3.
 _NOT_YET: tuple[str, ...] = ()
 
 
@@ -43,7 +43,6 @@ class CrustifyWrap(CrustifyAgent):
 
     name = "CrustifyWrap"
     model = "anthropic/claude-opus-4-8"
-    prompt_dir = "wrapper"
     output = None  # scheduler gates via the per-item todo; agent runs when called.
 
     def __init__(
@@ -114,7 +113,7 @@ class CrustifyWrap(CrustifyAgent):
 
     def _prompt(self) -> str:
         if self._batch_kind == "syms":
-            return (_PKG_ROOT / "prompts" / "wrapper" / "symbol_wrapper.md").read_text()
+            return (_PKG_ROOT / "prompts" / "symbols.md").read_text()
         if self._kind in _NOT_YET:
             raise NotImplementedError(
                 f"CrustifyWrap: kind {self._kind!r} ({self._tags}) — "
@@ -124,7 +123,7 @@ class CrustifyWrap(CrustifyAgent):
             raise ValueError(
                 f"CrustifyWrap: unsupported manifest kind {self._kind!r} for "
                 f"{self._tags!r}. Expected one of {sorted(_PROMPT_BY_KIND)}.")
-        return (_PKG_ROOT / "prompts" / "wrapper" / prompt_file).read_text()
+        return (_PKG_ROOT / "prompts" / prompt_file).read_text()
 
     def _arguments(self) -> dict:
         crustify_root = _PKG_ROOT.parent.parent
@@ -144,7 +143,7 @@ class CrustifyWrap(CrustifyAgent):
                 crustify_root / ".." / "crustify-prim" / "src" / "lib.rs"),
             # Always-on principles preamble (AGENTS.md), with the role-scoped
             # skill index spliced into its `<!-- SKILLS_INDEX -->` sentinel.
-            # Inlined as `{principles}` (type_wrapper.md; harmless if unused).
+            # Inlined as `{principles}` (types.md; harmless if unused).
             "principles":     self._render_principles(),
         }
         # All wrap paths are now PULL: the agent discovers its job via `crustify
@@ -153,7 +152,7 @@ class CrustifyWrap(CrustifyAgent):
             # syms-pull: the pooled symbol names (+ defined_in for collisions).
             common["syms"] = json.dumps(self._syms)
             return common
-        # type_wrapper.md handles a single struct / union / enum: one tag + its
+        # types.md handles a single struct / union / enum: one tag + its
         # field-accessor window. The lifecycle (reverse-derived droppers /
         # disposers / cloners) and the cast graph are pulled from the record;
         # field accessors are the only windowed surface.

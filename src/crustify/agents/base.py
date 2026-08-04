@@ -77,7 +77,7 @@ class CrustifyAgent:
 
       - ``tier = "target"`` (default) — `<target>/.crustify/<output>`.
         Used by every agent that produces subsystem-scoped output
-        (port, type_wrapper, symbol_wrapper, …).
+        (types, symbols, …).
       - ``tier = "repo_root"`` — `<repo_root>/.crustify/<output>`. Used
         by agents whose artifact is project-wide and target-independent.
 

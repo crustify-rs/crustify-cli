@@ -199,7 +199,7 @@ def form_units(
 
     A **callback** (a function-pointer typedef, `subkind == "callback"`) is a
     `node_kind == "symbol"` node in the dag, so it falls through to the
-    sym-unit branch on its own — the wrap stage's `symbol_wrapper.md` (its
+    sym-unit branch on its own — the wrap stage's `symbols.md` (its
     callback section) emits the `#[repr(transparent)]` fn-pointer handle, not a
     struct wrapper."""
     type_meta = type_meta or {}
@@ -290,7 +290,7 @@ class Batch:
     members: list[Node] = field(default_factory=list)   # pending type/op nodes
     fields: list[str] = field(default_factory=list)     # pending field-accessor slice
     # Static-tiling windows for a single struct/union/enum batch (the
-    # ``type_wrapper`` pull path): half-open [lo:hi) into the type's canonical
+    # ``types.md`` pull path): half-open [lo:hi) into the type's canonical
     # field / op lists. ``None`` for family/sym batches (push path).
     op_range: tuple[int, int] | None = None
     field_range: tuple[int, int] | None = None
