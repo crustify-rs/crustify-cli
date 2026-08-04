@@ -12,17 +12,27 @@
 # appear as symlinks inside per-agent worktrees (see worktree.link_shared) -
 # a `dir/` pattern would not match the symlink and git would stage it. A bare
 # name matches both the directory and the symlink, so neither is ever tracked.
+
+# Agent backends
 .providers
+
+# Rust build artefacts
 rust/target
 rust.bak
+
+# Temporary scratch dirs
 bak
-codeql
-analysis
-targets
 tmp
 .worktrees
+
+# Analysis schemas
+targets
+codeql
+analysis
 build.json
-cli-config.json
 crates.json
+cli-config.json
+
+# Evaluation artefacts
 stats.md
 evaluation/
