@@ -808,16 +808,37 @@ def schedule(
 
     # Run each layer in turn, lower → higher; a layer's agents land on the
     # session branch before the next layer forks its worktrees from it.
+    #
+    # `session.log` brackets THIS loop, so it captures what no agent record
+    # can: worktree forking, the barrier between layers, and the land tail.
+    # Its checkpoints flush per layer, so a killed run still accounts for the
+    # layers that completed.
+    from crustify import config as _cfg
+    from crustify.agentlog import open_session_log
+
+    log_root = None
+    if layout is not None and stage.target is not None:
+        log_root = layout.logs(stage.target) / _cfg.SESSION_ID
+
     failures: list[tuple[Batch, BaseException]] = []
-    for li in layers:
-        lb = pack(by_layer[li], max_syms=stage.max_syms,
-                  max_fields=stage.max_fields, max_loc=stage.max_loc)
-        if not lb:
-            continue
-        if len(layers) > 1:
-            print(f"\n[{stage.verb}] dependency layer {li}: {len(by_layer[li])} "
-                  f"unit(s) → {len(lb)} batch(es) (lower layers already landed)")
-        show_plan(by_layer[li], lb, by_key, stage.in_scope, stage.verb)
-        failures += run(lb, stage, parallelize=parallelize,
-                        parallel_max=parallel_max)
+    with open_session_log(log_root, stage.verb) as slog:
+        slog.line(f"[crustify] {len(units)} unit(s), {len(layers)} layer(s), "
+                  f"parallel={parallelize} max={parallel_max}")
+        for li in layers:
+            lb = pack(by_layer[li], max_syms=stage.max_syms,
+                      max_fields=stage.max_fields, max_loc=stage.max_loc)
+            if not lb:
+                continue
+            if len(layers) > 1:
+                print(f"\n[{stage.verb}] dependency layer {li}: {len(by_layer[li])} "
+                      f"unit(s) → {len(lb)} batch(es) (lower layers already landed)")
+            show_plan(by_layer[li], lb, by_key, stage.in_scope, stage.verb)
+            before = len(failures)
+            failures += run(lb, stage, parallelize=parallelize,
+                            parallel_max=parallel_max)
+            slog.checkpoint(
+                f"layer {li}: {len(by_layer[li])} unit(s), {len(lb)} batch(es), "
+                f"{len(failures) - before} failure(s)")
+        slog.line(f"[crustify] {len(failures)} failure(s) over "
+                  f"{len(all_batches)} batch(es)")
     return failures

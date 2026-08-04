@@ -36,7 +36,8 @@ Both tables are fetched once and cached to ``--price-cache``.
 
 Two views:
   * per agent KIND  (port / wrap / merge / scaffold / analyze) — kind from
-    the log filename prefix; wall-clock = file birth(%W) -> mtime(%Y).
+    the log filename prefix; wall-clock = the record's ``duration_ms``,
+    counted under ``no-wall`` when the record predates that stamp.
   * per WAVE        — session dirs mapped to the wave whose commit
     immediately follows the dir's merge mtime; cost split by agent kind.
 
@@ -259,6 +260,25 @@ def stat(path, fmt):  # %W birth, %Y mtime
         return 0
 
 
+def wall_seconds(usage_path):
+    """This agent's wall clock in seconds, or ``None`` when unrecorded.
+
+    ``duration_ms`` is stamped by :mod:`crustify.agentlog` around the
+    subprocess. Records written before that stamp existed carry no timing and
+    return ``None`` -- counted as unmeasured rather than folded in as zero,
+    which would understate every total silently. (This column read ``0h00m``
+    for every run in exactly that way: it used to derive the span from this
+    file's own birth -> mtime, but ``usage.json`` is written once at the end,
+    so the two are the same instant.)
+    """
+    try:
+        with open(usage_path, errors="replace") as fh:
+            ms = json.load(fh).get("duration_ms")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return ms / 1000.0 if isinstance(ms, (int, float)) and ms >= 0 else None
+
+
 def hm(s):
     s = int(s)
     return f"{s // 3600}h{(s % 3600) // 60:02d}m"
@@ -284,7 +304,8 @@ def main():
                             "logs", "**", "*.usage.json")
 
     kc = defaultdict(float); kr = defaultdict(int)
-    kw = defaultdict(int); kn = defaultdict(int)   # kn = rows with no priceable cost
+    kw = defaultdict(float); kn = defaultdict(int)  # kn = rows with no priceable cost
+    kx = defaultdict(int)                           # kx = rows with no recorded wall
     logs = sorted(glob.glob(log_glob, recursive=True))
     if not logs:
         print(f"no agent logs under {log_glob}", file=sys.stderr)
@@ -301,18 +322,25 @@ def main():
             kn[k] += 1
         else:
             kc[k] += cost
-        kw[k] += max(stat(p, "%Y") - stat(p, "%W"), 0)
+        w = wall_seconds(p)
+        if w is None:
+            kx[k] += 1
+        else:
+            kw[k] += w
 
     print("=== PER AGENT KIND ===")
-    print(f"{'kind':<10}{'runs':>5}{'no-price':>10}{'$ total':>10}{'$/run':>8}{'Σwall':>9}")
+    print(f"{'kind':<10}{'runs':>5}{'no-price':>10}{'no-wall':>9}"
+          f"{'$ total':>10}{'$/run':>8}{'Σwall':>9}")
     tc = tr = tw = 0
     for k in ["port", "wrap", "merge", "scaffold", "analyze", "bindgen", "other"]:
         if not kr.get(k):
             continue
         per = kc[k] / kr[k] if kr[k] else 0.0
-        print(f"{k:<10}{kr[k]:>5}{kn[k]:>10}{kc[k]:>10.2f}{per:>8.2f}{hm(kw[k]):>9}")
+        print(f"{k:<10}{kr[k]:>5}{kn[k]:>10}{kx[k]:>9}"
+              f"{kc[k]:>10.2f}{per:>8.2f}{hm(kw[k]):>9}")
         tc += kc[k]; tr += kr[k]; tw += kw[k]
-    print(f"{'Σ':<10}{tr:>5}{sum(kn.values()):>10}{tc:>10.2f}{'':>8}{hm(tw):>9}")
+    print(f"{'Σ':<10}{tr:>5}{sum(kn.values()):>10}{sum(kx.values()):>9}"
+          f"{tc:>10.2f}{'':>8}{hm(tw):>9}")
 
     # ---- per-wave (map session dirs between consecutive wave commits) ----
     out = subprocess.run(["git", "-C", args.repo_root, "log", "--all",
