@@ -87,11 +87,11 @@ the allowlists but no `fn main`, and `bindgen.h`'s shim block is empty.
 `--wrap-only`/`--port-only`, `--max-fields N`, `--max-syms N` (per-agent budgets),
 `--skip N...`, `--transitive` (expand each `--name` through its dep closure),
 `--review` (also schedule already-wrapped units), `--out-suffix`,
-`--parallel`/`--parallel-max N`, `-y`, `--dry-run`.
+`--parallel`/`--parallel-max N`, `--dry-run`.
 
 **port** - emit ported Rust via the `--name` scheduler.
 `--name N...` \| `--dag-layer N`; `--file`, `--max-syms N`, `--max-loc N`,
-`--skip N...`, `--parallel`/`--parallel-max N`, `-y`, `--dry-run`.
+`--skip N...`, `--parallel`/`--parallel-max N`, `--dry-run`.
 
 **audit** - deterministic (no LLM) unsafe / raw-pointer / naked-FFI surface scan ->
 `audit.json`. One seed selector: `--all` \| `--name N...` \| `--crate C` \| `--mod M`

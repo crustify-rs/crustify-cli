@@ -177,8 +177,12 @@ class Unit:
         return [self.node, *self.ops]
 
     def label(self) -> str:
-        if self.kind == "type":
-            return f"{self.node.id}(+{len(self.fields)}f/{len(self.ops)}ops)"
+        # No field/op counts: `fields` here is the type's DECLARED list, while
+        # the scaffolder anchors only the port-touched subset, so the two
+        # disagree — `evp_keymgmt_st` reported 35 fields against 0 anchors on
+        # disk. The agent works from the anchors, so a count taken from
+        # anywhere else is at best noise and at worst an instruction to exceed
+        # them.
         return self.node.id
 
 
@@ -731,10 +735,9 @@ def schedule(
     stage: Stage,
     parallelize: bool = False,
     parallel_max: int = 4,
-    yes: bool = False,
     dry_run: bool = False,
 ) -> list[tuple[Batch, BaseException]]:
-    """End-to-end: resolve --names → units → budget batches → confirm → run.
+    """End-to-end: resolve --names → units → budget batches → run.
     ``dry_run`` stops after printing the plan."""
     by_key, by_name = load_nodes(dag)
     nodes, unknown = resolve_names(names, by_key, by_name, stage.in_scope)

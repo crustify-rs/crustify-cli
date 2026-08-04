@@ -408,10 +408,6 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
         help="Max concurrent agents across disjoint files (with --parallel).",
     )
     p.add_argument(
-        "-y", "--yes", action="store_true",
-        help="Skip the dependency-confirmation prompt.",
-    )
-    p.add_argument(
         "--dry-run", action="store_true", dest="dry_run",
         help="Print the plan (units, batches, first-layer deps) and stop.",
     )
@@ -847,10 +843,6 @@ def main() -> None:
         help="Max concurrent agents across disjoint files (with --parallel).",
     )
     port_p.add_argument(
-        "-y", "--yes", action="store_true",
-        help="Skip the dependency-confirmation prompt.",
-    )
-    port_p.add_argument(
         "--dry-run", action="store_true", dest="dry_run",
         help="Print the plan (units, batches, first-layer deps) and stop.",
     )
@@ -1212,7 +1204,6 @@ def _handle_port(args: argparse.Namespace, target: Path) -> None:
         parallel_max=int(getattr(args, "parallel_max", 8)),
         max_syms=getattr(args, "max_syms", None),
         max_loc=getattr(args, "max_loc", None),
-        yes=bool(getattr(args, "yes", False)),
         dry_run=bool(getattr(args, "dry_run", False)),
     )
 
@@ -1321,7 +1312,6 @@ def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
         parallel_max=int(getattr(args, "parallel_max", 8)),
         max_fields=getattr(args, "max_fields", None),
         max_syms=getattr(args, "max_syms", None),
-        yes=bool(getattr(args, "yes", False)),
         dry_run=bool(getattr(args, "dry_run", False)),
     )
 

@@ -168,7 +168,6 @@ def port(
     parallel_max: int = 8,
     max_syms: int | None = None,
     max_loc: int | None = None,
-    yes: bool = False,
     dry_run: bool = False,
     emit_fn=None,
 ) -> None:
@@ -337,7 +336,7 @@ def port(
     failures = S.schedule(
         dag=dag, analysis_root=layout.analysis,
         names=sel_names, stage=stage, parallelize=parallel,
-        parallel_max=parallel_max, yes=yes, dry_run=dry_run)
+        parallel_max=parallel_max, dry_run=dry_run)
     if failures:
         detail = "; ".join(
             f"{b.label()} ({type(e).__name__}: {e})" for b, e in failures
