@@ -79,13 +79,15 @@ the allowlists but no `fn main`, and `bindgen.h`'s shim block is empty.
 |---|---|
 | `types` / `symbols` (alias `syms`) | enumerate, or `--name` introspect; `--schema`, `--manifest`, `--update FINDINGS`/`--update-help`, `--file`, `--port-only`/`--wrap-only`; types: `--fields`/`--field-touchers`/`--ops`/`--methods`/`--range A:B`; syms: `--fields`, `--array`, `--taking SPEC`/`--calling FN`/`--lifetime-for SPEC` (`--hops N`) |
 | `files` | `--port-only` \| `--wrap-only` (scope file sets) |
-| `dag` | `--name N...` (closure) \| `--layer N` (slice) \| `--name X --scc`; `--file`, `--depth N`, `--with-details`, `--loc`, `--port-only`/`--wrap-only` |
+| `dag` | `--name N...` (closure) \| `--layer N` (slice) \| `--name X --scc`; `--file`, `--depth N`, `--loc`, `--port-only`/`--wrap-only` |
 
 **wrap** - emit Rust wrappers for wrap-scope units in dependency-layer order
 (requires `scaffold` + `bindgen` to have run).
 `--name N...` \| `--dag-layer N` \| `--lifetime-for SPEC`; `--file`,
 `--wrap-only`/`--port-only`, `--max-fields N`, `--max-syms N` (per-agent budgets),
-`--skip N...`, `--out-suffix`, `--parallel`/`--parallel-max N`, `-y`, `--dry-run`.
+`--skip N...`, `--transitive` (expand each `--name` through its dep closure),
+`--review` (also schedule already-wrapped units), `--out-suffix`,
+`--parallel`/`--parallel-max N`, `-y`, `--dry-run`.
 
 **port** - emit ported Rust via the `--name` scheduler.
 `--name N...` \| `--dag-layer N`; `--file`, `--max-syms N`, `--max-loc N`,
@@ -99,6 +101,9 @@ the allowlists but no `fn main`, and `bindgen.h`'s shim block is empty.
 
 `--name` takes a space-separated list (the user supplies dependency order);
 `--file` disambiguates same-named entities; `--dag-layer N` (wrap) selects a
-whole DAG layer. The scheduler never gates on whether a dep is already emitted -
-the C/FFI bridge keeps every intermediate state compiling - and prints the
-first-layer deps before running (`--dry-run` to stop there).
+whole DAG layer. `wrap` drops a selected unit once its `// crustify:todo`
+placeholders are gone - the `// Wraps:` anchor plus, for a type, its port-scope
+`// Field:` anchors; `--review` keeps them. The scheduler never gates on whether
+a DEP is already emitted - the C/FFI bridge keeps every intermediate state
+compiling - and prints the first-layer deps before running (`--dry-run` to stop
+there).
