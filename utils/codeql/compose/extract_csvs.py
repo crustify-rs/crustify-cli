@@ -21,6 +21,7 @@ still get emitted. The composer modules tolerate missing CSVs
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -51,18 +52,30 @@ def _run_query(
         return False, f"query run failed: {r.stderr.strip()[:200]}"
 
     # codeql bqrs decode --format=csv --output=<csv> <bqrs>
+    #
+    # Decode to a sibling temp path and `os.replace` into position rather than
+    # letting codeql write `csv_out` directly. The CSVs live in the ONE shared
+    # `codeql/` dir that every agent worktree symlinks, and readers
+    # (`query._scope_touched_fields` streams `field_accesses.csv` unlocked)
+    # take no lock. A direct write truncates in place, so a reader landing in
+    # that window gets a SHORT read -- fewer field touchers, no error, no
+    # warning. `os.replace` is atomic within a filesystem: a reader sees the
+    # whole old file or the whole new one.
+    tmp_out = csv_out.with_name(csv_out.name + ".tmp")
     r = subprocess.run(
         [
             "codeql", "bqrs", "decode",
             "--format=csv",
-            "--output", str(csv_out),
+            "--output", str(tmp_out),
             str(bqrs_out),
         ],
         capture_output=True,
         text=True,
     )
     if r.returncode != 0:
+        tmp_out.unlink(missing_ok=True)
         return False, f"bqrs decode failed: {r.stderr.strip()[:200]}"
+    os.replace(tmp_out, csv_out)
 
     return True, "ok"
 

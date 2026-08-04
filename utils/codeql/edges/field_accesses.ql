@@ -38,23 +38,28 @@
  * files touch a struct's fields directly) and `fields[].used_by`
  * (port vs wrap users per field).
  *
- * Anonymous declaring types (`struct { int x; } y;` accessed via
- * `y.x`) are emitted with `struct_name = ""`. Consumers may want to
- * filter those out, but the rows are kept in the result set to
- * surface the corner case rather than silently drop it.
+ * `struct_name` carries the declaring aggregate's IDENTITY, not
+ * `getName()` verbatim: an anonymous aggregate declared inline as a
+ * typedef's underlying type (`typedef struct { ... } T;`) resolves to
+ * the typedef name via `identity.qll`, matching what
+ * `entities/types.ql` stamped `struct_anonymous` and what
+ * `types_manifest.py` adopted as the entry's identity. Without that
+ * resolution these rows all collapse into the single bucket
+ * `(unnamed class/struct/union)` — 12,307 of 74,015 rows on the
+ * OpenSSL tree — and every consumer keying on `struct_name` drops
+ * them, so `PACKET` / `OSSL_TIME` / `CLIENTHELLO_MSG` read as though
+ * no function ever touches a field of theirs.
+ *
+ * An anonymous aggregate EMBEDDED in a named struct
+ * (`struct N { struct { int x; } inner; }`) has no typedef to resolve
+ * to; its identity is the enclosing named struct, reachable only from
+ * the qualifier chain. Those rows keep the placeholder here and are
+ * resolved by `edges/fa_with_root.ql`, which emits `root_struct_name`
+ * and the dotted `field_path` for exactly this case. Consumers
+ * needing full coverage should join the two.
  */
 import cpp
-
-/**
- * Repository-relative path, falling back to absolute for files outside the
- * source root (system/external headers) — keeps system entities' identity
- * consistent with the T1 entity CSVs.
- */
-string pathOf(File f) {
-  if exists(f.getRelativePath())
-  then result = f.getRelativePath()
-  else result = f.getAbsolutePath()
-}
+import identity
 
 string enclosingNameOf(FieldAccess fa) {
   if exists(fa.getEnclosingFunction())
@@ -82,7 +87,7 @@ from FieldAccess fa, Field f
 where f = fa.getTarget()
 select enclosingNameOf(fa) as enclosing_name,
        pathOf(fa.getFile()) as access_file,
-       f.getDeclaringType().getName() as struct_name,
+       canonicalTypeName(f.getDeclaringType()) as struct_name,
        structDefFileOf(f) as struct_def_file,
        f.getName() as field_name,
        accessKindOf(fa) as access_kind,

@@ -13,24 +13,17 @@
  * treated as anonymous; we recurse via the qualifier expression
  * until we hit either a Field whose declaring struct is non-anon,
  * or a non-FieldAccess base whose Type strips to a non-anon struct.
+ *
+ * That outward walk resolves an anonymous aggregate EMBEDDED in a named
+ * one, but it cannot resolve `typedef struct { ... } T;` — there is no
+ * named ancestor to reach, because the name sits sideways on the typedef.
+ * Both emitted names therefore run through `identity.qll`'s
+ * `canonicalTypeName`, which supplies the typedef identity for that case;
+ * the qualifier walk still owns the embedded one. A row keeps the
+ * `(unnamed ...)` placeholder only when NEITHER resolution applies.
  */
 import cpp
-
-/**
- * Repository-relative path, falling back to absolute for files outside the
- * source root (system/external headers) — keeps system entities' identity
- * consistent with the T1 entity CSVs.
- */
-string pathOf(File f) {
-  if exists(f.getRelativePath())
-  then result = f.getRelativePath()
-  else result = f.getAbsolutePath()
-}
-
-bindingset[n]
-predicate isAnonNamed(string n) {
-  n = "" or n.matches("(unnamed%")
-}
+import identity
 
 string enclosingNameOf(FieldAccess fa) {
   if exists(fa.getEnclosingFunction())
@@ -95,8 +88,8 @@ where f = fa.getTarget()
   and rootT = rootNamedDeclaringType(fa)
 select enclosingNameOf(fa) as enclosing_name,
        pathOf(fa.getFile()) as access_file,
-       f.getDeclaringType().getName() as struct_name,
-       rootT.getName() as root_struct_name,
+       canonicalTypeName(f.getDeclaringType()) as struct_name,
+       canonicalNameOfType(rootT) as root_struct_name,
        structDefFileOf(rootT) as root_struct_def_file,
        f.getName() as field_name,
        rootFieldPath(fa) as field_path,
