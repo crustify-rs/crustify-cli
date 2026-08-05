@@ -79,7 +79,7 @@ crustify-cli [--no-console] [--no-file-log] [--model NAME] [--parallel] [--paral
 | `--parallel-max N` | max concurrent agents (default 8) |
 | `--parallel-policy P` | `per-agent` (default) \| `serialize-per-file` (chain batches sharing a home `.rs`) \| `per-file` (pool free symbols per defining file) |
 | `--billing subscription\|api` | how the provider CLI authenticates (default `subscription`) |
-| `--override-base-prompt` / `--no-` | replace the provider CLI's own base prompt with crustify's (default: replace) |
+| `--override-base-prompt` / `--no-` | replace the provider CLI's own base prompt with crustify's (default: **keep** the provider's) |
 
 ## Commands
 

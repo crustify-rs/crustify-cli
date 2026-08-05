@@ -456,9 +456,10 @@ def main() -> None:
         "--override-base-prompt",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Replace the provider CLI's own base prompt with crustify's "
-             "(default). --no-override-base-prompt keeps the provider's "
-             "instructions underneath crustify's stage prompt.",
+        help="Replace the provider CLI's own base prompt with crustify's. "
+             "Default is --no-override-base-prompt: the provider's own "
+             "instructions stay underneath crustify's stage prompt. Replacing "
+             "them is cheaper per invocation but measurably worse output.",
     )
     parser.add_argument(
         "--parallel",
