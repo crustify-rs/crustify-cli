@@ -166,8 +166,15 @@ def add_worktree(repo: Path, base_ref: str, slug: str) -> Path:
     return wt
 
 
-_SHARED = (".providers", "analysis", "analysis.baseline", "codeql", "targets",
-           "tmp", "crates.json", "build.json", "cli-config.json")
+#: Gitignored, read-only-across-a-wave artifacts symlinked into each worktree.
+#: An artifact that is TRACKED must not be here: git checks it out from HEAD, so
+#: the worktree already holds it (and for a written one, sharing it would send
+#: every agent's writes into the same file). `analysis`, `crates.json` and
+#: `build.json` left when they became tracked -- `analysis` matters most, since
+#: agents WRITE it via `query --update`: each now submits into its own checked-out
+#: copy and its landing commit carries the findings, the same route its Rust
+#: output already takes.
+_SHARED = (".providers", "codeql", "targets", "tmp", "cli-config.json")
 
 #: Shared entries created ON DEMAND rather than by an earlier stage, so the
 #: main checkout may not hold them yet when the first wave starts. They are
@@ -230,6 +237,29 @@ def link_shared(wt: Path, repo: Path) -> None:
         # absent, since an empty stand-in for one of those is worse than none.
         if not src.exists() and d in _SHARED_LAZY_DIRS:
             src.mkdir(parents=True, exist_ok=True)
-        if src.exists() and not dst.exists():
+        if src.exists():
             dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.symlink_to(src.resolve())
+            _link_into(src, dst)
+
+
+def _link_into(src: Path, dst: Path) -> None:
+    """Symlink ``src`` at ``dst``, or — when ``dst`` already exists as a real
+    directory — link ``src``'s missing children into it, recursively.
+
+    The plain case is a whole shared dir that the worktree does not have. The
+    recursive case exists because a shared dir may be PARTIALLY materialized by
+    the checkout: `targets/` holds the tracked `<t>/scope-config.json` beside the
+    gitignored `scope.json`, `deps-dag.json` and `logs/`, so `git worktree add`
+    creates `targets/<t>/` and a whole-dir symlink would be skipped. Skipping it
+    would send the wave's per-agent logs into the worktree, where the purge takes
+    them — losing exactly the cost and wall records a run is measured by.
+
+    A destination that already exists as a symlink or file is left alone: it is
+    either a previous link or a tracked artifact that must win."""
+    if not dst.exists():
+        dst.symlink_to(src.resolve())
+        return
+    if dst.is_symlink() or not (dst.is_dir() and src.is_dir()):
+        return
+    for child in src.iterdir():
+        _link_into(child, dst / child.name)
