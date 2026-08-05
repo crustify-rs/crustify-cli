@@ -441,7 +441,7 @@ def _introspect(
     lists, the ``--manifest`` types.json that homes it, or a ``--update``
     findings ingest. (The entry's ``.rs`` module is found via ``scaffold
     --name``.)"""
-    from crustify import _schedule as S
+    from crustify import dag as D
 
     if fields or ops or methods or field_touchers or manifest or update is not None:
         layout, node, by_key = _resolve(target, kind=kind, name=names[0], files=files)
@@ -488,7 +488,7 @@ def _introspect(
             _field_touchers(layout, target, node.id, node.defined_in,
                        wrap_only=wrap_only, port_only=port_only)
             return
-        meta = S.load_type_meta(layout.analysis)
+        meta = D.load_type_meta(layout.analysis)
         flds, lifecycle = meta.get(node.id, ([], set()))
         if fields:
             entry = _load_type_entry(layout.analysis, node.id, node.defined_in)
@@ -511,7 +511,7 @@ def _introspect(
             sj = layout.scope(target)
             op_pred = (_sc.in_scope_pred(sj, "wrap" if wrap_only else "port")
                        if sj.exists() else (lambda _n: False))
-        win = _window(S.ordered_ops(node, by_key, lifecycle, op_pred), rng)
+        win = _window(D.ordered_ops(node, by_key, lifecycle, op_pred), rng)
         print("\n".join(o.id for o in win))
         return
 
@@ -1654,9 +1654,10 @@ def _resolve(target, *, kind: str, name: str, files: list[str] | None):
     """``(layout, node, by_key)`` for one type/symbol, resolved from the
     composer-emitted manifest tree (never the dag — see the note above). For a
     *type*, ``by_key`` is populated with the type's op nodes (resolved from
-    ``syms.json``) so :func:`_schedule.ordered_ops` can serve ``--ops``.
+    ``syms.json``) so :func:`dag.ordered_ops` can serve ``--ops`` — it
+    selects them out of ``by_key`` by lifecycle name, the dag storing none.
     Raises ``SystemExit`` on miss/ambiguity."""
-    from crustify import _schedule as S
+    from crustify import dag as D
     from crustify.layout import Layout
 
     verb = "type" if kind == "type" else "sym"
@@ -1698,9 +1699,9 @@ def _resolve(target, *, kind: str, name: str, files: list[str] | None):
                 uniq[df] = e
 
     def _mk(e: dict):
-        return S.Node(id=name, node_kind=kind, subkind=str(e.get("kind") or "symbol"),
+        return D.Node(id=name, node_kind=kind, subkind=str(e.get("kind") or "symbol"),
                       defined_in=e.get("defined_in"),
-                      layer=0, ops=[], dep_types=[], dep_syms=[])
+                      layer=0, dep_types=[], dep_syms=[])
 
     node = _pick([_mk(e) for e in uniq.values()])
     by_key = {node.key: node}
@@ -1713,16 +1714,13 @@ def _resolve(target, *, kind: str, name: str, files: list[str] | None):
             scope.build_lifecycle_index(layout.analysis))
         if op_names:
             sidx = _syms_index(layout.analysis)
-            keys = []
             for nm in op_names:
                 se = sidx.get(nm) or {}
-                onode = S.Node(id=nm, node_kind="symbol",
+                onode = D.Node(id=nm, node_kind="symbol",
                                subkind=str(se.get("kind") or "symbol"),
                                defined_in=se.get("defined_in"), layer=0,
-                               ops=[], dep_types=[], dep_syms=[])
+                               dep_types=[], dep_syms=[])
                 by_key[onode.key] = onode
-                keys.append(onode.key)
-            node.ops = keys
     return layout, node, by_key
 
 
@@ -1757,7 +1755,8 @@ def _load_sym_entry(analysis: Path, name: str, defined_in: str | None) -> dict |
     return fallback
 
 
-def _dag_loc(by_key, by_name, names, files, layer, as_json, keep=None) -> None:
+def _dag_loc(by_key, by_name, names, files, layer, as_json, keep=None,
+             ops_of=None) -> None:
     """``query dag --loc`` — translated-LoC accounting over the dag.
 
     A **type**'s LoC is ``node.loc`` (its struct field count, Rule 1) **plus**
@@ -1775,20 +1774,22 @@ def _dag_loc(by_key, by_name, names, files, layer, as_json, keep=None) -> None:
     # Identity of every folded type-op, gathered globally (an op can sit a layer
     # below its type). Ops with a resolved file match by (name, file); ambiguous
     # ones (file None) match by name, mirroring the scheduler's fallback.
-    op_keys: set = set()
+    # `ops_of` maps a type tag -> its lifecycle op NAMES, reverse-derived from
+    # the analysis tree (`load_type_meta`). The dag stores no ops: it is a
+    # deterministic artifact of the C, and a type's lifecycle is agent-submitted.
+    ops_of = ops_of or {}
     op_names: set = set()
     for n in by_key.values():
         if n.node_kind == "type":
-            for nm, df in n.ops:
-                op_keys.add((nm, df)) if df else op_names.add(nm)
+            op_names |= ops_of.get(n.id) or set()
 
     def is_folded_op(n) -> bool:
-        return (n.id, n.defined_in) in op_keys or n.id in op_names
+        return n.node_kind == "symbol" and n.id in op_names
 
     def nops(n) -> int:
-        # A type's method surface is exactly its `ops` (its reverse-derived
-        # lifecycle); there is no second op list to union in.
-        return len({nm for nm, _ in n.ops})
+        # A type's method surface is exactly its reverse-derived lifecycle;
+        # there is no second op list to union in.
+        return len(ops_of.get(n.id) or ())
 
     def val(n) -> int:
         # type: field count (node.loc) + 1 per op; function: its body LoC.
@@ -1886,7 +1887,7 @@ def query_dag(
     ``--file`` disambiguates a ``--name`` collision."""
     from collections import deque
 
-    from crustify import _schedule as S
+    from crustify import dag as D
     from crustify.layout import Layout
 
     layout = Layout.discover(target)
@@ -1896,12 +1897,13 @@ def query_dag(
             f"query dag: no deps-dag.json at {layout.analysis}. "
             f"Run `crustify-cli {target} analyze dag` first.")
     dag = json.loads(dag_path.read_text())
-    by_key, by_name = S.load_nodes(dag)
+    by_key, by_name = D.load_nodes(dag)
     keep = _scope_predicate(layout, target, wrap_only, port_only)
 
     # ── mode: LoC view ─────────────────────────────────────────────────
     if loc:
-        _dag_loc(by_key, by_name, names, files, layer, False, keep)
+        ops_of = {t: lc for t, (_f, lc) in D.load_type_meta(layout.analysis).items()}
+        _dag_loc(by_key, by_name, names, files, layer, False, keep, ops_of)
         return
 
     def _emit(rows: list) -> None:

@@ -27,14 +27,9 @@ dirs never collide and clobber each other's ``<stage>.log``.
 # ---------------------------------------------------------------------------
 # Used by the wrap orchestrator (``crustify.wrap``) to cap the workload handed
 # to a single ``CrustifyWrap`` type-wrapper agent. The orchestrator slices each
-# selected type's surface deterministically and passes the agent a *fixed*
-# worklist; surface beyond the budget is recorded in the wrapper's roadmap
-# comment and left for a follow-up pass. This guards against "god objects"
-# (a type with hundreds of fields / ops) blowing a single agent's context.
-
-WRAP_MAX_FIELDS: int = 50
-"""Maximum number of ``fields[]`` entries handed to one type-wrapper agent
-(manifest order; the first N are wrapped, the rest deferred)."""
+# selected surface deterministically and passes the agent a *fixed* worklist.
+# A TYPE is never split — it is one batch with all its ops and accessors. Only
+# the free-symbol pool is budgeted.
 
 WRAP_MAX_SYMS: int = 50
 """Per-batch symbol budget for the wrap stage — wired as the scheduler's
@@ -85,14 +80,6 @@ this model instead of its hard-coded per-agent default. None => each
 agent's own default.
 
 Named ``<provider>/<model>`` — see :mod:`crustify.models`."""
-
-BACKEND: str | None = None
-"""Force a specific agent backend (CLI ``--backend``), overriding the one
-:mod:`crustify.models` derives from the model name.
-
-None (the default) means derive: the model decides, since a Claude model
-can only be driven by the claude CLI and an OpenAI one only by codex. Set
-this only to force a pairing. See :mod:`crustify.agents.backends`."""
 
 BILLING: str = "subscription"
 """How the provider CLI authenticates (set by the CLI ``--billing`` flag):

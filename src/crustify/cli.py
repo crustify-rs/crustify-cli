@@ -348,11 +348,6 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
         help="Narrow the selection to port-scope entities.",
     )
     p.add_argument(
-        "--max-fields", type=int, default=None, metavar="N", dest="max_fields",
-        help="Per-type field budget: wrap at most the first N fields[] of a "
-             "type, deferring the rest. Default: config.WRAP_MAX_FIELDS.",
-    )
-    p.add_argument(
         "--max-syms", type=int, default=None, metavar="N", dest="max_syms",
         help="Per-batch symbol budget for wrap: a type's op-chunk size "
              "(lifecycle + method ops counted together) AND the free-symbol "
@@ -404,10 +399,6 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
              "canonical names, so a suffixed run is promoted by renaming.",
     )
     p.add_argument(
-        "--parallel-max", type=int, default=8, metavar="N", dest="parallel_max",
-        help="Max concurrent agents across disjoint files (with --parallel).",
-    )
-    p.add_argument(
         "--dry-run", action="store_true", dest="dry_run",
         help="Print the plan (units, batches, first-layer deps) and stop.",
     )
@@ -454,11 +445,6 @@ def main() -> None:
              "agent's hard-coded model.",
     )
     parser.add_argument(
-        "--backend",
-        default=None,
-        help="Agent backend driving each stage. Default: config.BACKEND.",
-    )
-    parser.add_argument(
         "--billing",
         default=None,
         choices=["subscription", "api"],
@@ -483,13 +469,34 @@ def main() -> None:
              "help. The analyze subjects are composer-only and ignore it.",
     )
     parser.add_argument(
+        "--parallel-policy",
+        choices=("per-agent", "serialize-per-file", "per-file"),
+        default="per-agent",
+        metavar="POLICY",
+        help="How `--parallel` treats batches sharing a home `.rs`. "
+             "`per-agent` (default) gives every batch its own worktree and "
+             "agent, so two types homed in one module still run concurrently "
+             "and reconcile as they land. `serialize-per-file` chains them "
+             "into one worktree, run back to back: no landing conflict is "
+             "possible, at the cost of making the longest chain the wave's "
+             "floor. `per-file` keeps every batch its own agent but pools FREE "
+             "SYMBOLS per defining file, so a symbol agent never spans two "
+             "sources; without it symbols pool by count alone (up to "
+             "`--max-syms`) regardless of file, which packs a layer's tail of "
+             "one- and two-symbol files into far fewer agents. Layer batching "
+             "is unaffected by all three — a wave always runs layer by layer.",
+    )
+    parser.add_argument(
         "--parallel-max",
         type=_parallel_max_type,
         default=8,
         metavar="N",
         help="Maximum concurrent agents when --parallel is on. Must be "
              "≥ 2 (1 is meaningless — that's the serial default). "
-             "Default 8.",
+             "Default 8. Declared ONCE, here: a subparser copy sharing this "
+             "`dest` re-applies its own default AFTER the global value is "
+             "parsed, so `--parallel-max N` before the subcommand was silently "
+             "reset to 8 — a wave asked for 32 and ran at 8, reporting 32.",
     )
 
     sub = parser.add_subparsers(dest="command", required=True)
@@ -839,10 +846,6 @@ def main() -> None:
              "list; the driver seeds it, crustify just honours it).",
     )
     port_p.add_argument(
-        "--parallel-max", type=int, default=8, metavar="N", dest="parallel_max",
-        help="Max concurrent agents across disjoint files (with --parallel).",
-    )
-    port_p.add_argument(
         "--dry-run", action="store_true", dest="dry_run",
         help="Print the plan (units, batches, first-layer deps) and stop.",
     )
@@ -877,8 +880,6 @@ def main() -> None:
         crustify_config.LOG_TO_FILE = False
     if getattr(args, "model", None):
         crustify_config.MODEL_OVERRIDE = args.model
-    if getattr(args, "backend", None):
-        crustify_config.BACKEND = args.backend
     if getattr(args, "billing", None):
         crustify_config.BILLING = args.billing
     if getattr(args, "override_base_prompt", None) is not None:
@@ -1301,8 +1302,8 @@ def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
         transitive=bool(getattr(args, "transitive", False)),
         review=bool(getattr(args, "review", False)),
         parallel=bool(getattr(args, "parallel", False)),
+        chain_policy=getattr(args, "parallel_policy", "per-agent"),
         parallel_max=int(getattr(args, "parallel_max", 8)),
-        max_fields=getattr(args, "max_fields", None),
         max_syms=getattr(args, "max_syms", None),
         dry_run=bool(getattr(args, "dry_run", False)),
     )

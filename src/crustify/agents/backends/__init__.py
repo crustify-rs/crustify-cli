@@ -45,7 +45,7 @@ class Backend(Protocol):
 
 
 def get_backend(name: str) -> Backend:
-    """Resolve a backend by its ``config.BACKEND`` value."""
+    """Resolve a backend by name (see :mod:`crustify.models`)."""
     if name == "claude_cli":
         from crustify.agents.backends.claude_cli import ClaudeCliBackend
         return ClaudeCliBackend()

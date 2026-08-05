@@ -1,6 +1,42 @@
-# crustify
+# Crustify
 
-Multi-agent C->Rust translation pipeline. Each stage pairs a **deterministic
+LLM-driven pipeline for automating the migration of production C/C++ codebases to Rust, at scale.
+Given a codebase, crustify first builds an accurate dependency graph of symbols and types, which
+guide the LLM agents for an incremental, cost-/time-efficient, and correct translation.  
+
+## Workflow
+
+### Setup
+### Analyze
+### Scaffold
+### Bindgen
+### Translate
+
+## Dependency graph
+
+Deterministic, builds an accurate dependency graph of symbols and types,
+sorted in topological order, automatically identifying items that cross the FFI boundary
+and items that migrate to native Rust. based on codeql
+
+## LLM Agents
+
+- three LLM agents
+  - an orchestrator for driving the pipeline
+  - a SymbolsTranslator for porting / wrapping symbols (functions, globals, callbacks)
+  - a TypesTranslator for porting / wrapping types (structs, unions, enums)
+
+- supported LLM backends
+  - claude CLI, subscription or API billing
+  - codex CLI, subscription or API billing
+
+## CLI
+
+TODO: add commands and flags
+
+
+---
+
+Automated C->Rust translation pipeline based on reasoning LLM agents. Each stage pairs a **deterministic
 composer/scheduler** (all bookkeeping - graphs, scope, placement, batching,
 allowlists) with **LLM agents** confined to judgement work (ownership
 inference, codegen, merge). Artifacts for a repo live under
@@ -41,7 +77,7 @@ crustify-cli [--no-console] [--no-file-log] [--model NAME] [--parallel] [--paral
 | `--model NAME` | override every agent's model, named `<provider>/<model>` (`anthropic/claude-opus-4-8`, `openai/gpt-5.6`, ...) |
 | `--parallel` | enable per-command parallelism (wrap / port: concurrent agent chains; the analyze subjects are composer-only and ignore it) |
 | `--parallel-max N` | max concurrent agents (default 8) |
-| `--backend NAME` | force the agent backend instead of deriving it from the model |
+| `--parallel-policy P` | `per-agent` (default) \| `serialize-per-file` (chain batches sharing a home `.rs`) \| `per-file` (pool free symbols per defining file) |
 | `--billing subscription\|api` | how the provider CLI authenticates (default `subscription`) |
 | `--override-base-prompt` / `--no-` | replace the provider CLI's own base prompt with crustify's (default: replace) |
 
@@ -84,7 +120,7 @@ the allowlists but no `fn main`, and `bindgen.h`'s shim block is empty.
 **wrap** - emit Rust wrappers for wrap-scope units in dependency-layer order
 (requires `scaffold` + `bindgen` to have run).
 `--name N...` \| `--dag-layer N` \| `--lifetime-for SPEC`; `--file`,
-`--wrap-only`/`--port-only`, `--max-fields N`, `--max-syms N` (per-agent budgets),
+`--wrap-only`/`--port-only`, `--max-syms N` (free-symbol batch budget),
 `--skip N...`, `--transitive` (expand each `--name` through its dep closure),
 `--review` (also schedule already-wrapped units), `--out-suffix`,
 `--parallel`/`--parallel-max N`, `--dry-run`.

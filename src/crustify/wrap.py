@@ -103,12 +103,17 @@ def _preflight(target: Path, layout: "Layout") -> Path:
             f"wrap: no scope.json at {scope_json}. Run "
             f"`crustify-cli {target} analyze scope` first."
         )
-    # Scaffold the source-file stub tree up-front (idempotent — writes only
-    # absent files; module blocks merge). The wrap agents then locate their
-    # modules + deps via `scaffold --name` (query mode) and fill them; they
-    # never create files themselves.
-    from crustify.scaffold import scaffold
-    scaffold(target, all=True, create=True)
+    # NO scaffolding here. The wrap stage READS the scaffolded tree — its agents
+    # locate their modules via `scaffold --name` (query mode) and fill anchors;
+    # they never create files, and neither does this. `scaffold` is a stage the
+    # operator runs, and the scheduler's plan-time placement check already fails
+    # with the exact remedy when an item's home `.rs` is missing.
+    #
+    # It used to call `scaffold(target, all=True, create=True)` here, which
+    # re-scaffolded the WHOLE target on every invocation — `--dry-run` included.
+    # That made a read-only command mutate the tree: after a `crates.json` home
+    # was corrected, a dry run silently regenerated the moved type's stub, which
+    # then blocked the fast-forward of the very wave that had filled it.
     return scope_json
 
 
@@ -199,37 +204,6 @@ def _check_bindgen(layout: "Layout", target: Path, linked: set[str]) -> None:
 # Manifest indexers + budget (shared with the port stage)
 # ---------------------------------------------------------------------------
 
-def _index_entry_files(analysis_root: Path) -> dict[str, str]:
-    """Map each type tag to the ``types.json`` that carries its entry, so the
-    agent reads the right manifest directly."""
-    index: dict[str, str] = {}
-    for f in sorted(analysis_root.rglob("types.json")):
-        try:
-            doc = json.loads(f.read_text())
-        except (ValueError, OSError):
-            continue
-        for entry in doc.get("types", []):
-            tag = entry.get("name") or entry.get("type")
-            if tag and not str(tag).startswith("_"):
-                index.setdefault(tag, str(f))
-    return index
-
-
-def _index_sym_files(analysis_root: Path) -> dict[str, str]:
-    """Map each symbol name to the ``syms.json`` carrying it (for the agent)."""
-    index: dict[str, str] = {}
-    for f in sorted(analysis_root.rglob("syms.json")):
-        try:
-            doc = json.loads(f.read_text())
-        except (ValueError, OSError):
-            continue
-        for e in doc.get("symbols", []):
-            nm = e.get("name")
-            if nm:
-                index.setdefault(nm, str(f))
-    return index
-
-
 def _wrap_eligible_pred(scope_json):
     """Predicate: is this node something `wrap` may take? Wrap takes **wrap-scope**
     entities (types + symbols) and **any in-scope type** (port- *or* wrap-scope
@@ -270,7 +244,7 @@ def _selection_pred(scope_json, *, wrap_only: bool,
 
 
 def _wrap_emit(
-    target: Path, layout, *, max_fields: int, max_syms: int,
+    target: Path, layout, *, max_syms: int,
 ):
     """Production emit: one :class:`CrustifyWrap` per scheduled batch. A type
     batch carries the type + this batch's op slice; a syms batch carries the
@@ -281,17 +255,11 @@ def _wrap_emit(
     def emit(batch) -> None:  # batch: _schedule.Batch
         type_units = [u for u in batch.units if u.kind == "type"]
         if type_units and batch.field_range is not None:
-            # type-pull (single struct/union/enum): tag + field-accessor window;
-            # the agent pulls lifecycle + cast graph from the record itself. The
-            # shared scheduler also tiles by op count (for the port stage), so a
-            # tail batch may carry an empty field window and no type def — the wrap
-            # agent has nothing to emit there (a type's methods are wrapped as
-            # symbols), so skip it.
+            # type-pull: tag + its full field-accessor set; the agent pulls
+            # lifecycle + cast graph from the record itself. A type is never
+            # split, so the window is always the whole list and always carries
+            # the type def — the old empty-tail guard has no case left.
             u = type_units[0]
-            f_lo, f_hi = batch.field_range
-            introduces_type = any(m.id == u.node.id for m in batch.members)
-            if not introduces_type and f_hi <= f_lo:
-                return
             CrustifyWrap(
                 target, batch_kind="type",
                 tags=[u.node.id], kinds=[u.node.subkind],
@@ -519,8 +487,8 @@ def wrap_types(
     transitive: bool = False,
     review: bool = False,
     parallel: bool = False,
+    chain_policy: str = "per-agent",
     parallel_max: int = 8,
-    max_fields: int | None = None,
     max_syms: int | None = None,
     dry_run: bool = False,
     emit_fn=None,
@@ -537,8 +505,6 @@ def wrap_types(
     from crustify import _schedule as S
     from crustify.layout import Layout
 
-    if max_fields is None:
-        max_fields = _cfg.WRAP_MAX_FIELDS
     if max_syms is None:
         max_syms = _cfg.WRAP_MAX_SYMS
 
@@ -677,12 +643,11 @@ def wrap_types(
     # Worktree isolation engages whenever the production emit is in play (a
     # caller-supplied emit_fn, e.g. a test double, opts out).
     emit_factory = None if emit_fn else (
-        lambda t, l: _wrap_emit(t, l, max_fields=max_fields, max_syms=max_syms))
+        lambda t, l: _wrap_emit(t, l, max_syms=max_syms))
     stage = S.Stage(
         verb="wrap", in_scope=in_scope, op_in_scope=_wrap_op,
-        emit_fn=emit_fn or _wrap_emit(target, layout,
-                                      max_fields=max_fields, max_syms=max_syms),
-        max_syms=max_syms, max_fields=max_fields,
+        emit_fn=emit_fn or _wrap_emit(target, layout, max_syms=max_syms),
+        max_syms=max_syms,
         emit_factory=emit_factory, target=target, layout=layout,
     )
     if not dry_run:
@@ -690,7 +655,7 @@ def wrap_types(
     failures = S.schedule(
         dag=dag, analysis_root=layout.analysis,
         names=sel_names, stage=stage, parallelize=parallel,
-        parallel_max=parallel_max, dry_run=dry_run,
+        chain_policy=chain_policy, parallel_max=parallel_max, dry_run=dry_run,
     )
     if failures:
         labels = ", ".join(b.label() for b, _ in failures)

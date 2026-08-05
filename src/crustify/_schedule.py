@@ -10,8 +10,10 @@ here, once.
 Model
 -----
 * **Node** — one entry of ``deps-dag.json`` (a type or a symbol), keyed by
-  ``(id, defined_in)`` so same-named file-local statics stay distinct. A type
-  node carries its ``ops`` as ``{name, defined_in}`` (Phase-0 DAG change).
+  ``(id, defined_in)`` so same-named file-local statics stay distinct. A type's
+  ops are NOT carried here — the dag is deterministic and stores no lifecycle;
+  they are reverse-derived from the analysis tree at schedule time
+  (:func:`load_type_meta` -> :func:`ordered_ops`).
 * **Unit** — the agent's working set. A named **type** forms a *type-unit* =
   the type + its in-scope ops (ops are scope-filtered: a wrap run bundles the
   type's wrap-scope ops, a port run its port-scope ops, so the two stages
@@ -46,76 +48,9 @@ from typing import Any, Callable
 
 # Scaffolded anchors (see scaffold_manifest._type_block / _sym_block / _file_stub).
 
-SymKey = tuple[str, "str | None"]
-
-
-# --------------------------------------------------------------------- model
-
-@dataclass
-class Node:
-    id: str                       # type tag, or symbol name
-    node_kind: str                # "type" | "symbol"
-    subkind: str                  # struct/.../function_*/macro_*/"symbol" (bare)
-    defined_in: str | None
-    layer: int
-    ops: list[SymKey]             # type's owned ops, as (name, defined_in)
-    dep_types: list[str]
-    dep_syms: list[SymKey]
-    # Cut cycle back-edges (FAS): types this node depends on that aren't wrapped
-    # yet (render raw `ffi::T`); and the reverse — nodes that render *this* type
-    # raw and should switch to its wrapper once it lands.
-    fallback: list[str] = field(default_factory=list)
-    back_fill: list[str] = field(default_factory=list)
-    # Per-symbol lines-of-code (CodeQL body span; global=1, macro=0, 0 when the
-    # `loc` column is absent — for a type node it is the struct field count).
-    # Summed per batch against the port LoC budget.
-    loc: int = 0
-
-    @property
-    def key(self) -> SymKey:
-        return (self.id, self.defined_in)
-
-    @property
-    def is_bare(self) -> bool:
-        # the DAG emits "symbol" when nothing has classified `kind` yet
-        return self.node_kind == "symbol" and self.subkind == "symbol"
-
-
-def load_nodes(dag: dict) -> tuple[dict[SymKey, Node], dict[str, list[SymKey]]]:
-    """Flatten ``deps-dag.json`` into ``(by_key, by_name)``. SCC super-nodes are
-    flattened to their members (each member keeps its own deps/layer)."""
-    by_key: dict[SymKey, Node] = {}
-    by_name: dict[str, list[SymKey]] = {}
-
-    def add(rec: dict, layer: int) -> None:
-        deps = rec.get("deps") or {}
-        n = Node(
-            id=rec["id"],
-            node_kind=rec["node_kind"],
-            subkind=str(rec.get("subkind") or "symbol"),
-            defined_in=rec.get("defined_in"),
-            layer=layer,
-            ops=[(o["name"], o.get("defined_in")) for o in rec.get("ops") or []],
-            dep_types=list(deps.get("types") or []),
-            dep_syms=[(d["name"], d.get("defined_in")) for d in deps.get("syms") or []],
-            fallback=list((rec.get("fallback") or {}).get("types") or []),
-            back_fill=list((rec.get("back_fill") or {}).get("types") or []),
-            loc=int(rec.get("loc") or 0),
-        )
-        by_key[n.key] = n
-        by_name.setdefault(n.id, []).append(n.key)
-
-    for layer, entries in enumerate(dag.get("layers", [])):
-        for rec in entries:
-            if "scc" in rec:
-                deps = rec.get("deps")
-                for m in rec["scc"]:
-                    m = dict(m)
-                    m.setdefault("deps", deps)
-                    add(m, layer)
-            else:
-                add(rec, layer)
-    return by_key, by_name
+from crustify.dag import (        # the DAG model + its readers (not scheduling)
+    SymKey, Node, load_nodes, load_type_meta, ordered_ops,
+)
 
 
 # ----------------------------------------------------------------- selection
@@ -214,16 +149,6 @@ def form_units(
     return units
 
 
-def ordered_ops(node: Node, by_key: dict[SymKey, Node], lifecycle: set[str],
-                in_scope: Callable[[Node], bool]) -> list[Node]:
-    """A type's ops as the **canonical, windowable list**: those resolvable to a
-    node and ``in_scope``, ordered **lifecycle-first** (droppers/disposers/
-    cloners) then alphabetical. This is the single ordering both the scheduler
-    (for ``--range`` windows) and ``query types --name T --ops`` consume, so a window
-    ``[A:B]`` means the same slice to both."""
-    ops = [by_key[k] for k in node.ops if k in by_key and in_scope(by_key[k])]
-    ops.sort(key=lambda o: (o.id not in lifecycle, o.id))
-    return ops
 
 
 # --------------------------------------------------------------- name → file
@@ -252,33 +177,6 @@ def resolve_path(node: Node, doc: dict, layout) -> Path | None:
 
 # ----------------------------------------------------------- type metadata
 
-def load_type_meta(analysis_root: Path) -> dict[str, tuple[list[str], set[str]]]:
-    """type tag -> (field names, lifecycle op names). Fields drive the
-    ``max_fields`` accessor budget; the lifecycle set lets the packer hoist the
-    shape-bearing ops into the first batch.
-
-    A type stores no lifecycle of its own — it is reverse-derived from the
-    symbols whose ``lifetime`` acts on an arg of that type (droppers, cloners,
-    field-disposers). Allocators and locking fns are deliberately not bundled;
-    they reach the wrap set through the normal call graph."""
-    from compose.scope import build_lifecycle_index, type_method_syms
-
-    meta: dict[str, tuple[list[str], set[str]]] = {}
-    if not analysis_root.is_dir():
-        return meta
-    lifecycle = build_lifecycle_index(analysis_root)
-    for f in analysis_root.rglob("types.json"):
-        try:
-            doc = json.loads(f.read_text())
-        except (OSError, ValueError):
-            continue
-        for e in doc.get("types", []):
-            tag = e.get("name") or e.get("type")
-            if not tag or tag in meta:
-                continue
-            fields = [x["name"] for x in (e.get("fields") or []) if x.get("name")]
-            meta[tag] = (fields, set(type_method_syms(e, lifecycle)))
-    return meta
 
 
 # ----------------------------------------------------------------- packing
@@ -305,7 +203,7 @@ class Batch:
 
     def label(self) -> str:
         head = self.units[0].label() if self.units else "?"
-        f = Path(self.file).name if self.file else "?"
+        f = Path(self.file).name if self.file else "*"   # `*` = cross-file sym pool
         return f"{f}: {head}" + (f" +{len(self.units)-1}" if len(self.units) > 1 else "")
 
 
@@ -317,17 +215,31 @@ def pack(
     units: list[Unit],
     *,
     max_syms: int,
-    max_fields: int,
     max_loc: int | None = None,
+    syms_by_file: bool = False,
 ) -> list[Batch]:
-    """Per-file, budget-bounded batches. A type-unit splits into **sequential**
-    sub-batches: ops chunked by ``max_syms`` (lifecycle-first, so they ride the
-    first batch with the type def) and field accessors chunked by ``max_fields``,
-    the i-th field chunk paired with the i-th op chunk. Atomic sym-units of one
-    file pool under ``max_syms`` — and, when ``max_loc`` is set (the port LoC
-    budget), also under a per-batch ``Σ node.loc`` cap, whichever binds first
-    (a lone symbol heavier than ``max_loc`` still gets its own batch — a function
-    is never split).
+    """Budget-bounded batches. A type-unit is NEVER split: one batch carries the
+    type, all its lifecycle ops and all its field accessors, because they are one
+    design decision and only the first batch ever held the type definition.
+
+    Atomic sym-units pool under ``max_syms`` — and, when ``max_loc`` is set (the
+    port LoC budget), also under a per-batch ``Σ node.loc`` cap, whichever binds
+    first (a lone symbol heavier than ``max_loc`` still gets its own batch — a
+    function is never split).
+
+    ``syms_by_file`` decides whether that pool is partitioned by DEFINING FILE.
+    Default ``False``: symbols pool by budget alone, so one agent may carry
+    symbols from several sources. The defining file is not a write boundary —
+    the scaffolder homes symbols by ``crates.json``, several sources routinely
+    land in one ``.rs``, and an agent is handed names, not a file — so splitting
+    on it bought nothing and cost agents: a layer whose symbols trail off into
+    one- and two-symbol files spawned an agent per file, each paying full
+    worktree setup and context load to emit a couple of wrappers. ``True``
+    (``--parallel-policy per-file``) restores the partition for a run that wants
+    one source per agent.
+
+    Layer batching is orthogonal and always applies: :func:`schedule` calls this
+    once per dependency layer, so a batch never spans layers whatever the policy.
 
     Packing is **blind**: every selected member is emitted, bounded only by the
     budget. The scheduler does not inspect whether an element has already been
@@ -337,46 +249,35 @@ def pack(
     pool: dict[str | None, list[Node]] = {}
 
     for u in units:
-        if u.kind == "type" and u.node.subkind in (
-                "struct", "union", "enum"):
-            # Pull path: STATIC range-tiling over the *full* canonical lists, so
-            # window [A:B) means the same to scheduler and `query types --range`.
-            full_ops, full_fields = list(u.ops), list(u.fields)
-            n = max(1,
-                    -(-len(full_ops) // max_syms) if full_ops else 1,
-                    -(-len(full_fields) // max_fields) if full_fields else 1)
-            for i in range(n):
-                o_lo = min(i * max_syms, len(full_ops))
-                o_hi = min(o_lo + max_syms, len(full_ops))
-                f_lo = min(i * max_fields, len(full_fields))
-                f_hi = min(f_lo + max_fields, len(full_fields))
-                win_ops, win_fields = full_ops[o_lo:o_hi], full_fields[f_lo:f_hi]
-                b = Batch(file=u.file, units=[u],
-                          op_range=(o_lo, o_hi), field_range=(f_lo, f_hi))
-                if i == 0:
-                    b.members.append(u.node)
-                b.members.extend(win_ops)      # for confirm/labels (agent pulls names)
-                b.fields = win_fields
-                batches.append(b)
-        elif u.kind == "type":
-            # Push path — budget-chunked.
+        if u.kind == "type":
+            # ONE batch per type — never split by op or field count.
+            #
+            # A type is an indivisible working set: its `define_type!`, its
+            # Drop/Clone, and its accessors are one design decision, and only
+            # batch 0 ever carried the type def, so a split handed later batches
+            # accessors for a shape they could not see. It also put two agents in
+            # one `.rs` for a single type, which is the one case `per-agent`
+            # chaining cannot excuse.
+            #
+            # The budgets were sized when EVERY declared field carried an anchor
+            # (v1) — 41 fields on `evp_pkey_asn1_method_st`, 38 on
+            # `evp_signature_st`. Anchors are now narrowed to the PORT-TOUCHED
+            # subset, which tops out at 5 across this whole target, so the cap
+            # guarded a case that no longer exists. `max_syms` still bounds the
+            # free-symbol pool below; it just no longer touches types.
             ops, fields = list(u.ops), list(u.fields)
-            op_chunks = _chunk(ops, max_syms) or [[]]
-            field_chunks = _chunk(fields, max_fields) or [[]]
-            for i in range(max(len(op_chunks), len(field_chunks))):
-                b = Batch(file=u.file, units=[u])
-                if i == 0:
-                    b.members.append(u.node)
-                if i < len(op_chunks):
-                    b.members.extend(op_chunks[i])
-                if i < len(field_chunks):
-                    b.fields = field_chunks[i]
-                if b.members or b.fields:
-                    batches.append(b)
+            b = Batch(file=u.file, units=[u],
+                      op_range=(0, len(ops)), field_range=(0, len(fields)))
+            b.members.append(u.node)
+            b.members.extend(ops)          # for confirm/labels (agent pulls names)
+            b.fields = fields
+            batches.append(b)
         else:
-            pool.setdefault(u.file, []).append(u.node)
+            # `None` key = one global pool for the layer (the default): the
+            # defining file is not a write boundary, so it must not bound a batch.
+            pool.setdefault(u.file if syms_by_file else None, []).append(u.node)
 
-    # pool atomic syms per file into batches bounded by count (<= max_syms) and,
+    # pool atomic syms into batches bounded by count (<= max_syms) and,
     # when set, lines-of-code (Σ loc <= max_loc) — whichever cap is hit first
     # closes the batch. A single sym whose loc already exceeds max_loc still goes
     # in its own batch (we never split a function).
@@ -479,11 +380,8 @@ class Stage:
     emit_fn: EmitFn                              # agent seam (serial / non-isolated)
     max_syms: int
     # Per-type field-accessor cap — only the WRAP stage windows type fields;
-    # PORT schedules free symbols only (no type units), so it leaves this at the
-    # unbounded default. `max_loc` is the PORT lines-of-code budget that binds
-    # together with `max_syms` on the free-symbol pool (None = no LoC cap, e.g.
-    # for wrap).
-    max_fields: int = 10**9
+    # `max_loc` is the PORT lines-of-code budget that binds together with
+    # `max_syms` on the free-symbol pool (None = no LoC cap, e.g. for wrap).
     max_loc: int | None = None
     # OP-FACADING predicate — which of a type's ops THIS stage owns. Decoupled
     # from `in_scope` so wrap can select types scope-blind yet facade only
@@ -546,6 +444,7 @@ def _chains_by_home(batches: list[Batch], doc: dict, layout) -> dict[str, list[B
 def run(
     batches: list[Batch], stage: Stage, *,
     parallelize: bool, parallel_max: int,
+    chain_policy: str = "per-agent",
 ) -> list[tuple[Batch, BaseException]]:
     """Sequential within a file; disjoint files in parallel when requested.
 
@@ -558,17 +457,34 @@ def run(
     validates or tears down. Only a caller-supplied ``emit_fn`` (a test double)
     takes the in-place path."""
     failures: list[tuple[Batch, BaseException]] = []
-    # Chain by scaffolded home `.rs` (write-disjoint), NOT by C source file —
-    # multiple sources (oid.c + oid.h) home into one `.rs`, so source chaining
-    # would race their parallel worktrees on that file. Falls back to source
-    # grouping only when no rust tree is available (layout-less callers).
-    if stage.layout is not None:
+    # `serialize-per-file` chains by scaffolded home `.rs` (write-disjoint), NOT
+    # by C source file — multiple sources (oid.c + oid.h) home into one `.rs`, so
+    # source chaining would race their parallel worktrees on that file. Falls
+    # back to source grouping only when no rust tree is available (layout-less
+    # callers).
+    #
+    # `per-agent` gives every batch its own chain, so two types homed in one
+    # `.rs` run concurrently. Nothing is lost by that: an agent already lands by
+    # rebasing onto the session branch and retrying its push, so a sibling that
+    # got there first is handled — the chain only made the case impossible
+    # rather than survivable. What it cost was the wave's floor: layer 0 of the
+    # 45-type run packed 38 types into 23 chains, and the two longest
+    # (`evp/evp_local.rs` and `evp/evp.rs`, 6 types apiece) set the entire
+    # layer's wall clock at ~129m while everything else idled.
+    #
+    # The trade is real, though: two agents editing one `.rs` can land a textual
+    # conflict the second one has to resolve mid-rebase, where chaining never
+    # produced one. Type wrappers mostly append their own `impl` block, so the
+    # regions rarely overlap — but "rarely" is doing work in that sentence.
+    if chain_policy == "serialize-per-file" and stage.layout is not None:
         from crustify import crates as _crates
         by_file = _chains_by_home(batches, _crates.load(stage.layout), stage.layout)
-    else:
+    elif chain_policy == "serialize-per-file":
         by_file = {}
         for b in batches:
             by_file.setdefault(b.file, []).append(b)
+    else:
+        by_file = {f"{i}:{b.label()}": [b] for i, b in enumerate(batches)}
 
     # Unconditional when the seam is wired: one worktree per agent regardless of
     # `--parallel` or chain count. (It used to also require `parallelize` and
@@ -734,6 +650,7 @@ def schedule(
     names: list[str],
     stage: Stage,
     parallelize: bool = False,
+    chain_policy: str = "per-agent",
     parallel_max: int = 4,
     dry_run: bool = False,
 ) -> list[tuple[Batch, BaseException]]:
@@ -764,7 +681,16 @@ def schedule(
         by_layer[u.node.layer].append(u)
     layers = sorted(by_layer)
 
-    all_batches = pack(units, max_syms=stage.max_syms, max_fields=stage.max_fields, max_loc=stage.max_loc)
+    syms_by_file = chain_policy == "per-file"
+    # Packed PER LAYER and concatenated — never `pack(units)` over the whole
+    # selection. A wave runs layer by layer, so a cross-layer pack reports a plan
+    # that cannot happen: with the free-symbol pool no longer partitioned by file,
+    # it merges symbols from different layers into one batch and undercounts the
+    # run (9 units over 2 layers read as 1 batch where the wave runs 2).
+    all_batches = [b for li in layers
+                   for b in pack(by_layer[li], max_syms=stage.max_syms,
+                                 max_loc=stage.max_loc,
+                                 syms_by_file=syms_by_file)]
 
     # Plan-time placement check: every batch member must have its home `.rs`
     # materialized on disk, or emit would fail mid-run — after parallel siblings
@@ -801,11 +727,23 @@ def schedule(
     if dry_run:
         print(f"\n[{stage.verb} dry-run] {len(units)} unit(s) across "
               f"{len(layers)} dependency layer(s) (lower → higher):")
+        # Chains, not just batches. Batches are what gets packed; CHAINS are
+        # what runs concurrently, and under `serialize-per-file` the two differ
+        # whenever a layer homes several batches in one `.rs`. Reporting only
+        # batches made the policy invisible in the one place you would check it.
+        doc = None
+        if chain_policy == "serialize-per-file" and stage.layout is not None:
+            from crustify import crates as _crates
+            doc = _crates.load(stage.layout)
         for li in layers:
-            lb = pack(by_layer[li], max_syms=stage.max_syms,
-                      max_fields=stage.max_fields, max_loc=stage.max_loc)
+            lb = pack(by_layer[li], syms_by_file=syms_by_file, max_syms=stage.max_syms,
+                      max_loc=stage.max_loc)
+            n_chain = (len(_chains_by_home(lb, doc, stage.layout))
+                       if doc is not None else len(lb))
+            extra = (f" → {n_chain} chain(s)" if n_chain != len(lb) else "")
             print(f"  L{li}: {len(by_layer[li])} unit(s) → {len(lb)} batch(es)"
-                  f"{' (parallel)' if len(lb) > 1 else ''}")
+                  f"{extra}{' (parallel)' if n_chain > 1 else ''}")
+        print(f"  policy: {chain_policy}")
         show_plan(units, all_batches, by_key, stage.in_scope, stage.verb)
         return []
 
@@ -828,8 +766,8 @@ def schedule(
         slog.line(f"[crustify] {len(units)} unit(s), {len(layers)} layer(s), "
                   f"parallel={parallelize} max={parallel_max}")
         for li in layers:
-            lb = pack(by_layer[li], max_syms=stage.max_syms,
-                      max_fields=stage.max_fields, max_loc=stage.max_loc)
+            lb = pack(by_layer[li], syms_by_file=syms_by_file, max_syms=stage.max_syms,
+                      max_loc=stage.max_loc)
             if not lb:
                 continue
             if len(layers) > 1:
@@ -838,7 +776,8 @@ def schedule(
             show_plan(by_layer[li], lb, by_key, stage.in_scope, stage.verb)
             before = len(failures)
             failures += run(lb, stage, parallelize=parallelize,
-                            parallel_max=parallel_max)
+                            parallel_max=parallel_max,
+                            chain_policy=chain_policy)
             slog.checkpoint(
                 f"layer {li}: {len(by_layer[li])} unit(s), {len(lb)} batch(es), "
                 f"{len(failures) - before} failure(s)")

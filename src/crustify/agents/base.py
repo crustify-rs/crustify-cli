@@ -140,9 +140,9 @@ class CrustifyAgent:
         from crustify.models import resolve as _resolve_model
 
         # The model selects the backend: a Claude model can only be driven
-        # by the claude CLI. `--backend` overrides for forcing a pairing.
+        # by the claude CLI, an OpenAI one only by codex.
         model = _cfg.MODEL_OVERRIDE or self.model
-        backend = _cfg.BACKEND or _resolve_model(model).backend
+        backend = _resolve_model(model).backend
 
         with self._make_log() as log:
             get_backend(backend).run(

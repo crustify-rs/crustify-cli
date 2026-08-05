@@ -35,14 +35,26 @@ def manifest_name(kind: str) -> str:
     ``CRUSTIFY_OUT_SUFFIX`` env var for isolated parallel runs.
 
     With ``CRUSTIFY_OUT_SUFFIX=opus`` the names become ``types_opus.json`` /
-    ``syms_opus.json`` so concurrent runs write disjoint files: the canonical
-    (suffix-less) tree is left untouched, and the stages that consume the
-    analysis rather than produce it (dag, and the wrap/port schedulers) resolve
-    the canonical names only, so they ignore the suffixed artifacts. Set by
-    ``analyze types/syms --out-suffix`` and ``wrap --out-suffix``; read by the
-    composer emit and by every ``crustify-cli query`` the agents shell out to
-    (env inheritance) - the agents pass no path, so the suffix must travel
-    through the environment.
+    ``syms_opus.json`` so concurrent runs write disjoint files, leaving the
+    canonical (suffix-less) tree untouched. Set by ``analyze types/syms
+    --out-suffix`` and ``wrap --out-suffix``; read by the composer emit and by
+    every ``crustify-cli query`` the agents shell out to (env inheritance) -
+    the agents pass no path, so the suffix must travel through the
+    environment.
+
+    Who follows the suffix, and who does not:
+
+      the WRAP SCHEDULER does — `_schedule.load_type_meta` and
+      `wrap._lifetime_by_sym` resolve through here, so an arm sees its own
+      submissions when scheduling its later waves. A suffixed run is a branch
+      of the analysis; an arm blind to its own findings would schedule every
+      wave after the first off data that ignores what it just learned.
+
+      the SCAFFOLDER, the DAG COMPOSER and the CRATES VALIDATOR do not. They
+      feed the Rust tree, which ``--out-suffix`` does NOT fork - that side is
+      isolated by per-agent session branches instead - so two arms working from
+      divergent field sets would contend for the same anchors in one shared
+      tree.
 
     **Every** manifest access must route through here, reads included. The
     cross-cutting scans in :mod:`crustify.query` (``--taking``,
