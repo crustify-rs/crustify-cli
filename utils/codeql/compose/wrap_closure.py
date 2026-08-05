@@ -218,15 +218,45 @@ def build_index(
     return idx
 
 
-def build_type_meta(type_rows: list[dict]) -> dict[str, dict]:
-    """Type metadata from the T1 ``types`` table — ``tag -> {def_file, decls,
-    kind}`` — the deterministic CodeQL source for classify/home/narrow, covering
-    EVERY type (incl. system/external leaves like ``pthread_mutex_t`` that have
-    no analysis entry). CodeQL emits two rows per type — a ``typedef`` row (often
-    empty ``def_file``, public decl header) and the underlying ``struct`` row
-    (real ``def_file``, full decl set) — so rows are MERGED per name: first
-    non-empty ``def_file`` wins, decls union, aggregate kind beats ``typedef``."""
-    meta: dict[str, dict] = {}
+def _merge_meta(m: dict, decls: list[str], kind: str, uak: str) -> None:
+    """Fold one T1 row into an existing entity: decls union, aggregate kind
+    beats ``typedef``, aggregate unaliased-kind beats a scalar one."""
+    m["decls"].update(decls)
+    if not m["kind"]:
+        m["kind"] = kind
+    elif kind in ("struct", "union", "enum") and \
+            m["kind"] not in ("struct", "union", "enum"):
+        m["kind"] = kind
+    if not m["uak"]:
+        m["uak"] = uak
+    elif uak in _AGGREGATE_UAK and m["uak"] not in _AGGREGATE_UAK:
+        m["uak"] = uak
+
+
+def build_type_meta(type_rows: list[dict]) -> dict[tuple[str, str], dict]:
+    """Type metadata from the T1 ``types`` table — ``(tag, def_file) ->
+    {def_file, decls, kind, uak}`` — the deterministic CodeQL source for
+    classify/home/narrow, covering EVERY type (incl. system/external leaves like
+    ``pthread_mutex_t`` that have no analysis entry).
+
+    Keyed on the PAIR, because a tag alone does not identify a type. Two
+    unrelated structs may share one: ``ring_buf`` is the QUIC stream buffer in
+    ``include/internal/ring_buf.h`` and, separately, a file-local datagram-BIO
+    buffer inside ``crypto/bio/bss_dgram_pair.c``, with disjoint fields. Merging
+    those by name produced a chimera — ``def_file`` from whichever row the CSV
+    listed first, ``decls`` unioned across both — and since every downstream
+    join is on ``(name, defined_in)``, a wrap entry stamped with the wrong
+    ``def_file`` matched no analysis record and fell out of the surface
+    entirely.
+
+    Rows that DO describe one entity still merge: CodeQL emits a ``typedef`` row
+    (usually empty ``def_file``, public decl header) beside the underlying
+    ``struct`` row (real ``def_file``, full decl set). Those carry no
+    ``def_file`` to disagree on, so they are folded into every definition of
+    that name — a forward declaration cannot say which one it refers to. A name
+    with no definition anywhere keeps its lone ``(name, "")`` entity."""
+    meta: dict[tuple[str, str], dict] = {}
+    floating: dict[str, list[tuple[list[str], str, str]]] = defaultdict(list)
     for r in type_rows:
         name = r.get("name")
         if not name:
@@ -235,19 +265,31 @@ def build_type_meta(type_rows: list[dict]) -> dict[str, dict]:
         decls = scope.parse_decl_files(r.get("decl_files") or "")
         kind = r.get("kind") or ""
         uak = r.get("unaliased_kind") or ""
-        m = meta.get(name)
+        if not df:
+            floating[name].append((decls, kind, uak))
+            continue
+        m = meta.get((name, df))
         if m is None:
-            meta[name] = {"def_file": df, "decls": set(decls),
-                          "kind": kind, "uak": uak}
+            meta[(name, df)] = {"def_file": df, "decls": set(decls),
+                                "kind": kind, "uak": uak}
         else:
-            if df and not m["def_file"]:
-                m["def_file"] = df
-            m["decls"].update(decls)
-            if kind in ("struct", "union", "enum") and \
-                    m["kind"] not in ("struct", "union", "enum"):
-                m["kind"] = kind
-            if uak in _AGGREGATE_UAK and m["uak"] not in _AGGREGATE_UAK:
-                m["uak"] = uak
+            _merge_meta(m, decls, kind, uak)
+
+    defs_of: dict[str, list[str]] = defaultdict(list)
+    for name, df in meta:
+        defs_of[name].append(df)
+    for name, rows in floating.items():
+        targets = defs_of.get(name)
+        if targets:
+            for df in targets:
+                for decls, kind, uak in rows:
+                    _merge_meta(meta[(name, df)], decls, kind, uak)
+        else:
+            m = {"def_file": "", "decls": set(), "kind": "", "uak": ""}
+            for decls, kind, uak in rows:
+                _merge_meta(m, decls, kind, uak)
+            meta[(name, "")] = m
+
     for m in meta.values():
         m["decls"] = sorted(m["decls"])
     return meta
@@ -264,23 +306,34 @@ _AGGREGATE_UAK = frozenset({
     "struct_anonymous", "union_anonymous", "enum_anonymous",
 })
 
+# Translation-unit suffixes. A type DEFINED in one of these has no linkage past
+# that TU, so it can never be an importable wrap item for another file.
+_C_TU_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".cu")
+
 
 def _is_aggregate(meta: dict) -> bool:
     return meta.get("kind") in ("struct", "union", "enum") \
         or meta.get("uak") in _AGGREGATE_UAK
 
 
-def build_field_edges(field_type_rows: list[dict]) -> dict[str, list[tuple[str, str]]]:
-    """Field→type edges from T2 ``field_type_uses`` — ``struct_tag ->
-    [(field_name, field_type_name)]``. Keyed by tag alone (the field structure
-    is per-struct; public structs have unique tags, and pooling the rare
-    file-local-name clash only over-includes, never drops). This is the same
-    deterministic source the type composer lists a struct's fields from."""
-    edges: dict[str, list[tuple[str, str]]] = defaultdict(list)
+def build_field_edges(
+    field_type_rows: list[dict],
+) -> dict[tuple[str, str], list[tuple[str, str, str]]]:
+    """Field→type edges from T2 ``field_type_uses`` — ``(struct_tag,
+    struct_def_file) -> [(field_name, field_type_name, field_type_def_file)]``.
+
+    Keyed on the pair for the same reason as :func:`build_type_meta`: a tag
+    alone can name two different structs, and pooling their fields walks edges
+    that neither struct has. The CSV already carries ``struct_def_file`` and
+    ``type_def_file``, so both ends of the edge are identified exactly. This is
+    the same deterministic source the type composer lists a struct's fields
+    from."""
+    edges: dict[tuple[str, str], list[tuple[str, str, str]]] = defaultdict(list)
     for r in field_type_rows:
         sn, fn, tn = r.get("struct_name"), r.get("field_name"), r.get("type_name")
         if sn and fn and tn:
-            edges[sn].append((fn, tn))
+            edges[(sn, r.get("struct_def_file") or "")].append(
+                (fn, tn, r.get("type_def_file") or ""))
     return edges
 
 
@@ -328,8 +381,12 @@ def compose_wrap(
 
     # wrap item identity -> {"name"/"type", "defined_in", "declared_in": set}
     sym_items: dict[tuple[str, str], dict] = {}
-    type_items: dict[str, dict] = {}
+    type_items: dict[tuple[str, str], dict] = {}
     files: set[str] = set()
+
+    defs_of: dict[str, list[str]] = defaultdict(list)
+    for _tag, _df in type_meta:
+        defs_of[_tag].append(_df)
 
     def narrow(decls: list[str], tu: str) -> list[str]:
         """Headers declaring the item that the importing TU actually #includes.
@@ -351,8 +408,33 @@ def compose_wrap(
         rec["declared_in"].update(via)
         files.update(via)
 
-    def add_type(tag: str, tu: str) -> None:
-        meta = type_meta.get(tag)
+    def resolve(tag: str, tu: str) -> list[tuple[str, str]]:
+        """The ``(tag, def_file)`` entities a bare tag may denote, restricted to
+        those ``tu`` can actually see.
+
+        Callers reach types by tag alone (``depends_on.types[].type``,
+        ``sig_types``, a field's ``type_name``), but a tag can name more than one
+        struct. Prefer the entities whose declaring headers this TU includes;
+        failing that, the ones defined in a header — a struct defined inside a
+        ``.c`` has no linkage past that TU, so it can never be an importable
+        wrap item for anyone else. Both filters empty means the tag has only
+        TU-local definitions and none is visible here; keep them all rather than
+        drop the edge, so the walk still errs toward over-inclusion."""
+        dfs = defs_of.get(tag)
+        if not dfs:
+            return []
+        keys = [(tag, df) for df in dfs]
+        if len(keys) == 1:
+            return keys
+        clo = closure(tu)
+        hit = [k for k in keys if any(d in clo for d in type_meta[k]["decls"])]
+        if hit:
+            return hit
+        hdr = [k for k in keys if not k[1].endswith(_C_TU_SUFFIXES)]
+        return hdr or keys
+
+    def add_type_key(key: tuple[str, str], tu: str) -> None:
+        meta = type_meta.get(key)
         if meta is None:
             return  # unknown tag (anonymous / not in the types tree) — never
                     # a C type bindgen binds.
@@ -365,10 +447,14 @@ def compose_wrap(
         via = narrow(decls, tu)
         if not via:
             return
-        rec = type_items.setdefault(tag, {
-            "type": tag, "defined_in": df, "declared_in": set()})
+        rec = type_items.setdefault(key, {
+            "type": key[0], "defined_in": df, "declared_in": set()})
         rec["declared_in"].update(via)
         files.update(via)
+
+    def add_type(tag: str, tu: str) -> None:
+        for key in resolve(tag, tu):
+            add_type_key(key, tu)
 
     # Fields of a WRAP struct that port code actually reaches into, harvested
     # from the port symbols' `depends_on.types[].fields` (composer-derived from
@@ -406,27 +492,35 @@ def compose_wrap(
     # cycle-safe via `walked`. The importing TU is the seed port type's
     # def_file (a port file); narrow() falls back to declared headers when the
     # include graph has no TU row (e.g. a header-defined struct).
-    walked: set[str] = set()
+    walked: set[tuple[str, str]] = set()
 
-    def walk_type(tag: str, tu: str) -> None:
-        if tag in walked:
+    def walk_type(key: tuple[str, str], tu: str) -> None:
+        if key in walked:
             return
-        walked.add(tag)
-        meta = type_meta.get(tag)
+        walked.add(key)
+        meta = type_meta.get(key)
         if meta is None:
             return
         cls = scope.classify(meta["def_file"], meta["decls"], port_paths)
-        edges = field_edges.get(tag, [])
+        edges = field_edges.get(key, [])
         if cls == "wrap":
-            add_type(tag, tu)
-            touched = port_touched.get(tag, set())
-            edges = [(f, t) for (f, t) in edges if f in touched]
-        for _field, ftype in edges:
-            walk_type(ftype, tu)
+            add_type_key(key, tu)
+            # `port_touched` stays keyed by tag: it comes from the port symbols'
+            # `depends_on.types[].fields`, which name a tag and not a def_file.
+            # On a colliding tag that pools both structs' touched sets, which
+            # can only over-walk (a field name one struct lacks matches no edge).
+            touched = port_touched.get(key[0], set())
+            edges = [e for e in edges if e[0] in touched]
+        for _field, ftype, ftype_df in edges:
+            if ftype_df and (ftype, ftype_df) in type_meta:
+                walk_type((ftype, ftype_df), tu)   # exact edge target
+            else:
+                for k in resolve(ftype, tu):
+                    walk_type(k, tu)
 
-    for tag, meta in type_meta.items():
+    for key, meta in type_meta.items():
         if meta["def_file"] in port_paths:
-            walk_type(tag, meta["def_file"])
+            walk_type(key, meta["def_file"])
 
     # Callback typedefs (unaliased_kind == "callback" in types.csv): function-
     # pointer typedefs that are wrap-scope. They are excluded from add_type (not
@@ -440,7 +534,7 @@ def compose_wrap(
     # — the same criterion the syms_manifest uses to decide whether to emit a
     # callback entry. This avoids pulling in every callback in transitively
     # included headers (which the include-closure gate would do).
-    for tag, tmeta in type_meta.items():
+    for (tag, _cb_df), tmeta in type_meta.items():
         if tmeta.get("uak") != "callback":
             continue
         decls = tmeta["decls"]
@@ -512,7 +606,7 @@ def compose_wrap(
             **({"reexport": True} if len(via) > 1 else {})})
 
     types_out = []
-    for tag, rec in type_items.items():
+    for (tag, _tdf), rec in type_items.items():
         via = sorted(rec["declared_in"])
         types_out.append({
             "name": tag, "defined_in": rec["defined_in"], "declared_in": via,
@@ -531,6 +625,6 @@ def compose_wrap(
         "functions": sorted(buckets["functions"], key=lambda r: (r["name"], r["defined_in"])),
         "globals": sorted(buckets["globals"], key=lambda r: (r["name"], r["defined_in"])),
         "macros": sorted(buckets["macros"], key=lambda r: (r["name"], r["defined_in"])),
-        "types": sorted(types_out, key=lambda r: r["name"]),
+        "types": sorted(types_out, key=lambda r: (r["name"], r["defined_in"])),
     }
 
