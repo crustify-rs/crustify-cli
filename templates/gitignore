@@ -1,19 +1,21 @@
-# Crustify artifacts that are regenerable and/or read-only across a wrap/port
-# session. Excluded from git tracking so per-agent worktrees stay lean and the
-# `git worktree` snapshot only carries the actual mutation surface (`rust/`
-# source + build.json + the C edits).
+# Example `<repo_root>/crustify/.gitignore`.
 #
-# These are NOT hidden from agents: the analysis/codeql trees don't change
-# during a wave, so agents read the single shared copy via absolute paths into
-# the main checkout (their `analysis_root` / codeql args point there) rather
-# than a duplicated per-worktree copy.
+# Two jobs. It keeps DERIVED artifacts out of git — they are regenerable, and
+# excluding them keeps the `git worktree` snapshot down to the actual mutation
+# surface (`rust/` source + the C edits). And it deliberately does NOT exclude
+# the hand-authored inputs, which no rerun reproduces.
+#
+# Excluded does not mean hidden from agents: the derived trees are read-only
+# across a wave, so `worktree.link_shared` symlinks the single shared copy into
+# each agent worktree rather than duplicating it.
+#
+# No trailing slashes on the excluded dirs: they are real directories in the
+# main checkout but appear as SYMLINKS inside per-agent worktrees, and a `dir/`
+# pattern does not match a symlink — git would stage it. A bare name matches
+# both, so neither is ever tracked.
 
-# No trailing slashes: these are real directories in the main checkout but
-# appear as symlinks inside per-agent worktrees (see worktree.link_shared) -
-# a `dir/` pattern would not match the symlink and git would stage it. A bare
-# name matches both the directory and the symlink, so neither is ever tracked.
-
-# Agent backends
+# Agent backends — provider config homes, session transcripts, machine ids.
+# Never publish: delete the directory rather than rely on this one line.
 .providers
 
 # Rust build artefacts
@@ -25,14 +27,39 @@ bak
 tmp
 .worktrees
 
-# Analysis schemas
-targets
+# Derived analysis — regenerable from the C by `analyze`
 codeql
-analysis
-build.json
-crates.json
+
+# Machine-local: absolute paths to the crustify checkout, its skills and
+# crustify-prim. Author one per machine from templates/cli-config.json.
 cli-config.json
 
 # Evaluation artefacts
 stats.md
 evaluation/
+
+# ----------------------------------------------------------------------------
+# TRACKED, deliberately — hand-authored or agent-produced, and NOT regenerable.
+# Losing any of these loses work no rerun recovers:
+#
+#   crates.json                    the placement oracle (`.rs` home per entity)
+#   build.json                     the build descriptor the extraction runs on
+#   targets/*/scope-config.json    the authored port-scope definition
+#   analysis/                      the manifests, carrying the agent-submitted
+#                                  judgement fields (ownership / lifetime /
+#                                  locking) that only a paid rerun reproduces
+#
+# The first three are read-only across a wave, so a worktree holding its own
+# checked-out copy behaves identically. `analysis/` is WRITTEN mid-wave by
+# `query --update`, so it is not symlinked either (see worktree._SHARED): each
+# agent submits into its own copy and its landing commit carries the findings,
+# the same route its Rust output already takes.
+#
+# Under targets/, only scope-config.json is authored — scope.json, deps-dag.json
+# and logs/ are derived. Re-including one file from an excluded tree needs the
+# descend-then-re-exclude ladder below, because git cannot re-include a file
+# whose parent directory is excluded.
+targets/*
+!targets/*/
+targets/*/*
+!targets/*/scope-config.json
