@@ -417,9 +417,17 @@ def compose_wrap(
         struct. Prefer the entities whose declaring headers this TU includes;
         failing that, the ones defined in a header — a struct defined inside a
         ``.c`` has no linkage past that TU, so it can never be an importable
-        wrap item for anyone else. Both filters empty means the tag has only
-        TU-local definitions and none is visible here; keep them all rather than
-        drop the edge, so the walk still errs toward over-inclusion."""
+        wrap item for anyone else. Both filters empty means every candidate is
+        TU-local: apply that same linkage argument one step further and keep
+        only a definition in ``tu`` ITSELF, because no other TU's file-static
+        struct is nameable from here. Returning every candidate instead (the
+        prior "err toward over-inclusion" fallback) credits one TU's port-side
+        reachability to an unrelated same-tagged struct in another TU, which
+        admits a phantom into the wrap closure: libgit2's ``entry`` is
+        ``struct entry`` in BOTH src/libgit2/indexer.c (port) and
+        deps/xdiff/xpatience.c (wrap, and touched by no port file), and the
+        fallback put the xdiff one in wrap.types with no manifest record
+        behind it."""
         dfs = defs_of.get(tag)
         if not dfs:
             return []
@@ -431,7 +439,9 @@ def compose_wrap(
         if hit:
             return hit
         hdr = [k for k in keys if not k[1].endswith(_C_TU_SUFFIXES)]
-        return hdr or keys
+        if hdr:
+            return hdr
+        return [k for k in keys if k[1] == tu]
 
     def add_type_key(key: tuple[str, str], tu: str) -> None:
         meta = type_meta.get(key)
