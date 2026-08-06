@@ -18,8 +18,9 @@ than the older "existing entry wins, ignore new" semantic:
     This is what lets a composer fix land without a full `--reset` (e.g. a
     typedef'd function pointer that used to collapse to a bare scalar now
     surfaces as a proper pointer field).
-  - **Agent-owned values are preserved**: the ``ptr`` ownership *block*
-    contents on each field, and the entry-level ``lifetime`` / ``ops`` —
+  - **Agent-owned values are preserved**: on each field the ``ptr`` ownership
+    *block* contents plus the flat ``refcount`` / ``locked_by`` judgements
+    (`_FIELD_AGENT_KEYS`), and the entry-level ``lifetime`` / ``ops`` —
     `_overlay_field` keeps the existing ``ptr`` when the field is still a
     pointer, and the composer never emits ``lifetime`` / ``ops`` values, so the
     add-missing rule leaves them untouched. The same holds for a **symbol**
@@ -74,6 +75,14 @@ def type_key(entry: Entry) -> Key:
     return (scope.entry_tag(entry), entry.get("defined_in") or "")
 
 
+# Field-level keys the agent owns and the composer never emits, mirroring
+# `query.py`'s `_FIELD_AGENT_KEYS` minus `ptr` (which IS composer-seeded, so it
+# is carried conditionally above) plus its free-text `_comment_agent`. Without
+# them here a re-compose silently destroys the judgement — there is no skeleton
+# to re-seed it from.
+_FIELD_AGENT_KEYS = ("locked_by", "refcount", "_comment_agent")
+
+
 def _overlay_field(existing: dict, incoming: dict) -> dict:
     """Overlay a field's **composer-owned structure** from `incoming` while
     preserving the **agent-owned** ``ptr`` ownership block from `existing`.
@@ -89,11 +98,15 @@ def _overlay_field(existing: dict, incoming: dict) -> dict:
       - take composer structure verbatim from ``incoming``;
       - ``ptr``: keep the agent-filled block from ``existing`` when the field is
         *still* a pointer; seed ``incoming``'s null skeleton when it *became*
-        one (agent fills later); drop it when it *stopped* being a pointer.
+        one (agent fills later); drop it when it *stopped* being a pointer;
+      - ``refcount`` / ``locked_by`` / ``_comment_agent``: carry over verbatim.
     """
     out = dict(incoming)                       # composer structure authoritative
     if "ptr" in incoming and "ptr" in existing:
         out["ptr"] = existing["ptr"]           # preserve agent-filled ownership
+    for k in _FIELD_AGENT_KEYS:
+        if k in existing:
+            out[k] = existing[k]
     return out
 
 
