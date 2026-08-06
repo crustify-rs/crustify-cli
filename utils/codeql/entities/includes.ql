@@ -29,9 +29,9 @@ import cpp
  * the source root (system headers, …).
  */
 string filePath(File f) {
-  f.getRelativePath() != "" and result = f.getRelativePath()
-  or
-  f.getRelativePath() = "" and result = f.getAbsolutePath()
+  if exists(f.getRelativePath())
+  then result = f.getRelativePath()
+  else result = f.getAbsolutePath()
 }
 
 from Include inc, File src, File dst
