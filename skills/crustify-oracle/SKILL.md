@@ -89,9 +89,16 @@ really necessary.
   `include/internal/ring_buf.h` and another in `crypto/bio/bss_dgram_pair.c`);
   the oracle refuses and prints the `--file` for each candidate.
 
-- **Submit through `--update`, never by editing a file.** Findings attach to an
-  entry the composed records already hold; a name they do not carry is outside
-  this target's scope — record what you can and note the gap in your summary.
+- **Submit through `--update`, never by editing a file.**
+
+- **Scope gates enumeration, not lookup.** A listing (`query types`,
+  `--port-only`, `--wrap-only`) is this target's inventory. A lookup by
+  `--name` reaches every entity the extraction saw, so a type's destructor in
+  another scope — `ossl_free_compression_methods_int` in
+  `crypto/comp_methods.c` drops the `ssl` type `stack_st_SSL_COMP` — is
+  readable, submittable through `--update`, and comes back from
+  `query symbols --lifetime-for`. Ownership does not stop at the scope line;
+  record it where you find it.
 
 - **Scope gates emission, not content.** An emitted record's `depends_on` /
   `used_by` are codebase-wide whatever its scope, so a wrap-scope node's

@@ -23,16 +23,23 @@ _CACHE: dict[tuple[str, str, str], dict] = {}
 _ENTRIES_KEY = {"types": "types", "symbols": "symbols"}
 
 
-def build(layout: Layout, target: Path, kind: str, *, stage: str) -> dict:
+def build(layout: Layout, target: Path, kind: str, *, stage: str,
+          scoped: bool = True) -> dict:
     """``{rel_dir: [entry]}`` for ``kind`` (``"types"`` | ``"symbols"``),
     skeleton composed and store overlaid.
 
     ``rel_dir`` groups by source stem — the vocabulary `crates.json` and every
     provenance-reporting caller uses.
+
+    ``scoped=False`` drops the scope seed and composes the whole CodeQL
+    universe. Enumeration stays scoped; a *named* lookup falls back to the
+    universe so an agent can read and analyse an entity its target does not
+    own — a destructor in another scope still decides this target's ownership.
+    Both emits cost the same (~2.4s): the work is parsing the tables.
     """
     if kind not in _ENTRIES_KEY:
         raise ValueError(f"unknown manifest kind: {kind!r}")
-    ck = (str(layout.repo_root), str(target), kind)
+    ck = (str(layout.repo_root), str(target), kind, scoped)
     hit = _CACHE.get(ck)
     if hit is not None:
         return hit
@@ -51,10 +58,10 @@ def build(layout: Layout, target: Path, kind: str, *, stage: str) -> dict:
             f"{stage}: no CodeQL T1 tables at {t1}. "
             f"Run `crustify-oracle {target} extract-ql` first.")
 
-    # `scope_json_path=None` would not fail — it disables the seed gate and
-    # port/wrap classification, widening the emit to the repo-wide universe.
-    spec = FilterSpec(scope_json_path=_scope_mod.build(layout, target,
-                                                       stage=stage))
+    # `scope_json_path=None` disables the seed gate and port/wrap
+    # classification, widening the emit to the repo-wide universe.
+    spec = FilterSpec(scope_json_path=(
+        _scope_mod.build(layout, target, stage=stage) if scoped else None))
     by_dir, _dir_scope, _focus = _compose(t1, layout.t2, spec)
     by_dir = _dedup(by_dir, kind)
 
@@ -174,7 +181,9 @@ def _materialize_forks(by_dir: dict, doc: dict) -> None:
         by_dir[rel].append(clone)
 
 
-def entries(layout: Layout, target: Path, kind: str, *, stage: str) -> list:
+def entries(layout: Layout, target: Path, kind: str, *, stage: str,
+            scoped: bool = True) -> list:
     """Every entry of ``kind``, flattened."""
-    return [e for v in build(layout, target, kind, stage=stage).values()
+    return [e for v in build(layout, target, kind, stage=stage,
+                             scoped=scoped).values()
             for e in v]

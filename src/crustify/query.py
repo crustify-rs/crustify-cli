@@ -151,15 +151,43 @@ def _arg_is_array(a: dict) -> bool:
 
 # ---------------------------------------------------------- composed records
 
-def _entries(layout, target, kind: str) -> list:
+def _entries(layout, target, kind: str, *, scoped: bool = True) -> list:
     """Every record of ``kind`` (``"type"``/``"types"`` | ``"sym"``/``"symbols"``),
     composed from the CodeQL tables and overlaid with `ownership-store.json`.
 
     Replaces the rglob over the per-stem tree every reader here used to do. The
-    records are identical in shape; only their provenance changed."""
+    records are identical in shape; only their provenance changed.
+
+    ``scoped=False`` widens to the whole CodeQL universe — see
+    :func:`_universe_entry`."""
     from crustify import manifests as _m
     k = "types" if kind in ("type", "types") else "symbols"
-    return _m.entries(layout, target, k, stage="query")
+    return _m.entries(layout, target, k, stage="query", scoped=scoped)
+
+
+def _universe_entries(layout, target, kind: str) -> list:
+    """Every record of ``kind`` the CodeQL extraction saw, scope seed dropped.
+
+    The composed records are seeded from `scope.json`, so an entity the target
+    does not own is absent from them. That is right for *enumeration* — a
+    listing is the target's inventory — but wrong for a named lookup: ownership
+    does not stop at the scope line. `stack_st_SSL_COMP` is an `ssl` type whose
+    only destructor, `ossl_free_compression_methods_int`, lives in
+    `crypto/comp_methods.c`, and an agent that cannot read that symbol cannot
+    record what it does.
+
+    So a named read and `--update` fall back here. Structure still comes from
+    the composer, so validation is identical either way; only the seed differs.
+    Nothing is filtered out: the system headers the extraction saw are records
+    like any other, and one memoized compose serves the whole universe.
+    """
+    return _entries(layout, target, kind, scoped=False)
+
+
+def _universe_entry(layout, target, kind: str, match) -> dict | None:
+    """The first record :func:`_universe_entries` yields satisfying ``match``."""
+    return next((e for e in _universe_entries(layout, target, kind)
+                 if match(e)), None)
 
 
 def _entry_pair(layout, target) -> tuple[list, list]:
@@ -267,6 +295,30 @@ def _taking(target: Path, spec: str, calling: str | None,
     }, indent=2))
 
 
+def _lifetime_pool(layout, target) -> list:
+    """The symbol records `--lifetime-for` scans.
+
+    A type's destructor need not live in the type's scope —
+    `ossl_free_compression_methods_int` (`crypto/comp_methods.c`) is the only
+    dropper of the `ssl` type `stack_st_SSL_COMP`. Submitting that role is
+    allowed (see :func:`_universe_entries`), so reading it back must be too, or
+    the record is written where nothing can see it.
+
+    The scoped records answer for every in-scope role, and only a *submitted*
+    role can be out of scope — the composer never invents `lifetime`. So the
+    store is the cheap oracle: widen to the universe only when it actually
+    holds a lifetime block for a symbol the scope does not carry.
+    """
+    scoped = _entries(layout, target, "symbols")
+    from crustify import store as _store
+
+    doc = _store.load(layout)
+    in_scope = {e.get("name") for e in scoped}
+    outside = any(r.get("lifetime") and r.get("name") not in in_scope
+                  for r in (doc.get("symbols") or []))
+    return _universe_entries(layout, target, "symbols") if outside else scoped
+
+
 def _lifetime_for(target: Path, type_name: str, array_only: bool = False) -> None:
     """Reverse lifecycle lookup for a type: every symbol whose entry-level
     `lifetime` acts on an ARG of that type, grouped into the type's dropped_by /
@@ -291,7 +343,7 @@ def _lifetime_for(target: Path, type_name: str, array_only: bool = False) -> Non
               "dropped_by": [], "fields_disposed_by": [], "cloned_by": []}
     seen = set()
     if True:
-        for s in _entries(layout, target, "symbols"):
+        for s in _lifetime_pool(layout, target):
             lf = s.get("lifetime")
             if not isinstance(lf, dict):
                 continue
@@ -1010,7 +1062,11 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
     entry = next((e for e in _entries(layout, target, "types") if _id_match(e)),
                  None)
     if entry is None:
-        raise SystemExit(f"--update: no type {tag!r} in the composed records.")
+        entry = _universe_entry(layout, target, "types", _id_match)
+    if entry is None:
+        raise SystemExit(
+            f"--update: no type {tag!r} in the CodeQL universe"
+            f"{f' at {defined_in}' if defined_in else ''}.")
 
     field_by_name = {fld.get("name"): fld for fld in entry.get("fields") or []}
     errors: list[str] = []
@@ -1322,7 +1378,11 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
     entry = next((e for e in _entries(layout, target, "symbols")
                   if _is_primary(e)), None)
     if entry is None:
-        raise SystemExit(f"--update: no symbol {name!r} in the composed records.")
+        entry = _universe_entry(layout, target, "symbols", _is_primary)
+    if entry is None:
+        raise SystemExit(
+            f"--update: no symbol {name!r} in the CodeQL universe"
+            f"{f' at {defined_in}' if defined_in else ''}.")
 
     def _apply(doc: dict) -> None:
         errors: list[str] = []
@@ -1619,14 +1679,18 @@ def _records(target, kind, names, files, *, wrap_only=False,
 def _load_type_entry(layout, target, tag: str, defined_in: str | None) -> dict | None:
     """The raw ``types.json`` manifest entry for ``tag`` (preferring the one whose
     ``defined_in`` matches, to disambiguate a same-tag collision)."""
-    fallback = None
-    for e in _entries(layout, target, "types"):
-        if (e.get("name") or e.get("type")) != tag:
-            continue
-        if defined_in and e.get("defined_in") == defined_in:
-            return e
-        fallback = fallback or e
-    return fallback
+    def _find(pool: list) -> dict | None:
+        fallback = None
+        for e in pool:
+            if (e.get("name") or e.get("type")) != tag:
+                continue
+            if defined_in and e.get("defined_in") == defined_in:
+                return e
+            fallback = fallback or e
+        return fallback
+
+    return (_find(_entries(layout, target, "types"))
+            or _find(_universe_entries(layout, target, "types")))
 
 
 def _resolve(target, *, kind: str, name: str, files: list[str] | None,
@@ -1664,9 +1728,10 @@ def _resolve(target, *, kind: str, name: str, files: list[str] | None,
     # records rather than a tree of files.
     arr, tagkey = (("types", "name") if kind == "type"
                    else ("symbols", "name"))
-    uniq: dict = {}                                   # defined_in -> entry (dedup)
-    if True:
-        for e in _entries(layout, target, kind):
+
+    def _scan(pool: list) -> dict:
+        uniq: dict = {}                               # defined_in -> entry (dedup)
+        for e in pool:
             if e.get(tagkey) != name:
                 continue
             if file_set and e.get("defined_in") not in file_set:
@@ -1676,6 +1741,13 @@ def _resolve(target, *, kind: str, name: str, files: list[str] | None,
             df = e.get("defined_in")
             if df not in uniq or (e.get("variant") or 0) < (uniq[df].get("variant") or 0):
                 uniq[df] = e
+        return uniq
+
+    uniq = _scan(_entries(layout, target, kind))
+    if not uniq:
+        # Out of the target's scope but in the CodeQL universe — readable, so
+        # its ownership can be recorded. See :func:`_universe_entry`.
+        uniq = _scan(_universe_entries(layout, target, kind))
 
     def _mk(e: dict):
         return D.Node(id=name, node_kind=kind, subkind=str(e.get("kind") or "symbol"),
@@ -1714,14 +1786,18 @@ def _syms_index(layout, target) -> dict:
 def _load_sym_entry(layout, target, name: str, defined_in: str | None) -> dict | None:
     """The symbol record for ``name`` (preferring the one whose ``defined_in``
     matches, to disambiguate same-named file-local statics)."""
-    fallback = None
-    for e in _entries(layout, target, "symbols"):
-        if e.get("name") != name:
-            continue
-        if defined_in and e.get("defined_in") == defined_in:
-            return e
-        fallback = fallback or e
-    return fallback
+    def _find(pool: list) -> dict | None:
+        fallback = None
+        for e in pool:
+            if e.get("name") != name:
+                continue
+            if defined_in and e.get("defined_in") == defined_in:
+                return e
+            fallback = fallback or e
+        return fallback
+
+    return (_find(_entries(layout, target, "symbols"))
+            or _find(_universe_entries(layout, target, "symbols")))
 
 
 def _dag_loc(by_key, by_name, names, files, layer, as_json, keep=None,
