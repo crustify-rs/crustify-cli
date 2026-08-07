@@ -25,9 +25,8 @@ and safe FFI function wrappers for making FFI calls.
 
  Both **port- and wrap-scope** types stay layout-compatible with C until they can be
  opacified, which is mainly applicable to port-scope structs. The types that must stay
- interoperable with C
- have their definition wrapped in newtypes and field accessors placed in `impl` blocks
- on the type.
+ interoperable with C have their definition wrapped in newtypes and field accessors
+ placed in `impl` blocks on the type.
  
  Rust consumers of types use the safe type's API instead of raw pointers or
  `unsafe` blocks.
