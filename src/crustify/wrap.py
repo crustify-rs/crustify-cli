@@ -586,9 +586,20 @@ def wrap_types(
         chain_policy=chain_policy, parallel_max=parallel_max, dry_run=dry_run,
     )
     if failures:
-        labels = ", ".join(b.label() for b, _ in failures)
+        # Print the EXCEPTION, not just the label. A batch that fails before its
+        # agent starts (backend refuses, spawn errors, prompt/template raises)
+        # writes no per-agent log at all, so pointing at the log directory was
+        # the only thing said about it and the reason was unrecoverable
+        # afterwards -- 11 of 17 batches in one wave left nothing but a pristine
+        # worktree. The scheduler has carried the exception all along
+        # (`_schedule` returns `list[tuple[Batch, BaseException]]`); it was
+        # discarded here.
+        lines = "\n".join(
+            f"  - {b.label()}: {type(e).__name__}: {e}" for b, e in failures)
         raise SystemExit(
-            f"wrap stage failed for {len(failures)} batch(es): {labels}. "
-            f"Per-agent logs live under crustify/targets/<rel>/logs/<session>/.")
+            f"wrap stage failed for {len(failures)} batch(es):\n{lines}\n"
+            f"An agent that started also has a log under "
+            f"crustify/targets/<rel>/logs/<session>/; one that never started "
+            f"does not, and the line above is all there is.")
     if not dry_run:
         print("[crustify-cli wrap] done.")
