@@ -279,8 +279,7 @@ def _collect(analysis_root: Path,
              port_syms: set | None = None,
              port_fields: dict[str, set[str]] | None = None,
              codeql_dir: Path | None = None,
-             in_scope_types: set[str] | None = None,
-             wrap_tags: set[str] | None = None):
+             in_scope_types: set[str] | None = None):
     """Collect nodes/edges from the analysis tree, narrowed to one target.
 
     The tree is scope-agnostic and ACCUMULATES across targets: an entry that
@@ -326,16 +325,7 @@ def _collect(analysis_root: Path,
         # is keyed by TAG (it comes from `depends_on.types[].fields`, which
         # names no file), so a colliding tag pools both entities' touched sets
         # -- which can only over-keep a field, never drop one.
-        # Narrow to port-touched fields for a WRAP struct only: the port binds
-        # the rest of its layout opaquely, so those field types order no work.
-        # A PORT struct is translated wholesale -- every field type is a real
-        # layout dep -- and narrowing it dropped them: `git_cache.map` is never
-        # read by port code, so `git_cache -> git_cache_oidmap -> git_cached_obj`
-        # vanished and `git_repository`'s closure lost both.
-        keep = (port_fields.get(tag, set())
-                if port_fields is not None
-                and (wrap_tags is None or tag in wrap_tags)
-                else None)
+        keep = None if port_fields is None else port_fields.get(tag, set())
         for fname, tname, tdf in tedges.get(key, ()):
             if keep is not None and fname not in keep:
                 continue
@@ -977,22 +967,16 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
                 pass
         port_fields = port_touched_fields(analysis_root, port_syms)
     in_scope_types = None
-    wrap_tags: set[str] | None = None
     if scope_json is not None and (isinstance(scope_json, dict)
                                    or Path(scope_json).is_file()):
         _sj = _scope._doc(scope_json)
         in_scope_types = {e["name"] for side in ("port", "wrap")
                           for e in _sj.get(side, {}).get("types") or []}
-        # Only a WRAP struct is narrowed to its port-touched fields; a PORT
-        # struct is reimplemented wholesale in Rust, so every field type is a
-        # real layout dep. Same split `wrap_closure.walk_type` makes.
-        wrap_tags = {e["name"] for e in _sj.get("wrap", {}).get("types") or []}
     if codeql_dir is None:
         codeql_dir = Path(analysis_root).parent / "codeql"
     types, syms, talias = _collect(analysis_root, port_syms, port_fields,
                                    codeql_dir=codeql_dir,
-                                   in_scope_types=in_scope_types,
-                                   wrap_tags=wrap_tags)
+                                   in_scope_types=in_scope_types)
     _populate_nfields(codeql_dir, types)
     amap = _alias_map(analysis_root, types, talias)
     ext_syms, ext_types, wedge = _build_edges(types, syms, amap)
