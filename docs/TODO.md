@@ -539,6 +539,55 @@ Surfaced driving the full pipeline on the libgit2 `src` target.
 
 ---
 
+## `dag.Node.key` drops `node_kind`, so a tag and an identifier collide (2026-08-07)
+
+C keeps **separate namespaces for struct tags and ordinary identifiers**, so one
+file may declare both. `static struct { … } typelen[] = {…}` in `src/util/date.c`
+yields a TYPE node `typelen` and a GLOBAL node `typelen`, same `defined_in`.
+
+`Node.key` is `(id, defined_in)` (`src/crustify/dag.py:54`), so `load_nodes`
+writes both into `by_key` under one key and the second overwrites the first. The
+symbol always sits at a higher layer, so the TYPE node is the one lost. On
+libgit2/`src`: 6,835 nodes -> 6,830 distinct keys, 5 collisions.
+
+| name | file | type | symbol |
+|---|---|---|---|
+| `tree_key_search` | `src/libgit2/tree.c` | L0 | L8 |
+| `typelen` | `src/util/date.c` | L0 | L1 |
+| `special` | `src/util/date.c` | L1 | L6 |
+| `merge_driver_registry` | `src/libgit2/merge_driver.c` | L2 | L3 |
+| `stream_registry` | `src/libgit2/streams/registry.c` | L2 | L3 |
+
+**Two visible consequences.**
+
+1. `query dag --layer N --port-only` emits 641 of 646 port types. Not a scope
+   filter: `_scope_predicate` returns True for all five; they are gone from
+   `by_key` before `keep()` runs. `crustify/evaluation/port-closure/deps-dag.md`
+   records the disagreement in its cross-check caveat.
+2. All five names are **unschedulable**. `wrap --name typelen` and `query dag
+   --name typelen` both refuse as ambiguous and offer two identical
+   `--file src/util/date.c` lines -- the disambiguator cannot disambiguate,
+   because what differs is `node_kind`, which the key does not carry.
+
+The composer already gets this right: `deps_dag._build_edges.res_sym` has
+`if name in types: dt.add(name)  # name collides with a type tag (C's separate
+namespaces) -> the type node`, and `deps-dag.json` holds both nodes with correct
+deps and layers. Only the LOADER conflates them.
+
+**Fix:** key `by_key` on `(node_kind, id, defined_in)`. Ripples to ~55 call sites
+across `dag.py`, `query.py`, `wrap.py`, `_schedule.py`. The awkward one is
+`query.py:2037` --
+`[dk for dk in (*n.dep_types, *n.dep_syms) if dk in by_key]` -- which merges the
+two namespaces into one lookup and discards exactly the information the fix
+needs; `dep_types` vs `dep_syms` already says which space each edge belongs to.
+
+Low urgency: all five are file-static structs in port scope, so no wrap-stage
+work touched them. It becomes blocking when the port stage reaches those TUs.
+
+Surfaced cross-checking the regenerated port-closure table against the oracle.
+
+---
+
 **Parked / deferred** -- design notes and known gaps, older; each keeps its
 surfaced-date tag.
 
