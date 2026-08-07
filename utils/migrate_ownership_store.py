@@ -168,8 +168,15 @@ def main() -> int:
     args = ap.parse_args()
 
     layout = Layout.discover(Path(args.repo_root))
-    doc = extract(layout.analysis)
-    errs = verify(layout.analysis, doc)
+    # The per-stem tree is what this script migrates AWAY from, so `Layout` no
+    # longer addresses it — resolve it here rather than re-adding a property
+    # that only this one-shot needs.
+    analysis = layout.root / "analysis"
+    if not analysis.is_dir():
+        print(f"error: no analysis tree at {analysis}", file=sys.stderr)
+        return 1
+    doc = extract(analysis)
+    errs = verify(analysis, doc)
 
     blob = json.dumps(doc, indent=1) + "\n"
     print(f"[migrate] {len(doc['types'])} type records / "
