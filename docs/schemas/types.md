@@ -1,18 +1,13 @@
-# types.json schema
+# Type record schema
 
-Field meaning for the per-stem `types.json` manifests produced by
-`compose/types_manifest.py`. This file is the single source of field semantics.
+Field **meaning** for a type record — the properties the deterministic types
+composer infers, and the ownership judgements an agent submits. The exact JSON
+shape of a submission, and its validation rules, are the *contract*, served
+separately by `crustify-oracle <repo> <target> query types --update-help`, so
+meaning and shape never duplicate.
 
 Each `## <field>` section documents one record field; the heading name is the
 field key.
-
-A type stores **no lifecycle of its own**. Which routines drop, dispose or
-clone it is recorded once on the acting SYMBOL — `syms.json`'s entry-level
-`lifetime` block, which names its subject arg (see
-[syms.md](syms.md#lifetime)) — and read back by reverse lookup:
-`crustify-cli query symbols --lifetime-for <TAG>` groups every such symbol into
-this type's `dropped_by` / `fields_disposed_by` / `cloned_by` candidates. One
-fact, one home: a routine can never disagree with the type it acts on.
 
 ## name
 
@@ -58,6 +53,25 @@ Composer-filled `{file: [symbols]}` footprint: functions that read/write a FIELD
 of this type and so need its concrete layout (incl. transitive `a->b->field`
 reachers). COMPLETE: the FULL cross-codebase footprint for every
 type.
+
+## _analysis
+
+Derived at read time, never stored and never submitted.
+
+- **`submitted`** -- whether the ownership store holds a record for this entity.
+  A null slot cannot say this on its own: `lifetime: null` reads the same
+  whether nobody has looked or an agent looked and found no lifecycle role.
+- **`pending`** -- the pointer slots carrying no ownership block, as dotted
+  paths. Under `--port-only` / `--wrap-only` it counts only the fields that
+  scope's code touches, so it agrees with what `--fields` shows.
+
+`submitted: true` with a non-empty `pending` is a partial analysis.
+
+## _comment_agent
+
+Free-text note from the agent that analyzed the entity: the reasoning behind a
+judgement, the evidence for it, and anything the structured slots cannot carry.
+Agent-filled, absent until one is submitted.
 
 ## fields
 

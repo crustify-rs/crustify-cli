@@ -229,7 +229,7 @@ def _decls(v: Any) -> list[str]:
 
 
 def _load_wrap_routing(
-    scope_json_path: Path | None,
+    scope_json_path,
 ) -> tuple[dict[tuple[str, str], str], dict[str, str]]:
     """``(name, defined_in) -> import header`` and ``tag -> import header`` from
     the derived ``wrap`` section of scope.json. The home is the first (sorted)
@@ -239,7 +239,7 @@ def _load_wrap_routing(
     if scope_json_path is None:
         return sym_via, type_via
     try:
-        doc = json.loads(Path(scope_json_path).read_text())
+        doc = scope._doc(scope_json_path)
     except (OSError, ValueError):
         return sym_via, type_via
     w = doc.get("wrap") or {}

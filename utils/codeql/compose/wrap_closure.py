@@ -110,7 +110,7 @@ def build_index(
     csv_dir_t1: Path,
     csv_dir_t2: Path,
     port_paths: set[str],
-    scope_json_path: Path,
+    scope_json_path,
 ) -> _Index:
     """Build the closure index DIRECTLY from CodeQL T1/T2 — no ``syms.json``.
 
@@ -350,7 +350,7 @@ def _sym_bucket(kind: str) -> str:
 def compose_wrap(
     csv_dir_t1: Path,
     csv_dir_t2: Path,
-    scope_json_path: Path,
+    scope_json_path,
     includes_rows: list[dict],
     port_paths: set[str],
     type_rows: list[dict],

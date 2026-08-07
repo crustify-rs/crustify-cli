@@ -43,98 +43,6 @@ def _lifetime_tier(s: str) -> str:
     return s
 
 
-def _add_analyze_filter_flags(p: argparse.ArgumentParser) -> None:
-    """Narrowing flags for `analyze {{symbols,types}}` subjects.
-
-    **Seed selectors** (union): `--dir` / `--file` / `--name`.
-    Without `--all`, at least one of these is required.
-
-    **Scope**: port-aware analysis uses the target's
-    `crustify/targets/<target>/scope.json` automatically (computed from
-    the target, alongside its scope-config.json); there is no flag to pass.
-    When that scope.json is absent, all entries emit as wrap-shape
-    (base only).
-
-    **Post-emission filters**: `--port-only` / `--wrap-only` (mutually
-    exclusive). Apply after seed/closure logic to keep only entries
-    with port additions (port-only) or without (wrap-only).
-
-    Both subjects are composer-only; nothing here spawns an agent.
-
-    `--reset` may combine with any of these.
-    """
-    p.add_argument(
-        "--all", action="store_true",
-        help="Process every entry in the analysis tree (no narrowing).",
-    )
-    p.add_argument(
-        "--dir", nargs="+", metavar="DIR", default=None,
-        help="Narrow to entries whose source path falls under these "
-             "repo-root-relative directories (e.g. crypto/, ssl/, "
-             "include/openssl/). Repeatable.",
-    )
-    p.add_argument(
-        "--file", nargs="+", metavar="FILE", default=None,
-        help="Narrow to entries defined or declared in these files. "
-             "Accepts a repo-root-relative path (e.g. "
-             "ssl/statem/statem_local.h) or a bare basename "
-             "(e.g. statem_local.h) when uniquely identifiable in "
-             "the analysis tree. Repeatable.",
-    )
-    p.add_argument(
-        "--name", nargs="+", action="extend", metavar="NAME", default=None,
-        help="Seed ONLY the given symbol or type names -- precise, no "
-             "transitive closure (the named entities are emitted "
-             "alone; use --dir/--file to pull a region's closure). Pass all "
-             "names as a space-separated list after a single --name (e.g. "
-             "`--name a b c`); repeating the flag keeps only the last group.",
-    )
-    # Scope selection (mutually exclusive). Default (none set) = --scope-only:
-    # emit port ∪ wrap. The composer classifies port/wrap into the
-    # per-target scope.json (no per-entry tag); these pick which slice rides.
-    post_filter = p.add_mutually_exclusive_group()
-    post_filter.add_argument(
-        "--scope-only", action="store_true",
-        help="Port ∪ wrap (the default): emit the port-reachable surface. "
-             "Explicit form of the default scope.",
-    )
-    post_filter.add_argument(
-        "--port-only", action="store_true",
-        help="After seed/closure, keep only port-shape entries (with "
-             "port additions). Equivalent to wanting just the "
-             "port-scope subset of the result.",
-    )
-    post_filter.add_argument(
-        "--wrap-only", action="store_true",
-        help="After seed/closure, keep only base-shape entries. "
-             "Equivalent to wanting just the wrap-scope subset of "
-             "the result.",
-    )
-    post_filter.add_argument(
-        "--unscoped", action="store_true",
-        help="Repo-wide: emit EVERY candidate, skipping the out-of-scope "
-             "reachability drop (so dispatch-table-only handlers and their "
-             "primitives are present). scope.json still classifies port/wrap. "
-             "Optional and orthogonal to the later stages: they read whatever "
-             "the tree holds, and nothing downstream requires the repo-wide "
-             "set. Widens the tree, and the emit cost with it.",
-    )
-    p.add_argument(
-        "--reset", action="store_true",
-        help="Delete matching entries before running.",
-    )
-    p.add_argument(
-        "--out-suffix", dest="out_suffix", default=None, metavar="SUFFIX",
-        help="Write/read manifests as types_<SUFFIX>.json / syms_<SUFFIX>.json "
-             "instead of the canonical types.json / syms.json, isolating this "
-             "run from the real tree (and from other suffixed runs). The "
-             "composer emits a fresh suffixed skeleton; anything that shells "
-             "out to `crustify-cli query` picks the suffix up from the "
-             "CRUSTIFY_OUT_SUFFIX env var. Downstream stages (dag/wrap/port) "
-             "read only the canonical names and ignore suffixed artifacts.",
-    )
-
-
 def _add_subject_scope_flags(
     p: argparse.ArgumentParser,
     *,
@@ -201,116 +109,6 @@ def _add_subject_scope_flags(
             help="Narrow to entries tagged with these libraries "
                  "(requires --wrap or implicit wrap context).",
         )
-
-
-def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
-    """Flags for `query types`/`query syms` — the read-only oracle, resolved
-    from the manifest (dag-free). With no `--name` they enumerate (filtered by
-    scope / `--file`) as a name list; with `--name T` they
-    introspect one entry — always the WHOLE record (several names → several
-    records). On a type, `--fields`/`--ops` print its windowable lists
-    (`facets`). The .rs module of an entry is found via
-    `crustify-cli <target> scaffold --name <X>`, not here."""
-    sc = p.add_mutually_exclusive_group()
-    sc.add_argument("--wrap-only", action="store_true", dest="wrap_only",
-                    help="Narrow to wrap scope: enumeration → wrap-scope entries; "
-                         "--ops/--methods → wrap-scope functions; --fields/--field-touchers "
-                         "→ fields touched by wrap-scope code. (Facets are complete "
-                         "by default.)")
-    sc.add_argument("--port-only", action="store_true", dest="port_only",
-                    help="Narrow to port scope: enumeration → port-scope entries; "
-                         "--ops/--methods → port-scope functions; --fields/--field-touchers "
-                         "→ fields touched by port-scope code. (Facets are complete "
-                         "by default.)")
-    p.add_argument("--name", nargs="+", action="extend", default=None, metavar="NAME",
-                   help="No --name → enumerate; one → introspect; several → batch records.")
-    p.add_argument("--file", nargs="+", default=None, metavar="FILE",
-                   dest="files",
-                   help="Restrict/disambiguate by defining file.")
-    facet = p.add_mutually_exclusive_group()
-    facet.add_argument("--manifest", action="store_true",
-                       help="Introspect: print the types.json/syms.json that homes this entry.")
-    # `--update` is available for BOTH subjects (types AND syms): the schema
-    # boundary through which a wrapper agent merges its findings.
-    facet.add_argument("--update", default=None, metavar="FINDINGS",
-                       help="Ingest an agent findings JSON (path or '-' for stdin) "
-                            "into the named entry: validate (hard-reject only), then "
-                            "partial-merge under a lock. types: lifecycle + per-field "
-                            "ptr. syms: macro kind, per-arg/return ownership "
-                            "(ptr_args/ptr_ret), and the symbol's lifecycle role "
-                            "(lifetime). The agent never edits the manifest directly.")
-    facet.add_argument("--update-help", action="store_true", dest="update_help",
-                       help="Print the findings JSON schema that --update expects "
-                            "for this subject (types vs syms), then exit. No --name "
-                            "needed — schema discovery for the wrapper agent.")
-    facet.add_argument("--schema", action="store_true", dest="schema",
-                       help="Print the record's field/slot DEFINITIONS (the "
-                            "_comment_* blocks, the schema authority), then exit. "
-                            "No --name needed.")
-    if facets:
-        facet.add_argument("--fields", action="store_true",
-                           help="Introspect a type: ALL declared fields with their "
-                                "per-field structural + ptr detail (--port-only/"
-                                "--wrap-only narrow to that scope's touched fields); "
-                                "'[]' if none.")
-        facet.add_argument("--ops", action="store_true",
-                           help="Introspect a type: its method surface "
-                                "(lifecycle ops), lifecycle-first.")
-        facet.add_argument("--methods", action="store_true",
-                           help="Introspect a type: its COMPLETE footprint — the "
-                                "opaque_in ∪ non_opaque_in functions (every function "
-                                "tree-wide that touches the type, incl. out-of-scope); "
-                                "--port-only/--wrap-only intersect with that scope's "
-                                "functions; '[]' if none.")
-        facet.add_argument("--field-touchers", action="store_true",
-                           dest="field_touchers",
-                           help="Introspect a type: {field: [touchers]} — ALL "
-                                "declared fields by default (--port-only/--wrap-only "
-                                "narrow the FIELDS to that scope's touched subset); "
-                                "each field's toucher set is the COMPLETE, unfiltered "
-                                "set of functions that access it.")
-        p.add_argument("--range", default=None, metavar="A:B", dest="rng",
-                       help="Window the --fields/--ops/--methods list to [A:B).")
-    else:
-        # Symbols-only REVERSE lifecycle lookup, parameterized by a TYPE (no
-        # --name). Feeds the type WRAPPER: which symbols realize TYPE's Drop /
-        # dispose / Clone, read off each symbol's entry-level lifetime block.
-        facet.add_argument(
-            "--lifetime-for", default=None, metavar="SPEC", dest="lifetime_for",
-            help="Reverse lifecycle lookup (READ: roles that already exist): "
-                 "every symbol whose `lifetime` block (is_dropper/is_disposer/"
-                 "is_cloner) acts on an arg matching SPEC, grouped into the "
-                 "type's dropped_by / fields_disposed_by / cloned_by. SPEC is "
-                 "a struct tag / typedef, or the keyword `void` (raw byte-level, "
-                 "untyped) or `string` (NUL-terminated; the char family or the "
-                 "wrapper's own ptr.string verdict). The subject arg is the one "
-                 "named by `lifetime.for`, so a symbol that merely TAKES a SPEC "
-                 "arg without acting on it is not listed. No --name needed.")
-        facet.add_argument(
-            "--taking", default=None, metavar="SPEC", dest="taking",
-            help="CANDIDATE discovery (the inverse of --lifetime-for, which reads "
-                 "flags that already exist): every symbol with an ARG matching "
-                 "SPEC (tag / typedef / `void` / `string`). Pair with --calling "
-                 "to keep only those that reach a lifecycle primitive. No --name "
-                 "needed.")
-        p.add_argument(
-            "--calling", default=None, metavar="FN[,FN...]", dest="calling",
-            help="Narrow --taking to symbols that reach one of these routines "
-                 "within --hops call hops (via the composer's depends_on.syms). "
-                 "A dropper/cloner must ultimately reach a raw primitive -- but "
-                 "the top-level one often does so through a helper, so >1 hop is "
-                 "the norm (e.g. ASN1_STRING_free -> "
-                 "ossl_asn1_string_free_internal -> CRYPTO_free is 2 hops).")
-        p.add_argument(
-            "--hops", type=int, default=1, metavar="N", dest="hops",
-            help="Call-hop depth for --calling (default 1). NOT capped -- every "
-                 "function transitively reaches malloc/free, so depth is a "
-                 "precision/recall trade the caller owns.")
-        p.add_argument(
-            "--array", action="store_true", dest="array",
-            help="With --lifetime-for/--taking: keep only args whose ptr carries "
-                 "an `array` shape (a buffer, not a lone pointee). Only "
-                 "meaningful on an analyzed record.")
 
 
 def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
@@ -383,20 +181,6 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
              "state on disk the agent assesses its quality and accuracy and "
              "corrects it through the oracle. Use to re-examine a subtree, "
              "typically with --transitive.",
-    )
-    p.add_argument(
-        "--out-suffix", dest="out_suffix", default=None, metavar="SUFFIX",
-        help="Route the agents' record submissions to syms_<SUFFIX>.json / "
-             "types_<SUFFIX>.json instead of the canonical manifests. Wrap "
-             "agents write to the analysis tree as well as to the Rust tree — "
-             "`--lifetime-for` in discovery mode submits `lifetime` blocks, and "
-             "any wrap agent may correct a record it finds wrong — while every "
-             "worktree in a wave symlinks the ONE shared analysis dir. Worktree "
-             "isolation therefore separates the Rust output of two concurrent "
-             "runs but not their findings; this flag is what separates those "
-             "(e.g. a model comparison). The Rust side needs no flag: each run "
-             "gets its own session branch. Downstream stages read only the "
-             "canonical names, so a suffixed run is promoted by renaming.",
     )
     p.add_argument(
         "--dry-run", action="store_true", dest="dry_run",
@@ -543,71 +327,6 @@ def main() -> None:
              "e.g. `--file oid.rs`).",
     )
 
-    # -- analyze ---------------------------------------------------------
-    analyze_p = sub.add_parser(
-        "analyze",
-        help=(
-            "Run an analyze stage. A subject is required: "
-            "'extract-ql', 'scope', 'symbols', 'types', or 'dag'."
-        ),
-    )
-    analyze_p.add_argument(
-        "--reset", action="store_true", dest="reset_stages",
-        help="Delete matching entries before running so the pipeline "
-             "regenerates them fresh.",
-    )
-    analyze_sub = analyze_p.add_subparsers(dest="subject", required=True)
-
-    analyze_sub.add_parser(
-        "extract-ql",
-        help="Run the T1 (entities) + T2 (edges) .ql batches against the "
-             "CodeQL database at crustify/codeql/db/ and write one CSV per "
-             "query under crustify/codeql/{t1,t2}/. Composer-only, no LLM. "
-             "The database is NOT created here — build the project under "
-             "`codeql database create --language=cpp --command=...` "
-             "yourself first. --reset wipes the existing t1/ and t2/ trees "
-             "(the database is left alone).",
-    )
-
-    analyze_scope_p = analyze_sub.add_parser(
-        "scope",
-        help="Emit scope.json. With no flag, derives BOTH sections in one "
-             "pass: `port` (the translation set, from scope-config.json) then "
-             "`wrap` (the FFI import-closure derived from it). Both are "
-             "composer-only — no LLM. The --port-only / --wrap-only flags "
-             "narrow to one section for re-deriving it alone.",
-    )
-    analyze_scope_sel = analyze_scope_p.add_mutually_exclusive_group()
-    analyze_scope_sel.add_argument(
-        "--port-only", action="store_true", dest="port_only",
-        help="Derive only the `port` section from scope-config.json. Leaves any "
-             "existing `wrap` section stale — it is derived FROM `port`.",
-    )
-    analyze_scope_sel.add_argument(
-        "--wrap-only", action="store_true", dest="wrap_only",
-        help="Re-derive only the `wrap` import-closure from an existing "
-             "`port` section plus the T1/T2 tables. Useful after editing "
-             "scope-config.json's out_of_scope without re-seeding `port`.",
-    )
-
-    analyze_symbols_p = analyze_sub.add_parser(
-        "symbols",
-        help="Emit the syms composer skeletons. Deterministic, no LLM.",
-    )
-    _add_analyze_filter_flags(analyze_symbols_p)
-
-    analyze_types_p = analyze_sub.add_parser(
-        "types",
-        help="Emit the types composer skeletons. Deterministic, no LLM.",
-    )
-    _add_analyze_filter_flags(analyze_types_p)
-
-    analyze_sub.add_parser(
-        "dag",
-        help="Emit deps-dag.json — unified types+symbols dependency DAG "
-             "from the analysis tree (scope-agnostic).",
-    )
-
     # -- scaffold (crates.json-driven .rs oracle) ------------------------
     scaffold_p = sub.add_parser(
         "scaffold",
@@ -620,7 +339,10 @@ def main() -> None:
         ),
     )
     # Selection is required and explicit — there is no default.
-    scaffold_sel = scaffold_p.add_mutually_exclusive_group(required=True)
+    # Not `required=True`: `--file` alone is a valid selection but lives outside
+    # the group (it doubles as `--name`'s qualifier). scaffold() raises if the
+    # whole selection is empty.
+    scaffold_sel = scaffold_p.add_mutually_exclusive_group()
     scaffold_sel.add_argument(
         "--all", action="store_true",
         help="Scaffold the entire in-scope tree (every in-scope source file, "
@@ -633,27 +355,31 @@ def main() -> None:
              "(e.g. `--dir .` for the target dir, `--dir ../util`).",
     )
     scaffold_sel.add_argument(
-        "--file", default=None, metavar="FILE",
-        help="Scaffold the crate + stub for the single in-scope source file "
-             "at <target>/FILE. Matches the file's elements wherever their "
-             "wrappers home (e.g. `--file odb.h` reaches git_odb even though "
-             "its wrapper homes at include/git2/odb.h).",
-    )
-    scaffold_sel.add_argument(
         "--name", nargs="+", action="extend", default=None, metavar="NAME",
         help="Resolve the named entit(ies) — type tags and/or symbol names "
              "(e.g. `--name git_odb git_odb_read`) — to the .rs module(s) "
              "homing their `// Replaces:` (port) / `// Wraps:` (wrap) anchor. A name "
-             "with several homes (one per `tu` — a tag defined privately in more than "
-             "one TU, or file-local statics) prints ALL of them. Query mode "
-             "prints each homed path (or `not created`); add --create to write "
-             "the stub(s). The authoritative way an agent locates a wrapper "
-             "module or where a dep lives.",
+             "with several homes (one per `tu` — a tag defined privately in more "
+             "than one TU, or file-local statics) is REFUSED: they are different "
+             "entities sharing a spelling, so pass `--file` to say which. Query "
+             "mode prints the homed path (or `not created`); add --create to "
+             "write the stub(s). The authoritative way an agent locates a "
+             "wrapper module or where a dep lives.",
     )
     scaffold_sel.add_argument(
         "--validate", action="store_true",
         help="Run the crates.json consistency gate (every entity homed in "
              "exactly one .rs; crate depends_on acyclic) and exit.",
+    )
+    scaffold_p.add_argument(
+        "--file", default=None, metavar="FILE",
+        help="On its own, scaffold the crate + stub for the single in-scope "
+             "source file at <target>/FILE, matching the file's elements "
+             "wherever their wrappers home (e.g. `--file odb.h` reaches git_odb "
+             "even though its wrapper homes at include/git2/odb.h). With "
+             "`--name`, it QUALIFIES the name — the defining `tu` or a header "
+             "that reaches it — which is how a name with several homes is "
+             "disambiguated.",
     )
     scaffold_p.add_argument(
         "--create", action="store_true",
@@ -689,92 +415,6 @@ def main() -> None:
              "leaves the array), and bindgen.h's include block is re-seeded "
              "(discarding hand ordering). Never touches the "
              "crustify:allowlist-agent block or the crustify:shims block.",
-    )
-
-    # -- query -----------------------------------------------------------
-    query_p = sub.add_parser(
-        "query",
-        help=(
-            "Read-only oracle. `types`/`symbols` enumerate (filtered, as a name "
-            "list) or introspect one (--name) as the whole record. "
-            "`files` lists the port / wrap scope file sets. "
-            "`dag` does the graph walks (closure / layer / scc)."
-        ),
-    )
-    query_sub = query_p.add_subparsers(dest="subject", required=True)
-    _add_query_flags(
-        query_sub.add_parser(
-            "types", help="Types: enumerate, or introspect one (--name)."),
-        facets=True)
-    _add_query_flags(
-        query_sub.add_parser(
-            "symbols", aliases=["syms"],
-            help="Symbols: enumerate, or introspect one (--name)."),
-        facets=False)
-
-    files_q = query_sub.add_parser(
-        "files",
-        help="Scope files: --port-only (port set) or --wrap-only (wrap closure).",
-    )
-    files_sel = files_q.add_mutually_exclusive_group()
-    files_sel.add_argument(
-        "--port-only", action="store_true", dest="port_only",
-        help="Print the port-scope file set (scope.json.port).",
-    )
-    files_sel.add_argument(
-        "--wrap-only", action="store_true", dest="wrap_only",
-        help="Print the wrap closure — the import-header surface reached from "
-             "port code via depends_on (cached scope.json.wrap, else computed).",
-    )
-
-    dag_q = query_sub.add_parser(
-        "dag",
-        help="Structural dag views: transitive deps of --name T/S (closure), "
-             "all nodes at --layer N (slice), or --name X --scc hi-deps/lo-deps "
-             "(flattened-cycle twins X may use naked / that used X naked).",
-    )
-    dag_q.add_argument(
-        "--name", nargs="+", action="extend", default=None, metavar="NAME",
-        help="Entity (type tag / symbol) to query (closure or --scc mode).",
-    )
-    dag_q.add_argument(
-        "--layer", type=int, default=None, metavar="N",
-        help="Slice mode: return every node (type + symbol) at layer N "
-             "(mutually exclusive with --name).",
-    )
-    dag_q.add_argument(
-        "--scc", choices=("hi-deps", "lo-deps"), default=None,
-        help="With --name X: hi-deps = X's fallback (higher-layer cycle twins "
-             "X may use naked); lo-deps = X's back_fill (lower-layer twins that "
-             "used X naked).",
-    )
-    dag_q.add_argument(
-        "--file", nargs="+", default=None, metavar="FILE", dest="files",
-        help="Disambiguate a --name collision (pick the one defined here).",
-    )
-    dag_q.add_argument(
-        "--depth", type=int, default=None, metavar="N",
-        help="Closure mode: limit to N hops (1 = direct deps, 2 = deps of "
-             "deps, …; default: full transitive closure).",
-    )
-    dag_q.add_argument(
-        "--loc", action="store_true", dest="loc",
-        help="LoC view (with --name or --layer): a type seed → its struct "
-             "field count + op count; a function seed → its body LoC; "
-             "--layer N → the layer's total translated LoC (types valued as "
-             "fields+ops; the bodies of folded type-ops are excluded — they "
-             "ride their type at 1 each, not ported standalone).",
-    )
-    dag_scope = dag_q.add_mutually_exclusive_group()
-    dag_scope.add_argument(
-        "--wrap-only", action="store_true", dest="wrap_only",
-        help="Restrict the node set (slice / --loc) to wrap-scope entities "
-             "(scope.json wrap closure).",
-    )
-    dag_scope.add_argument(
-        "--port-only", action="store_true", dest="port_only",
-        help="Restrict the node set (slice / --loc) to port-scope entities "
-             "(scope.json port closure).",
     )
 
     # -- wrap ------------------------------------------------------------
@@ -893,8 +533,6 @@ def main() -> None:
                crate=getattr(args, "crate", None), mod=getattr(args, "mod", None),
                dir=getattr(args, "dir", None), file=getattr(args, "file", None))
 
-    elif args.command == "analyze":
-        _handle_analyze(args, target)
 
     elif args.command == "scaffold":
         _handle_scaffold(args, target)
@@ -902,8 +540,6 @@ def main() -> None:
     elif args.command == "bindgen":
         _handle_bindgen(args, target)
 
-    elif args.command == "query":
-        _handle_query(args, target)
 
     elif args.command == "wrap":
         _handle_wrap(args, target)
@@ -913,286 +549,6 @@ def main() -> None:
 
 
 # -- analyze dispatch -----------------------------------------------------
-
-def _handle_analyze(args: argparse.Namespace, target: Path) -> None:
-    """Dispatch analyze to the per-subject handler.
-
-    The subject-level ``--all`` (``args.all``) on symbols/types processes
-    every entry in the analysis tree for that subject.
-    """
-    from crustify import analyze as analyze_mod
-
-    subject = args.subject
-    reset_stages = getattr(args, "reset_stages", False)
-
-    if subject == "extract-ql":
-        if reset_stages:
-            analyze_mod.reset_extract_ql(target)
-        analyze_mod.analyze_extract_ql(target)
-        return
-
-    if subject == "scope":
-        port_only = bool(getattr(args, "port_only", False))
-        wrap_only = bool(getattr(args, "wrap_only", False))
-        # --reset wipes the whole seed, so it is meaningless with --wrap-only:
-        # that re-derives wrap FROM the port section, which the reset would
-        # have just deleted. Both other forms re-seed `port` from scope-config.json.
-        if reset_stages and not wrap_only:
-            analyze_mod.reset_scope(target)
-        analyze_mod.analyze_scope(
-            target, port_only=port_only, wrap_only=wrap_only,
-        )
-        return
-
-
-    if subject == "dag":
-        if reset_stages:
-            analyze_mod.reset_dag(target)
-        analyze_mod.analyze_dag(target)
-        return
-
-    # symbols / types — these are the agent-bearing subjects with full
-    # narrowing flag support.
-    _validate_narrowing(args)
-
-    _export_out_suffix(args)
-
-    # Resolve --file basenames to repo-rel paths before building the
-    # selection / filter (so composer, agent, and reset all see the
-    # resolved paths).
-    repo_root = analyze_mod._repo_root_for(target)
-    resolved_files = _resolve_file_args(args, repo_root)
-    filter_spec = _build_filter_spec(args, resolved_files)
-
-    # Agent selection: in seed mode, the composer has already focused
-    # the analysis tree to {seeds, closure}; the agent should process
-    # every entry the composer emitted, not just entries matching the
-    # original CLI flags (closure entries don't match --name/--dir
-    # but still need annotation). Pass `all <subject>` in seed mode;
-    # in filter mode, the agent's selection resolution maps cleanly
-    # The agent's input is now the manifests-list contract built
-    # downstream by the orchestrator from `filter_spec` + composer
-    # output. The CLI no longer builds a `selection` grammar string;
-    # the composer's narrowing IS the contract.
-
-    if subject == "symbols":
-        if getattr(args, "reset", False):
-            analyze_mod.reset_syms(
-                target,
-                all_entries=getattr(args, "all", False),
-                dirs=getattr(args, "dir", None),
-                files=resolved_files,
-                names=getattr(args, "name", None),
-            )
-        analyze_mod.analyze_symbols(target, filter_spec=filter_spec)
-        return
-
-    if subject == "types":
-        if getattr(args, "reset", False):
-            analyze_mod.reset_types(
-                target,
-                all_entries=getattr(args, "all", False),
-                dirs=getattr(args, "dir", None),
-                files=resolved_files,
-                names=getattr(args, "name", None),
-            )
-        analyze_mod.analyze_types(target, filter_spec=filter_spec)
-        return
-
-    print(f"error: unknown analyze subject {subject!r}", file=sys.stderr)
-    sys.exit(2)
-
-
-def _export_out_suffix(args: argparse.Namespace) -> None:
-    """Publish ``--out-suffix`` into the environment, or do nothing when unset.
-
-    The suffix isolates a run onto ``types_<suffix>.json`` /
-    ``syms_<suffix>.json`` (see :func:`crustify.layout.manifest_name`). It
-    travels by env var rather than by argument because the agents shell out to
-    ``crustify-cli query --update`` with no path pushed to them — the backends
-    hand the subprocess a copy of ``os.environ``, so exporting here is what makes
-    the agent half write to the same suffixed file the composer emitted.
-
-    Both agent-bearing stages call this. ``analyze symbols/types`` needs it for
-    the composer emit; ``wrap`` needs it because its agents submit records too —
-    the lifetime-discovery mode writes `lifetime` blocks straight into
-    ``syms.json``, and a wave's worktrees all symlink ONE shared ``analysis``
-    tree (:data:`crustify.worktree._SHARED`), so worktree isolation does not
-    separate two concurrent runs' findings. Without a suffix, two model-
-    comparison runs merge into one manifest and the later submitter wins every
-    symbol both discovered.
-
-    Validated as a filename-safe token.
-    """
-    out_suffix = getattr(args, "out_suffix", None)
-    if not out_suffix:
-        return
-    import os
-    import re
-    from crustify.layout import OUT_SUFFIX_ENV
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", out_suffix):
-        print("error: --out-suffix must match [A-Za-z0-9._-]+", file=sys.stderr)
-        sys.exit(2)
-    os.environ[OUT_SUFFIX_ENV] = out_suffix
-
-
-def _validate_narrowing(args: argparse.Namespace) -> None:
-    """Enforce mutual exclusivity of --all vs seed selectors.
-
-    --all is exclusive with --dir / --file / --name.
-    --port-only / --wrap-only may combine with either --all or seed
-    selectors — they're orthogonal post-emission filters.
-    """
-    want_all = bool(getattr(args, "all", False))
-    seed = (
-        bool(getattr(args, "dir", None))
-        or bool(getattr(args, "file", None))
-        or bool(getattr(args, "name", None))
-    )
-    if want_all and seed:
-        print(
-            "error: --all is mutually exclusive with "
-            "--dir / --file / --name",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    if not want_all and not seed:
-        print(
-            "error: specify --all or at least one of "
-            "--dir / --file / --name",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-
-def _resolve_file_arg(file_arg: str, repo_root: Path) -> str:
-    """Resolve a `--file` argument to a repo-root-relative path.
-
-    - Arg containing `/` → treat as already repo-root-relative.
-    - Bare basename → search the repo-root analysis tree for a unique
-      `defined_in` or `declared_in[0]` matching the basename. If
-      unique, return that repo-relative path. If ambiguous or
-      missing, error.
-    """
-    import json
-    if "/" in file_arg:
-        return file_arg
-
-    from crustify.layout import Layout
-    analysis_root = Layout(repo_root).analysis
-    if not analysis_root.is_dir():
-        print(
-            f"error: --file basename resolution requires the analysis "
-            f"tree at {analysis_root} (run `analyze symbols/types` first "
-            f"so the composer can populate it).",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    matches: set[str] = set()
-    for p in analysis_root.rglob("syms.json"):
-        for e in json.loads(p.read_text()).get("symbols", []):
-            df = e.get("defined_in") or ""
-            if df and Path(df).name == file_arg:
-                matches.add(df)
-            for dh in e.get("declared_in") or []:
-                if dh and Path(dh).name == file_arg:
-                    matches.add(dh)
-    for p in analysis_root.rglob("types.json"):
-        for e in json.loads(p.read_text()).get("types", []):
-            df = e.get("defined_in") or ""
-            if df and Path(df).name == file_arg:
-                matches.add(df)
-            dh = e.get("declared_in")
-            if dh and Path(dh).name == file_arg:
-                matches.add(dh)
-
-    if not matches:
-        print(
-            f"error: --file {file_arg!r}: no entry in the analysis tree "
-            f"has a defined_in/declared_in matching that basename.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    if len(matches) > 1:
-        print(
-            f"error: --file {file_arg!r} is ambiguous; matches "
-            f"{sorted(matches)}. Specify the full repo-root-relative "
-            f"path.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    return next(iter(matches))
-
-
-def _resolve_file_args(
-    args: argparse.Namespace, repo_root: Path,
-) -> list[str] | None:
-    """Resolve every `--file` arg via `_resolve_file_arg`."""
-    files = getattr(args, "file", None)
-    if not files:
-        return None
-    return [_resolve_file_arg(f, repo_root) for f in files]
-
-
-def _build_filter_spec(
-    args: argparse.Namespace,
-    resolved_files: list[str] | None,
-):
-    """Build a `FilterSpec` from the CLI narrowing flags.
-
-    `resolved_files` is the basename-resolved file list (see
-    `_resolve_file_args`); we pass it in rather than re-resolving from
-    `args.file` so the composer / agent / reset all share the same
-    canonical paths.
-
-    Always returns a `FilterSpec` (never ``None``) so the composer
-    can inspect `scope_json_path` / `port_only` / `wrap_only` even
-    on `--all` invocations.
-    """
-    import sys as _sys
-    from pathlib import Path as _Path
-    _root = _Path(__file__).resolve().parent.parent.parent
-    _compose_parent = _root / "utils" / "codeql"
-    if str(_compose_parent) not in _sys.path:
-        _sys.path.insert(0, str(_compose_parent))
-    from compose.filter_spec import FilterSpec
-
-    # Scope is the target-tier `crustify/targets/<target>/scope.json`,
-    # computed automatically from the target (alongside its scope-config.json) —
-    # there is no flag. Absent scope.json → scope-blind (base-shape) emit.
-    scope_arg = None
-    target = getattr(args, "_target_path", None) or args.repo_root
-    from crustify.layout import Layout
-    try:
-        default_scope = Layout.discover(_Path(target)).scope(_Path(target))
-    except SystemExit:
-        default_scope = None
-    if default_scope is not None and default_scope.exists():
-        scope_arg = default_scope
-
-    return FilterSpec(
-        dirs=(
-            [] if getattr(args, "all", False)
-            else list(getattr(args, "dir", None) or [])
-        ),
-        files=(
-            [] if getattr(args, "all", False)
-            else list(resolved_files or [])
-        ),
-        names=(
-            [] if getattr(args, "all", False)
-            else list(getattr(args, "name", None) or [])
-        ),
-        scope_json_path=scope_arg if scope_arg else None,
-        port_only=bool(getattr(args, "port_only", False)),
-        wrap_only=bool(getattr(args, "wrap_only", False)),
-        unscoped=bool(getattr(args, "unscoped", False)),
-    )
-
-
-
-# -- port dispatch --------------------------------------------------------
 
 def _handle_port(args: argparse.Namespace, target: Path) -> None:
     raise SystemExit(
@@ -1223,66 +579,12 @@ def _handle_bindgen(args: argparse.Namespace, target: Path) -> None:
 
 # -- query dispatch -------------------------------------------------------
 
-def _handle_query(args: argparse.Namespace, target: Path) -> None:
-    if args.subject == "files":
-        from crustify.query import query_files
-        query_files(
-            target,
-            port_only=bool(getattr(args, "port_only", False)),
-            wrap_only=bool(getattr(args, "wrap_only", False)),
-        )
-        return
-    if args.subject == "dag":
-        from crustify.query import query_dag
-        query_dag(
-            target,
-            names=getattr(args, "name", None),
-            files=getattr(args, "files", None),
-            depth=getattr(args, "depth", None),
-            scc=getattr(args, "scc", None),
-            layer=getattr(args, "layer", None),
-            loc=bool(getattr(args, "loc", False)),
-            wrap_only=bool(getattr(args, "wrap_only", False)),
-            port_only=bool(getattr(args, "port_only", False)),
-        )
-        return
-    from crustify.query import query
-    # `syms` is a back-compat alias for the `symbols` subject.
-    subject = "symbols" if args.subject == "syms" else args.subject
-    query(
-        target,
-        subject=subject,
-        names=getattr(args, "name", None),
-        files=getattr(args, "files", None),
-        wrap_only=bool(getattr(args, "wrap_only", False)),
-        port_only=bool(getattr(args, "port_only", False)),
-        fields=bool(getattr(args, "fields", False)),
-        ops=bool(getattr(args, "ops", False)),
-        methods=bool(getattr(args, "methods", False)),
-        field_touchers=bool(getattr(args, "field_touchers", False)),
-        update=getattr(args, "update", None),
-        update_help=bool(getattr(args, "update_help", False)),
-        schema=bool(getattr(args, "schema", False)),
-        create=getattr(args, "create", None),
-        manifest=bool(getattr(args, "manifest", False)),
-        rng=getattr(args, "rng", None),
-        lifetime_for=getattr(args, "lifetime_for", None),
-        taking=getattr(args, "taking", None),
-        calling=getattr(args, "calling", None),
-        hops=int(getattr(args, "hops", 1) or 1),
-        array=bool(getattr(args, "array", False)),
-    )
-
-
-# -- wrap dispatch --------------------------------------------------------
-
 def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
     """Run the unified wrap stage over the --name
     selection. One scheduler emits type, string, array, and free-symbol
     wrappers alike — no subject split (the scheduler routes each unit to its
     wrapper prompt by kind)."""
     # Before any agent spawns: the suffix reaches them through the environment.
-    _export_out_suffix(args)
     spec = getattr(args, "lifetime_for", None)
     if spec:
         # `--lifetime-for SPEC` IS the selection: no --name, no DAG layer, no

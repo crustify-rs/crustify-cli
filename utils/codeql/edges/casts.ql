@@ -29,16 +29,25 @@
  *   to_tag   : C struct tag the cast result strips to (the target type)
  */
 import cpp
+import identity
 
 /**
- * The first named `Struct` reached by peeling pointers / arrays /
+ * The first `Struct` reached by peeling pointers / arrays /
  * cv-qualifiers (`DerivedType`) and typedef aliases (`TypedefType`) off
- * `t`. Anonymous tags (cpp-all spells them `(unnamed …)`) are excluded so
- * the tag is a stable, lookup-able identifier — same discipline as
- * `entities/types.ql`.
+ * `t`, whose identity `canonicalTypeName` can resolve.
+ *
+ * This binds `Struct`, never the typedef, so a shape-A type
+ * (`typedef struct {…} PACKET;`) arrives here as the ANONYMOUS struct — the
+ * name lives only on the typedef, sideways. Excluding anonymous tags therefore
+ * dropped every cast involving one, silently: `casts.csv` holds 0 rows for
+ * `PACKET` and `OSSL_TIME`, both of which the port scope casts routinely.
+ *
+ * Queries that walk from a USE SITE (`signature_type_uses`, `local_type_uses`)
+ * are unaffected — there the source writes `PACKET *`, so the TypedefType is
+ * in the type graph and carries its own name. This one has no use site to read.
  */
 Struct strippedStruct(Type t) {
-  result = t and result.getName() != "" and not result.getName().matches("(%")
+  result = t and not isAnonNamed(canonicalTypeName(result))
   or
   result = strippedStruct(t.(DerivedType).getBaseType())
   or
@@ -52,4 +61,4 @@ where
     dst = strippedStruct(c.getType())
   ) and
   src != dst
-select src.getName() as from_tag, dst.getName() as to_tag
+select canonicalTypeName(src) as from_tag, canonicalTypeName(dst) as to_tag

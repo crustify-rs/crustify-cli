@@ -74,7 +74,7 @@ inspectable-failure guarantee of finding F12, as a signal rather than a pile.
 Worktrees fork from **HEAD**: uncommitted changes in the main checkout are not
 carried into them, so a wave is expected to start from a committed tree. What
 HEAD cannot carry either is the gitignored, read-only-across-a-wave state
-(`analysis`, `codeql`, `targets`, `.providers`, `crates.json`, `build.json`,
+(`codeql`, `targets`, `.providers`, `cli-config.json`,
 `cli-config.json`);
 :func:`link_shared` symlinks those from the main checkout so a worktree is a
 complete functional crustify tree without duplicating them.
@@ -167,13 +167,12 @@ def add_worktree(repo: Path, base_ref: str, slug: str) -> Path:
 
 
 #: Gitignored, read-only-across-a-wave artifacts symlinked into each worktree.
-#: An artifact that is TRACKED must not be here: git checks it out from HEAD, so
-#: the worktree already holds it (and for a written one, sharing it would send
-#: every agent's writes into the same file). `analysis`, `crates.json` and
-#: `build.json` left when they became tracked -- `analysis` matters most, since
-#: agents WRITE it via `query --update`: each now submits into its own checked-out
-#: copy and its landing commit carries the findings, the same route its Rust
-#: output already takes.
+#: A TRACKED artifact must not be here: git checks it out from HEAD, so the
+#: worktree already holds its own copy, and sharing a written one would send
+#: every agent's writes into the same file. `ownership-store.json` is tracked
+#: for that reason — an agent submits through `query --update` into its own
+#: copy and its landing commit carries the findings, the route its Rust output
+#: already takes.
 _SHARED = (".providers", "codeql", "targets", "tmp", "cli-config.json")
 
 #: Shared entries created ON DEMAND rather than by an earlier stage, so the
@@ -184,10 +183,9 @@ _SHARED_LAZY_DIRS = (".providers", "tmp")
 
 
 def link_shared(wt: Path, repo: Path) -> None:
-    """Symlink the gitignored, read-only-across-a-wave crustify artifacts (the
-    analysis dirs plus the repo-root-tier `crates.json` / `build.json` stores)
-    from the main checkout into the worktree, so the worktree is a *complete*
-    functional crustify tree (its `Layout` resolves `analysis` / `codeql` /
+    """Symlink the gitignored, read-only-across-a-wave crustify artifacts from
+    the main checkout into the worktree, so the worktree is a *complete*
+    functional crustify tree (its `Layout` resolves `codeql` /
     `targets` / `crates.json` / `build.json` to the single shared copy) without
     duplicating them. They never change during a wave; agent logs written under
     `targets/` thus land in the shared tree.

@@ -11,25 +11,23 @@ from crustify.layout import Layout
 _PKG_ROOT = Path(__file__).parent.parent
 
 
-def _skill_meta(path: Path) -> tuple[str, str, set[str] | None, str | None]:
-    """Parse ``name`` + ``description`` + ``roles`` + optional ``bin`` from a
-    SKILL.md YAML frontmatter block.
+def _skill_meta(path: Path) -> tuple[str, str, str | None]:
+    """Parse ``name`` + ``description`` + optional ``bin`` from a SKILL.md YAML
+    frontmatter block.
 
     Deliberately minimal — handles the fields crustify's SKILL.md format uses
-    (scalar ``name:``, inline-list ``roles: [a, b]``, a folded/indented
-    ``description:``, block scalar ``>-``/``>`` or inline, and a scalar
-    ``bin:``) without taking a YAML dependency. The description's
-    wrapped/indented continuation lines are collapsed to one line. ``roles`` is
-    ``None`` when the field is absent (treated as universal by the caller).
-    ``bin`` is the logical name of the skill's CLI tool (resolved to an absolute
-    path by the caller via the repo config's ``bins`` map), or ``None``. Falls
-    back to the file stem / empty description / no roles if there is no
+    (scalar ``name:``, a folded/indented ``description:``, block scalar
+    ``>-``/``>`` or inline, and a scalar ``bin:``) without taking a YAML
+    dependency. The description's wrapped/indented continuation lines are
+    collapsed to one line. ``bin`` is the logical name of the skill's CLI tool,
+    resolved to an absolute path by the caller via the repo config's ``bins``
+    map. Falls back to the file stem and an empty description when there is no
     frontmatter."""
     text = path.read_text()
     if not text.startswith("---"):
-        return path.stem, "", None, None
+        return path.stem, "", None
     fm = text.split("---", 2)[1]
-    name, desc, in_desc, roles, binname = path.stem, [], False, None, None
+    name, desc, in_desc, binname = path.stem, [], False, None
     for line in fm.splitlines():
         if in_desc:
             # A new top-level key (non-indented, contains ':') ends the block.
@@ -40,9 +38,6 @@ def _skill_meta(path: Path) -> tuple[str, str, set[str] | None, str | None]:
                 continue
         if line.startswith("name:"):
             name = line.split(":", 1)[1].strip()
-        elif line.startswith("roles:"):
-            raw = line.split(":", 1)[1].strip().strip("[]")
-            roles = {r.strip().strip("'\"") for r in raw.split(",") if r.strip()}
         elif line.startswith("bin:"):
             binname = line.split(":", 1)[1].strip().strip("'\"") or None
         elif line.startswith("description:"):
@@ -50,7 +45,7 @@ def _skill_meta(path: Path) -> tuple[str, str, set[str] | None, str | None]:
             if rest:
                 desc.append(rest)
             in_desc = True
-    return name, " ".join(" ".join(desc).split()), roles, binname
+    return name, " ".join(" ".join(desc).split()), binname
 
 def _resolve_repo_root(target: Path) -> Path:
     """The repo root for ``target``: the one pinned by the CLI
@@ -97,12 +92,6 @@ class CrustifyAgent:
                                # is responsible for gating invocation.
     tier: str = "target"       # "target" | "repo_root"; selects which tier owns
                                # this agent's output artifact.
-    # Skill audience for the `{skills}` slot: only registered SKILL.md whose
-    # frontmatter `roles` intersect this tuple are rendered into the prompt.
-    # Translators (port / wrap / scaffold / …) default to the discovery +
-    # primitive skills; orchestration skills (roles: [orchestrator]) are filtered
-    # out. An orchestrator-role agent would override this.
-    skill_roles: tuple[str, ...] = ("translator",)
     # Set per-instance (not class) when an agent is one of many running
     # in parallel — disambiguates log filenames so concurrent agents
     # don't clobber each other's logs. None on instances that don't
@@ -254,25 +243,19 @@ class CrustifyAgent:
 
     def _render_skills(self) -> str:
         """Render the configured ``skills`` SKILL.md set as a metadata index
-        (name — description + on-disk path) for a ``{skills}`` prompt slot,
-        scoped to this agent's :attr:`skill_roles`.
+        (name — description + on-disk path) for a ``{skills}`` prompt slot.
 
         Mirrors a skill-aware harness's tier-1 load: the metadata is injected
         into the prompt unconditionally (the routing signal), while the body is
         read on demand from the path. Single-sourced from each SKILL.md's
-        frontmatter, so descriptions never drift from the skill itself. A skill
-        whose frontmatter ``roles`` do not intersect this agent's roles is
-        skipped (an untagged skill is universal)."""
-        mine = set(self.skill_roles)
+        frontmatter, so descriptions never drift from the skill itself."""
         bins = self._repo_config().get("bins", {})
         blocks = []
         for raw in self._repo_config().get("skills", []):
             p = Path(raw)
             if not p.exists():
                 continue
-            name, desc, roles, binname = _skill_meta(p)
-            if roles is not None and not (roles & mine):
-                continue  # scoped to roles this agent does not have
+            name, desc, binname = _skill_meta(p)
             block = f"- {name} — {desc}\n  read in full: {p}"
             # A skill that declares a `bin:` also advertises that tool's
             # absolute path (from the repo config's `bins` map) — so the agent
@@ -293,7 +276,7 @@ class CrustifyAgent:
     def _render_principles(self) -> str:
         """The always-on principles preamble for the `{principles}` prompt slot:
         AGENTS.md verbatim, with its ``<!-- SKILLS_INDEX -->`` sentinel replaced
-        by this agent's role-scoped skill index. Substituted as a `.format`
+        by the skill index. Substituted as a `.format`
         *value*, so its (single) braces are inserted literally, never re-parsed.
         Empty string if AGENTS.md is absent."""
         p = self._agents_md()

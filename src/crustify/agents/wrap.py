@@ -63,7 +63,6 @@ class CrustifyWrap(CrustifyAgent):
         naked_users: list[str] | None = None,           # users to switch onto this wrapper
         # pull path (single struct/union/enum): the agent discovers everything via
         # `crustify-cli query`/`scaffold`; the scheduler hands only the field window.
-        fields_range: list[int] | None = None,          # [lo, hi) into the field list
         # syms batch:
         rs_out: str | None = None,
         syms: list[dict] | None = None,
@@ -89,7 +88,6 @@ class CrustifyWrap(CrustifyAgent):
         self._op_rs_outs_per = list(op_rs_outs_per or [])
         self._fallback_deps = list(fallback_deps or [])
         self._naked_users = list(naked_users or [])
-        self._fields_range = list(fields_range) if fields_range is not None else None
         # syms batch:
         self._rs_out = rs_out or (self._rs_outs[0] if self._rs_outs else "")
         self._lifetime_for = lifetime_for
@@ -126,7 +124,6 @@ class CrustifyWrap(CrustifyAgent):
         return (_PKG_ROOT / "prompts" / prompt_file).read_text()
 
     def _arguments(self) -> dict:
-        crustify_root = _PKG_ROOT.parent.parent
         common = {
             # Base first: `target`, `repo_root`, and `git_base` (the wave's
             # session branch). Building this dict from scratch silently dropped
@@ -134,13 +131,7 @@ class CrustifyWrap(CrustifyAgent):
             # before the agent issues a request.
             **super()._arguments(),
             "workspace_root": str(self.layout.rust),
-            "analysis_root":  str(self.layout.analysis),
             "build_json":     str(self.layout.build_json),
-            "rs_out":         self._rs_out,
-            "deps":           json.dumps(self._deps),
-            "discipline":     str(crustify_root / "docs" / "DISCIPLINE.md"),
-            "crustify_prim": str(
-                crustify_root / ".." / "crustify-prim" / "src" / "lib.rs"),
             # Always-on principles preamble (AGENTS.md), with the role-scoped
             # skill index spliced into its `<!-- SKILLS_INDEX -->` sentinel.
             # Inlined as `{principles}` (types.md; harmless if unused).
@@ -152,24 +143,10 @@ class CrustifyWrap(CrustifyAgent):
             # syms-pull: the pooled symbol names (+ defined_in for collisions).
             common["syms"] = json.dumps(self._syms)
             return common
-        # types.md handles a single struct / union / enum: one tag + its
-        # field-accessor window. The lifecycle (reverse-derived droppers /
-        # disposers / cloners) and the cast graph are pulled from the record;
-        # field accessors are the only windowed surface.
-        # Single-type mode. `_fields_range` still SELECTS this mode (the
-        # scheduler hands one struct per batch) but is no longer handed to the
-        # agent: a wrap-scope type carries only the port-touched fields — the
-        # type composer shapes it that way — so its accessor surface is bounded
-        # by scope rather than by a window, and telling the agent to stay inside
-        # a slice of an already-narrow list only invited it to skip fields.
-        if self._fields_range is not None:
-            common.update({
-                "tag":  self._tags[0],
-                "kind": self._kind,
-            })
-            return common
-        common.update({
-            "tags": json.dumps(self._tags),
-            "kind": self._kind,
-        })
+        # types.md handles ONE struct / union / enum — `_schedule.pack` builds
+        # one batch per type and never splits it. The agent pulls the field
+        # set, the reverse-derived lifecycle and the cast graph from the record
+        # itself; nothing about the accessor surface is handed to it, since a
+        # wrap-scope type already carries only its port-touched fields.
+        common.update({"tag": self._tags[0], "kind": self._kind})
         return common

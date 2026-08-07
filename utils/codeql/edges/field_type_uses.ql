@@ -41,23 +41,16 @@
  * field-driven reachability gate (scenarios 5+6 in the reach
  * ruleset, per the design discussion).
  *
- * Anonymous-tag fields are emitted with `struct_name = ""` rather
- * than the synthetic `(unnamed …)` placeholder so consumers can
- * skip them at the join site rather than collide on the placeholder
- * name.
+ * Identity on BOTH ends comes from `identity.qll`'s `canonicalTypeName`, the
+ * same resolver `field_accesses.ql` / `fa_with_root.ql` use. An aggregate with
+ * no tag of its own is named by its typedef (shape A) or by the named struct
+ * that embeds it (shape B); only a genuinely unresolvable one is skipped.
+ * Sharing the resolver is the point -- this query kept its own naming when the
+ * access queries were fixed, and silently dropped every field-type edge of a
+ * `typedef struct {…} T;`.
  */
 import cpp
-
-/**
- * Repository-relative path, falling back to absolute for files outside the
- * source root (system/external headers) — keeps system entities' identity
- * consistent with the T1 entity CSVs.
- */
-string pathOf(File f) {
-  if exists(f.getRelativePath())
-  then result = f.getRelativePath()
-  else result = f.getAbsolutePath()
-}
+import identity
 
 string structDefFileOf(Field f) {
   if exists(f.getDeclaringType().(Struct).getDefinition())
@@ -156,14 +149,18 @@ string aggDefFileOf(UserType u) {
 from Field f, UserType t, string struct_name, string struct_def_file, string field_name
 where
   reachableUserType(f.getType(), t) and
-  t.getName() != "" and
-  not t.getName().prefix(1) = "(" and
+  not isAnonNamed(canonicalTypeName(t)) and
   typeKindOf(t) != "other" and
   (
-    // Field of a named struct/union (existing behaviour).
-    f.getDeclaringType().getName() != "" and
-    not f.getDeclaringType().getName().prefix(1) = "(" and
-    struct_name = f.getDeclaringType().getName() and
+    // Field of a struct/union that HAS an identity of its own -- its tag, or
+    // for shape A (`typedef struct {…} T;`) the naming typedef, resolved
+    // SIDEWAYS through the alias chain by `canonicalTypeName`. Without that
+    // resolution an anonymous typedef'd struct matched neither this disjunct
+    // nor the embedded one below, and every one of its field-type edges was
+    // dropped: `CLIENTHELLO_MSG` produced ZERO rows while the manifest knew it
+    // reached `PACKET` and `raw_extension_st`.
+    not isAnonNamed(canonicalTypeName(f.getDeclaringType())) and
+    struct_name = canonicalTypeName(f.getDeclaringType()) and
     struct_def_file = structDefFileOf(f) and
     field_name = f.getName()
     or
@@ -172,16 +169,15 @@ where
     // member path (`ext.hostname`). Without this the type edge was attributed
     // to `(unnamed …)` and dropped.
     exists(UserType root |
-      root.getName() != "" and
-      not root.getName().prefix(1) = "(" and
+      not isAnonNamed(canonicalTypeName(root)) and
       anonEmbeddedField(root, f, field_name) and
-      struct_name = root.getName() and
+      struct_name = canonicalTypeName(root) and
       struct_def_file = aggDefFileOf(root)
     )
   )
 select struct_name,
        struct_def_file,
        field_name,
-       t.getName() as type_name,
+       canonicalTypeName(t) as type_name,
        typeKindOf(t) as type_kind,
        typeDefFileOf(t) as type_def_file

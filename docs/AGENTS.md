@@ -79,8 +79,8 @@ to our conventions.
 
 To leverage idiomatic Rust features, we express each pointer argument,
 return, field, and variable based on the ownership facets provided by the
-`crustify-oracle` skill via the smart pointers and traits from the 
-`crustify-wrap-crate`skill. 
+`crustify-oracle` skill via the smart pointers and traits from the
+`crustify-prim` skill.
 
 ## Safety discipline
 

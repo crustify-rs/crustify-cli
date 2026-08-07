@@ -17,7 +17,7 @@ what each agent writes there.
 
 The timestamp keeps sessions chronologically sortable; the trailing 4-hex
 random token disambiguates crustify processes launched within the same second
-(e.g. parallel ``--out-suffix`` model-comparison runs), so their per-session log
+(e.g. parallel model-comparison runs on separate branches), so their per-session log
 dirs never collide and clobber each other's ``<stage>.log``.
 """
 

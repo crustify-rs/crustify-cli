@@ -20,7 +20,6 @@ for the agent to fill, but per-item idempotency is the agent's concern.
 """
 from __future__ import annotations
 
-import json
 import re as _re
 import sys
 from pathlib import Path
@@ -34,51 +33,6 @@ if str(_COMPOSE_PARENT) not in sys.path:
 
 
 # ---------------------------------------------------------------------------
-# Suffixed-run fork
-# ---------------------------------------------------------------------------
-
-def fork_manifests(layout: "Layout") -> int:
-    """Under ``--out-suffix``, seed the suffixed manifests from the canonical
-    ones. Returns the number forked (0 when no suffix is set).
-
-    ``analyze --out-suffix`` needs no equivalent: its composer *emits* the
-    suffixed skeleton, so the file the agents read is the file they write. Wrap
-    has no composer — the analysis tree is an input it only annotates — so
-    without this the suffixed manifest simply does not exist, and both halves
-    fail in opposite directions: every ``crustify-cli query`` the agent runs
-    resolves to a missing file and reports the symbol unknown, while its
-    submissions create a manifest holding nothing but its own findings.
-
-    Copying (rather than starting empty) is what makes the fork a real branch of
-    the analysis: the agent reads the full upstream analysis and its writes land
-    beside it, isolated from a concurrent run. Existing suffixed files are left
-    alone so a re-run resumes instead of discarding the previous one's findings.
-    """
-    import shutil
-    from crustify.layout import manifest_name
-
-    forked = 0
-    for kind in ("types", "symbols"):
-        name = manifest_name(kind)
-        canonical = "types.json" if kind == "types" else "syms.json"
-        if name == canonical:            # no suffix set
-            continue
-        for src in layout.analysis.rglob(canonical):
-            dst = src.with_name(name)
-            if not dst.exists():
-                shutil.copyfile(src, dst)
-                forked += 1
-    return forked
-
-
-def _announce_fork(n: int) -> None:
-    if n:
-        from crustify.layout import manifest_name
-        print(f"[crustify-cli wrap] --out-suffix: forked {n} manifests onto "
-              f"{manifest_name('symbols')} / {manifest_name('types')}.")
-
-
-# ---------------------------------------------------------------------------
 # Pre-flight gate
 # ---------------------------------------------------------------------------
 
@@ -86,23 +40,11 @@ def _preflight(target: Path, layout: "Layout") -> Path:
     """Verify upstream artifacts; return the scope.json path. Refuses with
     the exact command to run when a prerequisite is missing. All paths come
     from the single visible ``crustify/`` layout."""
-    analysis = layout.analysis
-    if not analysis.is_dir() or not any(analysis.rglob("types.json")):
-        raise SystemExit(
-            f"wrap: no analysis tree at {analysis}. Run "
-            f"`crustify-cli {target} analyze --all` first."
-        )
-    if not layout.deps_dag(target).exists():
-        raise SystemExit(
-            f"wrap: no deps-dag.json at {layout.deps_dag(target)}. Run "
-            f"`crustify-cli {target} analyze dag` first."
-        )
-    scope_json = layout.scope(target)
-    if not scope_json.exists():
-        raise SystemExit(
-            f"wrap: no scope.json at {scope_json}. Run "
-            f"`crustify-cli {target} analyze scope` first."
-        )
+    # No analysis-tree check: there is no tree. The records are composed from
+    # the CodeQL tables (`crustify.manifests`), and `scope.build` already
+    # refuses with the exact command to run when those are missing.
+    from crustify import scope as _scope_mod
+    scope_json = _scope_mod.build(layout, target, stage="wrap")
     # NO scaffolding here. The wrap stage READS the scaffolded tree — its agents
     # locate their modules via `scaffold --name` (query mode) and fill anchors;
     # they never create files, and neither does this. `scaffold` is a stage the
@@ -117,23 +59,15 @@ def _preflight(target: Path, layout: "Layout") -> Path:
     return scope_json
 
 
-def _lifetime_by_sym(analysis: Path) -> dict:
+def _lifetime_by_sym(layout: "Layout") -> dict:
     """``(name, defined_in) -> lifetime block`` for every symbol that HAS one.
 
-    One pass over the analysis tree; the per-symbol loader in :mod:`query`
-    rglobs afresh for each lookup, which is O(files) per name."""
-    import json as _json
-    from crustify.layout import manifest_name
-    out: dict = {}
-    for f in analysis.rglob(manifest_name("symbols")):
-        try:
-            doc = _json.loads(f.read_text())
-        except (OSError, ValueError):
-            continue
-        for e in doc.get("symbols", []):
-            if e.get("lifetime"):
-                out[(e.get("name"), e.get("defined_in"))] = e["lifetime"]
-    return out
+    Straight off the ownership store: `lifetime` is authored, so no skeleton is
+    needed to answer this and the 2.2s symbol compose is skipped entirely."""
+    from crustify import store as _store
+    return {(r.get("name"), r.get("defined_in")): r["lifetime"]
+            for r in _store.load(layout).get("symbols") or []
+            if r.get("lifetime")}
 
 
 def _reject_lifetime_primitives(layout: "Layout", target: Path, sel_nodes) -> None:
@@ -151,7 +85,7 @@ def _reject_lifetime_primitives(layout: "Layout", target: Path, sel_nodes) -> No
     droppers/cloners are bound by its TYPE wrapper, from the type's own record.
     Types are unaffected — the gate is symbol-only.
     """
-    lf = _lifetime_by_sym(layout.analysis)
+    lf = _lifetime_by_sym(layout)
     if not lf:
         return
     hits = []
@@ -254,26 +188,14 @@ def _wrap_emit(
 
     def emit(batch) -> None:  # batch: _schedule.Batch
         type_units = [u for u in batch.units if u.kind == "type"]
-        if type_units and batch.field_range is not None:
-            # type-pull: tag + its full field-accessor set; the agent pulls
-            # lifecycle + cast graph from the record itself. A type is never
-            # split, so the window is always the whole list and always carries
-            # the type def — the old empty-tail guard has no case left.
+        if type_units:
+            # type-pull: the tag plus its full field-accessor set; the agent
+            # pulls lifecycle and the cast graph from the record itself. One
+            # type per batch (`_schedule.pack`), never split.
             u = type_units[0]
             CrustifyWrap(
                 target, batch_kind="type",
                 tags=[u.node.id], kinds=[u.node.subkind],
-                fields_range=list(batch.field_range),
-                repo_root=layout.repo_root,
-            ).run()
-            return
-        if type_units:
-            # type-pull: hand the family tags + kind; the agent pulls each
-            # tag's record/ops/deps/.rs.
-            CrustifyWrap(
-                target, batch_kind="type",
-                tags=[u.node.id for u in type_units],
-                kinds=[type_units[0].node.subkind],
                 repo_root=layout.repo_root,
             ).run()
             return
@@ -344,7 +266,6 @@ def wrap_lifetime_for(
         print(f"[wrap dry-run] --lifetime-for {spec}: one agent, "
               f"no composed worklist (the agent discovers the primitives).")
         return
-    _announce_fork(fork_manifests(layout))
 
     def emit_factory(t_, l_):
         def emit(_batch) -> None:
@@ -398,8 +319,8 @@ def _closure_names(seeds: list[str], by_key, by_name, keep) -> list[str]:
             n = by_key[k]
             if keep(n):
                 out.append(nm)
-            stack.extend(n.dep_types)
-            stack.extend(s[0] for s in n.dep_syms)
+            stack.extend(d[0] for d in n.dep_types)
+            stack.extend(d[0] for d in n.dep_syms)
     return sorted(set(out))
 
 
@@ -503,6 +424,7 @@ def wrap_types(
     from compose import scope
     from crustify import config as _cfg
     from crustify import _schedule as S
+    from crustify import manifests as _manifests
     from crustify.layout import Layout
 
     if max_syms is None:
@@ -510,10 +432,16 @@ def wrap_types(
 
     layout = Layout.discover(target)
     scope_json = _preflight(target, layout)
-    dag = json.loads(layout.deps_dag(target).read_text())
+    from crustify import dag as _dag
+    dag = _dag.build(layout, target, stage="wrap")
     print(f"[crustify-cli wrap] deps DAG: {dag.get('stats')}")
 
     by_key, by_name = S.load_nodes(dag)
+
+    # A `--name` that names two nodes would put two unrelated entities on one
+    # agent's worklist. `--dag-layer` is exempt: it selects keys, not names.
+    _dag.require_unambiguous(names or [], by_key, by_name, set(files or []),
+                             stage="wrap")
 
     base_in_scope = _selection_pred(
         scope_json, wrap_only=wrap_only, port_only=port_only,
@@ -542,7 +470,7 @@ def wrap_types(
         # `_reject_lifetime_primitives` says so, but a layer slice is a bulk
         # selector — one primitive in the layer must not sink the whole wave.
         _elig = _wrap_eligible_pred(scope_json)
-        _prim = {nm for (nm, _f) in _lifetime_by_sym(layout.analysis)}
+        _prim = {nm for (nm, _f) in _lifetime_by_sym(layout)}
         sel_names += sorted({
             n.id for n in by_key.values()
             if n.layer == dag_layer and _elig(n)
@@ -650,10 +578,10 @@ def wrap_types(
         max_syms=max_syms,
         emit_factory=emit_factory, target=target, layout=layout,
     )
-    if not dry_run:
-        _announce_fork(fork_manifests(layout))
     failures = S.schedule(
-        dag=dag, analysis_root=layout.analysis,
+        dag=dag,
+        entry_pair=(_manifests.entries(layout, target, "types", stage="wrap"),
+                    _manifests.entries(layout, target, "symbols", stage="wrap")),
         names=sel_names, stage=stage, parallelize=parallel,
         chain_policy=chain_policy, parallel_max=parallel_max, dry_run=dry_run,
     )

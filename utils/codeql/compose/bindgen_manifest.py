@@ -164,20 +164,38 @@ class Stats(NamedTuple):
 
 # ---------------------------------------------------------------------- compose
 
+def _tree_records(root: Path, filename: str, coll_key: str) -> dict:
+    """`{rel_dir: [entry]}` read off a per-stem tree — for this module's own
+    CLI only. The orchestrator passes composed records instead."""
+    out: dict = {}
+    for f in sorted(Path(root).rglob(filename)):
+        try:
+            out[f.parent.relative_to(root)] = (
+                json.loads(f.read_text()).get(coll_key) or [])
+        except (ValueError, OSError):
+            continue
+    return out
+
+
 def _load_inscope_annotated(
     by_dir: dict[Path, list[dict]],
-    analysis_root: Path,
+    records_by_dir: dict,
     filename: str,
     coll_key: str,
     id_key: str,
     *,
     keys: set | None,
 ) -> list[dict]:
-    """Return on-disk *annotated* entries for the composer's in-scope set.
+    """Return the *annotated* records for the composer's in-scope set.
 
     ``by_dir`` comes from a ``*_compose`` call (the per-target in-scope
-    identities, grouped by dir). Scope membership is read from ``scope.json``
-    (the authoritative, deduped closure) as ``keys`` — the origin-keyed set from
+    identities, grouped by dir); ``records_by_dir`` is the same grouping of
+    composed-and-store-overlaid records (:mod:`crustify.manifests`), which is
+    where the ownership annotations come from. It used to be a read of the
+    per-stem tree, whose skeleton half these two now agree on by construction.
+
+    Scope membership is read from the scope manifest (the authoritative,
+    deduped closure) as ``keys`` — the origin-keyed set from
     :func:`scope.scope_membership` — keep an entry iff its
     ``scope.origin_key(id, defined_in, declared_in)`` is in ``keys``. ``None``
     keeps every in-scope-by-dir entry.
@@ -185,14 +203,7 @@ def _load_inscope_annotated(
     out: list[dict] = []
     for mdir, entries in by_dir.items():
         inscope_ids = {e.get(id_key) for e in entries}
-        disk = analysis_root / mdir / filename
-        if not disk.exists():
-            continue
-        try:
-            doc = json.loads(disk.read_text())
-        except (ValueError, OSError):
-            continue
-        for e in doc.get(coll_key, []):
+        for e in records_by_dir.get(mdir) or []:
             eid = e.get(id_key)
             if eid not in inscope_ids:
                 continue
@@ -279,7 +290,7 @@ def _lib_of(
 def compose(
     csv_dir_t1: Path,
     csv_dir_t2: Path,
-    analysis_root: Path,
+    records,
     filter_spec: FilterSpec | None = None,
     *,
     lib_filter: list[str] | None = None,
@@ -289,7 +300,8 @@ def compose(
 
     Args:
       csv_dir_t1/t2: repo-root CodeQL CSV dirs (scope + reach).
-      analysis_root: ``<repo_root>/.crustify/analysis`` (annotation source).
+      records: ``(syms_by_dir, types_by_dir)`` of composed+overlaid records
+        (the annotation source; see :mod:`crustify.manifests`).
       filter_spec: pass ``FilterSpec(scope_json_path=<target scope.json>)``.
       lib_filter: optional crate/library restriction (post-scoping).
       repo_root: the repository root; used to resolve per-library
@@ -311,12 +323,13 @@ def compose(
         sj, "wrap", kinds=("functions", "globals", "macros")) if sj else None)
     wrap_type_keys = (scope.scope_membership(
         sj, "wrap", kinds=("types",)) if sj else None)
+    sym_records, type_records = records
     wrap_syms = _load_inscope_annotated(
-        syms_by_dir, analysis_root, "syms.json", "symbols", "name",
+        syms_by_dir, sym_records, "syms.json", "symbols", "name",
         keys=wrap_sym_keys,
     )
     wrap_types = _load_inscope_annotated(
-        types_by_dir, analysis_root, "types.json", "types", "name",
+        types_by_dir, type_records, "types.json", "types", "name",
         keys=wrap_type_keys,
     )
 
@@ -856,7 +869,10 @@ def main() -> None:
     args = ap.parse_args()
 
     spec = FilterSpec(scope_json_path=args.scope_json)
-    plan = compose(args.t1, args.t2, args.analysis_root, spec,
+    plan = compose(args.t1, args.t2,
+                   (_tree_records(args.analysis_root, "syms.json", "symbols"),
+                    _tree_records(args.analysis_root, "types.json", "types")),
+                   spec,
                    lib_filter=args.libs, repo_root=args.repo_root)
     stats = write_plan(plan, args.rust_root, reset=args.reset)
     for lib, lp in sorted(plan.libs.items()):

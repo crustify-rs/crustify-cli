@@ -55,9 +55,12 @@ class FilterSpec:
     files: list[str] = field(default_factory=list)
     names: list[str] = field(default_factory=list)
 
-    # Path to scope.json enabling port-aware analysis. None disables
-    # the seed gate AND port/wrap classification entirely.
-    scope_json_path: Path | None = None
+    # The composed scope manifest (dict) enabling port-aware analysis; a Path
+    # to a `scope.json` is still accepted for the standalone composer CLIs.
+    # None disables the seed gate AND port/wrap classification entirely, which
+    # widens the emit to the repo-wide universe — so a caller that MEANT to be
+    # scoped must never let this fall to None silently.
+    scope_json_path: "Path | dict | None" = None
 
     # Post-emission filters (mutually exclusive). port_only keeps
     # only entries emitted with port additions; wrap_only keeps

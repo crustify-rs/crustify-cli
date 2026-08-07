@@ -107,16 +107,17 @@ def _sym_filekey(defined_in: Any, declared_in: Any) -> str | None:
 # --------------------------------------------------------------------- model
 
 class TypeNode:
-    __slots__ = ("tag", "kind", "defined_in", "declared_in",
+    __slots__ = ("tag", "def_file", "kind", "defined_in", "declared_in",
                  "ctype_refs", "dep_types", "dep_syms",
                  "cast_to", "cast_from", "nfields")
 
-    def __init__(self, tag: str) -> None:
+    def __init__(self, tag: str, def_file: str = "") -> None:
         self.tag = tag
+        self.def_file = def_file
         self.kind: str | None = None
         self.defined_in: str | None = None
         self.declared_in: str | None = None
-        self.ctype_refs: set[str] = set()   # raw C type strings (field types)
+        self.ctype_refs: set = set()        # (type_name, type_def_file) field edges
         self.dep_types: set[str] = set()    # resolved canonical tags
         self.dep_syms: set[str] = set()     # resolved free-symbol names
         self.cast_to: set[str] = set()      # casted.to tags (this -> T)
@@ -128,6 +129,10 @@ class TypeNode:
         to/from. A generic engine / polymorphic base is a high-degree hub;
         an instance / derived is low-degree. Drives the erasure ordering edge."""
         return len(self.cast_to | self.cast_from)
+
+    @property
+    def key(self) -> "TypeKey":
+        return (self.tag, self.def_file)
 
     def origin(self) -> str | None:
         return self.defined_in or self.declared_in
@@ -158,6 +163,10 @@ class SymNode:
         self.dep_types: set[str] = set()
         self.dep_syms: set[SymKey] = set()        # resolved (name, file) keys
         self.loc: int = 0                         # body line span (port LoC budget)
+
+    @property
+    def key(self) -> "TypeKey":
+        return (self.tag, self.def_file)
 
     def origin(self) -> str | None:
         return self.defined_in or self.declared_in
@@ -244,9 +253,33 @@ def _sig_type_refs(entry: dict) -> set[str]:
 
 # ------------------------------------------------------------------- collect
 
+def _entries_of(src, kind: str) -> list:
+    """Entries of ``kind`` from either a composed ``(types, syms)`` pair or a
+    legacy analysis-root path.
+
+    The pair is the live form -- records composed from the CodeQL tables and
+    overlaid with `ownership-store.json` by :mod:`crustify.manifests`, with no
+    per-stem tree to walk. The path form stays for this module's own CLI.
+    """
+    if isinstance(src, tuple):
+        return list(src[0] if kind == "types" else src[1])
+    root = Path(src)
+    fname = "types.json" if kind == "types" else "syms.json"
+    key = "types" if kind == "types" else "symbols"
+    out: list = []
+    for f in sorted(root.rglob(fname)):
+        try:
+            out += json.loads(f.read_text()).get(key) or []
+        except Exception:
+            continue
+    return out
+
+
 def _collect(analysis_root: Path,
              port_syms: set | None = None,
-             port_fields: dict[str, set[str]] | None = None):
+             port_fields: dict[str, set[str]] | None = None,
+             codeql_dir: Path | None = None,
+             in_scope_types: set[str] | None = None):
     """Collect nodes/edges from the analysis tree, narrowed to one target.
 
     The tree is scope-agnostic and ACCUMULATES across targets: an entry that
@@ -272,44 +305,40 @@ def _collect(analysis_root: Path,
     types: dict[str, TypeNode] = {}
     syms: dict[SymKey, SymNode] = {}
 
-    for f in sorted(analysis_root.rglob("types.json")):
-        try:
-            doc = json.loads(f.read_text())
-        except (ValueError, OSError):
+    tmeta, tedges, tcasts, talias = (collect_types_csv(codeql_dir) if codeql_dir
+                                     else ({}, {}, {}, {}))
+    for key, m in tmeta.items():
+        tag, df = key
+        if tag.startswith("(unnamed"):
+            continue                       # the anonymous sentinel is not a type
+        # The CSVs carry every type in the DB; the graph is per TARGET. Keep the
+        # scope's types only — reading the analysis tree used to narrow this
+        # implicitly, since the composer only ever emitted in-scope entries.
+        if in_scope_types is not None and tag not in in_scope_types:
             continue
-        for e in doc.get("types", []):
-            if not _is_real(e):
+        n = types.setdefault(key, TypeNode(tag, df))
+        n.kind = n.kind or m["kind"]
+        n.defined_in = n.defined_in or (df or None)
+        n.declared_in = n.declared_in or _scope.canonical_decl(sorted(m["decls"])) if m["decls"] else n.declared_in
+        # A wrap struct only orders work through the fields the port scope
+        # actually reads; the rest is layout it binds opaquely. `port_fields`
+        # is keyed by TAG (it comes from `depends_on.types[].fields`, which
+        # names no file), so a colliding tag pools both entities' touched sets
+        # -- which can only over-keep a field, never drop one.
+        keep = None if port_fields is None else port_fields.get(tag, set())
+        for fname, tname, tdf in tedges.get(key, ()):
+            if keep is not None and fname not in keep:
                 continue
-            tag = e.get("name") or e["type"]
-            n = types.get(tag) or types.setdefault(tag, TypeNode(tag))
-            if n.kind is None:
-                n.kind = e.get("kind")
-            if n.defined_in is None:
-                n.defined_in = e.get("defined_in")
-            if n.declared_in is None:
-                dh = e.get("declared_in")
-                n.declared_in = dh[0] if isinstance(dh, list) and dh else (
-                    dh if isinstance(dh, str) else None)
-            # A wrap struct only orders work through the fields the port
-            # scope actually reads; its other fields are layout it binds
-            # opaquely. port_fields carries that per-target subset.
-            if port_fields is not None and tag not in port_fields:
-                n.ctype_refs |= _field_ctype_refs(e, keep_fields=set())
-            elif port_fields is not None:
-                n.ctype_refs |= _field_ctype_refs(e, keep_fields=port_fields[tag])
-            else:
-                n.ctype_refs |= _field_ctype_refs(e)
-            cst = e.get("casted") or {}
-            if isinstance(cst, dict):
-                n.cast_to |= {t for t in (cst.get("to") or []) if t}
-                n.cast_from |= {t for t in (cst.get("from") or []) if t}
+            n.ctype_refs.add((tname, tdf))   # BOTH ends identified at source
+        # `casts.csv` is tag-keyed (a cast names no file), so a colliding tag
+        # shares its cast set across entities — over-including an ordering edge,
+        # never dropping one.
+        to, frm = tcasts.get(tag, (set(), set()))
+        n.cast_to |= to
+        n.cast_from |= frm
 
-    for f in sorted(analysis_root.rglob("syms.json")):
-        try:
-            doc = json.loads(f.read_text())
-        except (ValueError, OSError):
-            continue
-        for e in doc.get("symbols", []):
+    if True:
+        for e in _entries_of(analysis_root, "symbols"):
             if not _is_real(e, "name"):
                 continue
             name = e["name"]
@@ -345,32 +374,152 @@ def _collect(analysis_root: Path,
                                 (d["name"], _sym_filekey(d.get("defined_in"),
                                                          d.get("declared_in"))))
             n.sig_type_refs |= _sig_type_refs(e)
-    return types, syms
+    return types, syms, talias
 
 
-def _alias_map(analysis_root: Path, types: dict[str, TypeNode]) -> dict[str, str]:
-    """typedef alias -> canonical tag (+ identity), for C-string resolution."""
-    amap: dict[str, str] = {t: t for t in types}
-    for f in sorted(analysis_root.rglob("types.json")):
-        try:
-            doc = json.loads(f.read_text())
-        except (ValueError, OSError):
+# A type entity is (tag, def_file). A tag ALONE does not identify a type: 18 tags
+# in OpenSSL have several definitions, and the two `ring_buf`s / two
+# `ossl_record_layer_st`s are unrelated structs with disjoint layouts.
+TypeKey = tuple[str, str]
+
+#: Translation-unit suffixes. A type DEFINED in one has no linkage past that
+#: TU, so it can never be the entity a foreign reference resolves to.
+_C_TU_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".cu")
+
+#: Underlying kinds that are a LAYOUT — the only typedefs that mint a node.
+_AGGREGATE_UAK = frozenset({
+    "struct", "union", "enum",
+    "struct_anonymous", "union_anonymous", "enum_anonymous",
+})
+
+
+def collect_types_csv(codeql_dir: Path):
+    """The type side, straight from CodeQL — ``(meta, field_edges)``.
+
+    Replaces reading ``types.json``. The manifest stores a field's type as a
+    BARE C string (``{"name": "wrl", "type": "ossl_record_layer_st"}``), which
+    cannot be resolved afterwards when the tag names more than one struct: the
+    edge lands on whichever entity the composer happened to keep. T2's
+    ``field_type_uses`` carries ``type_def_file`` alongside ``type_name``, so
+    both ends of every field edge are identified at source.
+
+    ``meta`` is ``(tag, def_file) -> {kind, uak, decls}``. Rows with no
+    ``def_file`` are declaration-only and cannot disagree about identity, so
+    they fold into every definition of that name; a name with no definition
+    anywhere keeps its lone ``(name, "")`` entity. Same rule as
+    ``wrap_closure.build_type_meta`` -- and deliberately so: two identity
+    resolvers that drift are how the first collision survived a fix.
+    """
+    t1, t2 = codeql_dir / "t1", codeql_dir / "t2"
+    meta: dict[TypeKey, dict] = {}
+    alias: dict[str, str] = {}          # typedef name -> underlying tag
+    floating: dict[str, list] = collections.defaultdict(list)
+    for r in _scope.load_csv(t1 / "types.csv"):
+        n, df = r.get("name"), r.get("def_file") or ""
+        if not n:
             continue
-        for e in doc.get("types", []):
+        row = (_scope.parse_decl_files(r.get("decl_files") or ""),
+               r.get("kind") or "", r.get("unaliased_kind") or "")
+        # A `typedef` row names its underlying tag in `aliases` and defines
+        # nothing itself. It is an ALIAS, not an entity: minting one made 177
+        # typedef names (`CERT`, `DTLS1_STATE`, `BIO_SSL`, …) into type nodes
+        # that the analysis tree canonicalises onto their struct.
+        under = (r.get("aliases") or "").split("|")[0].strip()
+        if (r.get("kind") or "") == "typedef":
+            if under:
+                alias.setdefault(n, under)
+                continue
+            # A typedef of a PRIMITIVE (`typedef int SSL_TICKET_STATUS;`) names
+            # no underlying tag and is a Rust primitive, never a node. The
+            # manifest never emitted these; the CSV lists them like any type.
+            if (r.get("unaliased_kind") or "") not in _AGGREGATE_UAK:
+                continue
+        if not df:
+            floating[n].append(row)
+            continue
+        m = meta.setdefault((n, df), {"kind": "", "uak": "", "decls": set()})
+        _fold_type_row(m, *row)
+    defs: dict[str, list[str]] = collections.defaultdict(list)
+    for n, df in meta:
+        defs[n].append(df)
+    for n, rows in floating.items():
+        for df in defs.get(n) or [""]:
+            m = meta.setdefault((n, df), {"kind": "", "uak": "", "decls": set()})
+            for row in rows:
+                _fold_type_row(m, *row)
+
+    casts: dict[str, tuple[set, set]] = collections.defaultdict(
+        lambda: (set(), set()))
+    for r in _scope.load_csv(t2 / "casts.csv"):
+        f, t = r.get("from_tag"), r.get("to_tag")
+        if f and t and f != t:
+            casts[f][0].add(t)          # f is cast TO t
+            casts[t][1].add(f)          # t is cast FROM f
+
+    edges: dict[TypeKey, list[tuple[str, str, str]]] = collections.defaultdict(list)
+    for r in _scope.load_csv(t2 / "field_type_uses.csv"):
+        sn, tn = r.get("struct_name"), r.get("type_name")
+        if not (sn and tn):
+            continue
+        edges[(sn, r.get("struct_def_file") or "")].append(
+            (r.get("field_name") or "", tn, r.get("type_def_file") or ""))
+    return meta, dict(edges), dict(casts), alias
+
+
+def _fold_type_row(m: dict, decls, kind: str, uak: str) -> None:
+    """Fold one T1 row into an entity: decls union, aggregate kind beats
+    ``typedef``, aggregate unaliased-kind beats a scalar one."""
+    m["decls"].update(decls)
+    if not m["kind"] or (kind in ("struct", "union", "enum")
+                         and m["kind"] not in ("struct", "union", "enum")):
+        m["kind"] = kind or m["kind"]
+    if not m["uak"]:
+        m["uak"] = uak
+
+
+def _alias_map(analysis_root: Path, types: dict,
+               talias: dict[str, str] | None = None) -> dict[str, 'TypeKey']:
+    """typedef alias -> canonical tag (+ identity), for C-string resolution."""
+    # bare tag -> entity. A tag naming several entities resolves to the one a
+    # foreign TU could actually reach: a struct defined inside a `.c` has no
+    # linkage past that TU, so a header definition wins. Same rule as
+    # `wrap_closure.resolve` -- the alternative is picking by CSV order, which
+    # is how `ossl_record_layer_st` came to mean the 10-field QUIC struct.
+    by_tag: dict[str, list] = collections.defaultdict(list)
+    for k in types:
+        by_tag[k[0]].append(k)
+    amap: dict[str, TypeKey] = {}
+    for t, ks in by_tag.items():
+        hdr = [k for k in ks if not k[1].endswith(_C_TU_SUFFIXES)]
+        amap[t] = (hdr or ks)[0]
+    # `CERT` -> `cert_st` -> its entity. Chase transitively: a typedef of a
+    # typedef is legal C and the T1 table records each hop separately.
+    for a, under in (talias or {}).items():
+        seen = {a}
+        while under in (talias or {}) and under not in seen:
+            seen.add(under)
+            under = talias[under]
+        tgt = amap.get(under)
+        if tgt is not None:
+            amap.setdefault(a, tgt)
+    if True:
+        for e in _entries_of(analysis_root, "types"):
             if not _is_real(e):
                 continue
             for alias in e.get("typedef") or []:
-                amap.setdefault(alias, e.get("name") or e["type"])
+                tgt = amap.get(e.get("name") or e["type"])
+                if tgt is not None:
+                    amap.setdefault(alias, tgt)
     return amap
 
 
 # -------------------------------------------------------------- edge building
 
-def _resolve_ctype(ref: str, amap: dict[str, str],
-                   types: dict[str, TypeNode]) -> str | None:
-    """A C type string OR a bare tag -> canonical in-universe tag, else None."""
-    if ref in types:
-        return ref
+def _resolve_ctype(ref, amap: dict, types: dict):
+    """A C type string, a bare tag, or a ``(tag, def_file)`` pair -> the
+    in-universe ENTITY key, else None."""
+    if isinstance(ref, tuple):
+        return ref if ref in types else amap.get(ref[0])
     name = _base_type_name(ref) if re.search(r"[\s*\[\]]", ref) else ref
     if not name:
         return None
@@ -413,29 +562,32 @@ def _build_edges(types, syms, amap):
         key[0]: key for key, n in syms.items() if n.kind == "callback"
     }
 
-    def res_type_tag(tag: str, dt: set[str]):
-        """A depends_on.types tag (already canonical) -> node."""
-        if tag in types:
-            dt.add(tag)
-        elif tag:
-            ext_types.add(tag)
-            dt.add(tag)
+    def res_type_tag(tag: str, dt: set):
+        """A depends_on.types TAG (no def_file — the symbol side still stores
+        bare tags) -> the entity key it denotes, via `amap`."""
+        if not tag:
+            return
+        k = amap.get(tag) or (tag, "")
+        dt.add(k)
+        if k not in types:
+            ext_types.add(k)
 
-    def res_ctype(ref: str, dt: set[str], ds: set[SymKey] | None = None):
+    def res_ctype(ref, dt: set, ds: set[SymKey] | None = None):
+        # `ref` is a (type_name, type_def_file) field edge from the CSVs, or a
+        # bare C type string from a symbol signature.
+        nm = ref[0] if isinstance(ref, tuple) else ref
         # Checked before `_resolve_ctype` — see `cb_keys`.
         if ds is not None:
-            cb = cb_keys.get(ref) or cb_keys.get(_base_type_name(ref) or "")
+            cb = cb_keys.get(nm) or cb_keys.get(_base_type_name(nm) or "")
             if cb is not None:
                 ds.add(cb)
                 return
         t = _resolve_ctype(ref, amap, types)
         if t is None:
             return
-        if t in types:
-            dt.add(t)
-        else:
+        dt.add(t)
+        if t not in types:
             ext_types.add(t)
-            dt.add(t)
 
     def res_sym(depkey: SymKey, dt: set[str], ds: set[SymKey]):
         name = depkey[0]
@@ -479,7 +631,7 @@ def _build_edges(types, syms, amap):
     # (parent↔child backrefs) can be flattened by weighted feedback-arc-set, not
     # collapsed into a co-scheduled blob.
     wedge: dict[tuple[str, str], int] = collections.defaultdict(int)
-    for tag, n in types.items():
+    for key, n in types.items():
         for ref in n.ctype_refs:                     # field refs (hard layout)
             t = _resolve_ctype(ref, amap, types)
             # `n.dep_syms` passed so a field of function-pointer-typedef type
@@ -488,8 +640,8 @@ def _build_edges(types, syms, amap):
             # field never names the typedef in its own signature, so its
             # ordering runs struct -> callback, and it depends on the struct.
             res_ctype(ref, n.dep_types, n.dep_syms)
-            if t in types and t != tag:
-                wedge[(tag, t)] += 1
+            if t in types and t != key:
+                wedge[(key, t)] += 1
         # Cast-graph ordering edge (classifies the otherwise-ambiguous `casted`
         # relation into a correct-direction dep). For each T this type is cast
         # TO, add `tag -> T` ONLY when T is strictly more cast-central — i.e. T
@@ -500,13 +652,13 @@ def _build_edges(types, syms, amap):
         # depends on — never the reverse — and the strict `>` keeps it acyclic
         # (edges run low-degree → high-degree only, so no cast cycle can form).
         my_deg = n.cast_degree()
-        for t in n.cast_to:
-            tn = types.get(t)
-            if tn is not None and t != tag and tn.cast_degree() > my_deg:
+        for t in (amap.get(x) for x in n.cast_to):
+            tn = types.get(t) if t else None
+            if tn is not None and t != key and tn.cast_degree() > my_deg:
                 n.dep_types.add(t)
-                wedge[(tag, t)] += 1
-        n.dep_types.discard(tag)         # no self-edge
-        wedge.pop((tag, tag), None)
+                wedge[(key, t)] += 1
+        n.dep_types.discard(key)         # no self-edge
+        wedge.pop((key, key), None)
 
     # Array-cluster element inversion. A typed `CVec<T>` alias on cluster A
     # references element wrapper T, but the cluster is a foundational leaf (the
@@ -542,8 +694,9 @@ def _build_edges(types, syms, amap):
 
 # ------------------------------------------------------- node id + adjacency
 
-def _tid(tag: str) -> str:
-    return "t:" + tag
+def _tid(key) -> str:
+    tag, df = key
+    return "t:" + tag + "\x00" + (df or "")
 
 
 def _sid(key: SymKey) -> str:
@@ -565,9 +718,9 @@ def _build_graph(types, syms, ext_syms, ext_types):
         nodes[nid] = rec
         adj.setdefault(nid, set())
 
-    for tag, n in types.items():
-        add(_tid(tag), {
-            "id": tag, "node_kind": "type", "subkind": n.kind,
+    for key, n in types.items():
+        add(_tid(key), {
+            "id": n.tag, "node_kind": "type", "subkind": n.kind,
             "defined_in": n.origin(),
             "loc": n.nfields,           # struct field count (a type's own LoC)
             "_dt": n.dep_types, "_ds": n.dep_syms,
@@ -582,7 +735,7 @@ def _build_graph(types, syms, ext_syms, ext_types):
         })
     for tag in ext_types:
         if _tid(tag) not in nodes:
-            add(_tid(tag), {"id": tag, "node_kind": "type", "subkind": "external",
+            add(_tid(tag), {"id": tag[0], "node_kind": "type", "subkind": "external",
                             "defined_in": None,
                             "_dt": set(), "_ds": set()})
     for key, sub in ext_syms.items():
@@ -723,11 +876,6 @@ def _break_sccs(sccs, adj, nodes, wedge) -> set[tuple[str, str]]:
 # ---------------------------------------------------------------- emit
 
 def _emit_node(nodes, comp):
-    def grouped(ids):
-        types = sorted(nodes[d]["id"] for d in ids if d.startswith("t:"))
-        syms = sorted(nodes[d]["id"] for d in ids if d.startswith("s:"))
-        return {"types": types, "syms": syms}
-
     if len(comp) == 1:
         rec = dict(nodes[comp[0]])
         out = {"id": rec["id"], "node_kind": rec["node_kind"],
@@ -750,7 +898,7 @@ def _emit_node(nodes, comp):
     return {"scc": [member(nodes[c]) for c in comp]}
 
 
-def _populate_nfields(analysis_root: Path, types: dict[str, TypeNode]) -> None:
+def _populate_nfields(codeql_dir: Path, types: dict[str, TypeNode]) -> None:
     """Set each type's ``nfields`` to its **full** struct field count from the
     T1 ``fields.csv`` (``<crustify>/codeql/t1/fields.csv``, a sibling of the
     analysis tree). This is the whole struct, NOT the port-accessed subset that
@@ -759,7 +907,7 @@ def _populate_nfields(analysis_root: Path, types: dict[str, TypeNode]) -> None:
     own LoC is its field count. fields.csv attributes anonymous-struct fields to
     the naming typedef, so ``struct_name`` matches the type tag. Missing CSV →
     every ``nfields`` stays 0 (still deterministic, no CodeQL)."""
-    fcsv = analysis_root.parent / "codeql" / "t1" / "fields.csv"
+    fcsv = Path(codeql_dir) / "t1" / "fields.csv"
     if not fcsv.is_file():
         return
     by_key: dict[tuple[str, str], int] = collections.Counter()
@@ -770,11 +918,11 @@ def _populate_nfields(analysis_root: Path, types: dict[str, TypeNode]) -> None:
             continue
         by_key[(sn, row.get("struct_def_file") or "")] += 1
         by_name[sn] += 1
-    for tag, n in types.items():
-        cnt = by_key.get((tag, n.defined_in or ""))
+    for key, n in types.items():
+        cnt = by_key.get((n.tag, n.defined_in or ""))
         if cnt is None:
-            cnt = by_key.get((tag, n.declared_in or ""))
-        n.nfields = cnt if cnt is not None else by_name.get(tag, 0)
+            cnt = by_key.get((n.tag, n.declared_in or ""))
+        n.nfields = cnt if cnt is not None else by_name.get(n.tag, 0)
 
 
 def port_touched_fields(analysis_root: Path, port_syms: set) -> dict[str, set[str]]:
@@ -786,12 +934,8 @@ def port_touched_fields(analysis_root: Path, port_syms: set) -> dict[str, set[st
     focus. A type absent from the result is reached only opaquely.
     """
     touched: dict[str, set[str]] = {}
-    for f in sorted(analysis_root.rglob("syms.json")):
-        try:
-            doc = json.loads(f.read_text())
-        except Exception:
-            continue
-        for e in doc.get("symbols", []):
+    if True:
+        for e in _entries_of(analysis_root, "symbols"):
             key = (e.get("name"),
                    _sym_filekey(e.get("defined_in"), e.get("declared_in")))
             if key not in port_syms:
@@ -803,22 +947,38 @@ def port_touched_fields(analysis_root: Path, port_syms: set) -> dict[str, set[st
     return touched
 
 
-def compose(analysis_root: Path, scope_json: Path | None = None) -> dict[str, Any]:
+def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
+            ) -> dict[str, Any]:
     """Build the layered DAG. With ``scope_json``, narrowed to that target
-    (see :func:`_collect`); without it, the whole tree, unnarrowed."""
+    (see :func:`_collect`); without it, unnarrowed.
+
+    ``analysis_root`` is the composed ``(types, syms)`` pair, or -- for this
+    module's own CLI -- a legacy analysis-root path. ``codeql_dir`` must be
+    given with the pair, since there is no tree path to derive it from."""
     port_syms = port_fields = None
-    if scope_json is not None and Path(scope_json).is_file():
+    if scope_json is not None and (isinstance(scope_json, dict)
+                                   or Path(scope_json).is_file()):
         from . import scope as _scope
         port_syms = set()
         for kind in ("functions", "globals", "macros"):
             try:
-                port_syms |= _scope.load_port_entities(Path(scope_json), kind)
+                port_syms |= _scope.load_port_entities(scope_json, kind)
             except Exception:
                 pass
         port_fields = port_touched_fields(analysis_root, port_syms)
-    types, syms = _collect(analysis_root, port_syms, port_fields)
-    _populate_nfields(analysis_root, types)
-    amap = _alias_map(analysis_root, types)
+    in_scope_types = None
+    if scope_json is not None and (isinstance(scope_json, dict)
+                                   or Path(scope_json).is_file()):
+        _sj = _scope._doc(scope_json)
+        in_scope_types = {e["name"] for side in ("port", "wrap")
+                          for e in _sj.get(side, {}).get("types") or []}
+    if codeql_dir is None:
+        codeql_dir = Path(analysis_root).parent / "codeql"
+    types, syms, talias = _collect(analysis_root, port_syms, port_fields,
+                                   codeql_dir=codeql_dir,
+                                   in_scope_types=in_scope_types)
+    _populate_nfields(codeql_dir, types)
+    amap = _alias_map(analysis_root, types, talias)
     ext_syms, ext_types, wedge = _build_edges(types, syms, amap)
     nodes, adj = _build_graph(types, syms, ext_syms, ext_types)
     sccs = _tarjan(adj)
@@ -834,13 +994,17 @@ def compose(analysis_root: Path, scope_json: Path | None = None) -> dict[str, An
     buckets = _layer(adj_dag, sccs)
 
     def _grp(ids):
-        # Symbol deps carry `defined_in` so a same-named collision is
-        # unambiguous (consumers key on (name, defined_in)); type deps stay bare.
-        sym = [{"name": nodes[d]["id"], "defined_in": nodes[d]["defined_in"]}
-               for d in ids if d.startswith("s:")]
-        sym.sort(key=lambda x: (x["name"], x["defined_in"] or ""))
-        return {"types": sorted(nodes[d]["id"] for d in ids if d.startswith("t:")),
-                "syms": sym}
+        # BOTH sides carry `defined_in`, so a same-named collision is
+        # unambiguous on either. Type nodes are keyed `(tag, def_file)` now that
+        # the type side is collected from CodeQL: a TU-local `struct version_info`
+        # is a different type in every `.c` that declares one, and a bare tag
+        # cannot say which. Consumers key on the pair throughout.
+        def pairs(prefix):
+            out = [{"name": nodes[d]["id"], "defined_in": nodes[d]["defined_in"]}
+                   for d in ids if d.startswith(prefix)]
+            out.sort(key=lambda x: (x["name"], x["defined_in"] or ""))
+            return out
+        return {"types": pairs("t:"), "syms": pairs("s:")}
 
     # Reverse of the cut back-edges: for a node `v`, who referenced it raw while
     # it was a not-yet-wrapped cycle sibling. Once `v` is wrapped, those users
@@ -887,9 +1051,12 @@ def compose(analysis_root: Path, scope_json: Path | None = None) -> dict[str, An
             "as raw `ffi::T` because their target is a not-yet-wrapped sibling; "
             "`back_fill` (the reverse) lists nodes that already render *this* "
             "type raw and should switch to its wrapper once it lands. "
-            "Symbols are keyed by (name, defined_in|canonical-decl), so "
-            "`deps.syms`/`fallback.syms` carry `defined_in` to disambiguate "
-            "same-named statics; type deps stay bare tags. Topo-layered: layer "
+            "Every node is keyed by (name, defined_in) -- symbols by "
+            "(name, defined_in|canonical-decl), types by (tag, def_file) -- so "
+            "both `deps.types` and `deps.syms` (and the `fallback`/`back_fill` "
+            "twins) are lists of {name, defined_in} objects: a same-named static "
+            "and a TU-local `struct version_info` are equally ambiguous under a "
+            "bare name. Topo-layered: layer "
             "0 = leaves; layer N depends only on layers < N. Scope is applied by "
             "the orchestrators via scope.json, not here."
         ),

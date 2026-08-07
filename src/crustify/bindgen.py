@@ -45,24 +45,17 @@ def bindgen(target: Path, *, libs: list[str] | None = None,
     layout = Layout.discover(target)
     repo_root = layout.repo_root
 
-    scope_json = layout.scope(target)
-    if not scope_json.exists():
-        raise SystemExit(
-            f"error: scope.json not found at {scope_json}. Run "
-            f"`crustify-cli {target} analyze scope` first."
-        )
-    analysis_root = layout.analysis
-    if not analysis_root.exists():
-        raise SystemExit(
-            f"error: analysis tree not found at {analysis_root}. Run "
-            f"`crustify-cli {target} analyze` first."
-        )
+    from crustify import scope as _scope_mod
+    scope_json = _scope_mod.build(layout, target, stage="bindgen")
+    from crustify import manifests as _manifests
+    records = (_manifests.build(layout, target, "symbols", stage="bindgen"),
+               _manifests.build(layout, target, "types", stage="bindgen"))
     t1, t2 = layout.t1, layout.t2
     for csv_dir in (t1, t2):
         if not csv_dir.exists():
             raise SystemExit(
                 f"error: CodeQL CSVs not found at {csv_dir}. Run "
-                f"`crustify-cli {target} analyze extract-ql` first."
+                f"`crustify-oracle {target} extract-ql` first."
             )
 
     spec = FilterSpec(scope_json_path=scope_json)
@@ -70,7 +63,7 @@ def bindgen(target: Path, *, libs: list[str] | None = None,
     # crustify/rust/<lib>-sys/ and grow as targets reach more of each library).
     rust_root = layout.rust
 
-    plan = compose(t1, t2, analysis_root, spec, lib_filter=libs,
+    plan = compose(t1, t2, records, spec, lib_filter=libs,
                    repo_root=repo_root)
     if not plan.libs:
         raise SystemExit(

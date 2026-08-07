@@ -1,38 +1,118 @@
 # Crustify
 
-LLM-driven pipeline for automating the migration of production C/C++ codebases to Rust, at scale.
-Given a codebase, crustify first builds an accurate dependency graph of symbols and types, which
-guide the LLM agents for an incremental, cost-/time-efficient, and correct translation.  
+Crustify is an end-to-end harness that leverages LLMs to automates the 
+migration of production C/C++ codebases to Rust, at scale. 
 
-## Workflow
+Given a codebase, Crustify maps its
+build system and test suites, generates an accurate dependency graph of
+types and symbols, identifying those that cross the FFI boundary, 
+and translates them incrementally to safe, idiomatic, tested Rust. Additionally,
+Crustify's pipeline achieves all these in a cost- and time-efficient manner, with
+little human involvement.
+
+Crustify's latest major focus has been on automating the generation of safe wrappers over
+types, symbols, and pointers that cross the FFI boundary (i.e. from C to Rust or vice-versa)--a historically
+ manual-heavy task--allowing them to be integrated in Rust-native code **without** using raw 
+ pointers, unsafe blocks, and FFI calls, thus re-enabling the Rust compiler's static checks 
+ (lifetime, ownership) on otherwise unsafe items. (More on this below.)
+
+## Case studies
+
+### OpenSSL
+
+We started porting `libssl` (an `openssl` library) to Rust via Crustify. `libssl` depends heavily on
+`libcrypto` (also in `openssl`) and some `libc`, so the first step
+towards migration is to generate safe wrappers over its dependencies. 
+
+**The experiment.** We selected 46 structs and 41 functions that `libssl` imports from `libcrypto`. 
+
+**The result**: Crustify processed all 42 structs in under 1 hour for ~$300, emitting
+safe wrappers around the types themselves and their field accessors, amounting to ~20K LoC.
+Similarly, it also processed all 41 functions in just under 1 hour for $30, emitting safe wrappers
+around the function's arguments and return, amounting to 3.8K LoC. All safe wrappers make minimal
+use of raw pointers, and pass both `cargo build` and `cargo test`.
+
+See more details in /* link to the crustify-openssl repo */
+
+### libgit2
+
+TODO
+
+### ffmpeg
+
+## Translation Workflow
 
 ### Setup
-### Analyze
+- discover the build system, feature flags, and build artefacts
+- pick a default configuration, disabling deprecated features (can be adjusted by user)
+- build and run tests to collect baseline
+
+### Oracle
+- generate an accurate dependency graph of types and symbols that acts as an oracle
+for guiding LLMs in incremental translation
+- build the CodeQl DBs and run queries to extract code properties
+
 ### Scaffold
-### Bindgen
+- emit `crates.json` with the codebase's artefacts grouped in crates and modules
+- home every in-scope type and symbol to its proper crate 
+
+### Bindings
+- run `bindgen` to generate Rust bindings for FFI symbols and types
+
 ### Translate
+- wraps elements that cross the FFI boundary
+- translates those that are Rust-native
 
-## Dependency graph
+## LLM Agent Harness
 
-Deterministic, builds an accurate dependency graph of symbols and types,
-sorted in topological order, automatically identifying items that cross the FFI boundary
-and items that migrate to native Rust. based on codeql
+Three powerfull LLM agents, maximum concurrency, little engeineering:
 
-## LLM Agents
+### 1. Orchestrator
 
-- three LLM agents
-  - an orchestrator for driving the pipeline
-  - a SymbolsTranslator for porting / wrapping symbols (functions, globals, callbacks)
-  - a TypesTranslator for porting / wrapping types (structs, unions, enums)
+Drives the preliminary stages and orchestrates the translation waves via the dependency graph.
 
-- supported LLM backends
-  - claude CLI, subscription or API billing
-  - codex CLI, subscription or API billing
+### Type-Translator
+
+Emits safe, idiomatic wrappers for structs that cross the FFI boundary, including their fields.
+
+Translates those that are fully owned by Rust to native.
+
+### Symbol-Translator
+
+Emits safe, idiomatic wrappers for symbols, globals, and callbacks that cross the FFI boundary.
+
+Translates those that are fully owned by Rust to native.
+
+Supported agent backends:
+- Claude Code CLI
+- OpenAI Codex
+
+Supported billing: subscription-based and API (BYOK)
+
+## Correctness
+
+- each agent writes unit tests for wrappers with sanitizers enabled
+- `crustify audit` stage for measuring the unsafe-footprint
+- each agent can run in LLM-as-a-Judge mode to assess the quality of prior runs
 
 ## CLI
 
-TODO: add commands and flags
+Crustify ships the following CLI suite that can be driven by LLM agents and humans alike.
+We recommend using the orchestrator shipped by Crustify for full automation.
 
+- `crustify-oracle` answers questions about the codebase with the following commands:
+  - `extract-ql`
+  - `query` with the following subcommands:
+    - `types`
+    - `symbols`
+    - `dag`
+    - `files`
+
+- `crustify-cli` launches the translation stage via the following commands:
+  - `scaffold`
+  - `bindgen`
+  - `translate`
+  - `audit` measures the unsafe surface
 
 ---
 

@@ -88,7 +88,8 @@ def lookup_all(doc: dict, name: str, *, file: str | None = None) -> list[dict]:
                     continue
                 out.append({"crate": crate, "module": mod, "rs": rs,
                             "crate_path": c.get("crate_path"),
-                            "tu": r.get("tu")})
+                            "tu": r.get("tu"),
+                            "headers": list(r.get("headers") or [])})
     return out
 
 
@@ -184,9 +185,9 @@ def _ref_tags(type_str: str | None) -> list[str]:
             if re.match(r"^[A-Za-z_]\w*$", t) and t not in _NON_TAG]
 
 
-def validate_depends_on(doc: dict, analysis_root) -> list[str]:
-    """Cross-check ``depends_on`` against member placement and the analysis
-    tree's BY-VALUE type references. Returns error strings (``[]`` = consistent).
+def validate_depends_on(doc: dict, type_entries) -> list[str]:
+    """Cross-check ``depends_on`` against member placement and the composed
+    records' BY-VALUE type references. Returns error strings (``[]`` = consistent).
 
     A struct homed to crate A that embeds **by value** an entity homed to crate B
     needs B's layout, so ``A.depends_on`` must contain B. A missing edge is
@@ -223,8 +224,8 @@ def validate_depends_on(doc: dict, analysis_root) -> list[str]:
     errors: list[str] = []
     seen: set[tuple[str, str]] = set()   # (crate, dep) — one error per edge
 
-    for p in Path(analysis_root).rglob("types.json"):
-        for t in (json.loads(p.read_text()).get("types") or []):
+    for t in type_entries:
+        if True:
             tag = t.get("name") or t.get("type")
             home = owner.get(tag)
             if not home:

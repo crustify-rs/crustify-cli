@@ -21,8 +21,6 @@ definition, lifecycle ops, and implement field accessors.
 - `{workspace_root}`: shared Cargo workspace (crustify/rust), homing modules and
   translations across multiple port sessions.
 
-- `{analysis_root}`: ownership and lifecycle analysis tree for symbols and types.
-
 - `{build_json}`: the build manifest -- libraries, link deps, build / test commands,
   feature flags.
 
@@ -34,11 +32,11 @@ definition, lifecycle ops, and implement field accessors.
 
 ### Scope
 
-**Fields.** You process your type's fields that are **port-scope only**, i.e. touched
-by port-scope symbols, leaving the out-of-scope fields untouched.
+**Fields.** You process your type's fields that are **wrap- or port-scope only**,
+i.e. touched by port-scope symbols, leaving the out-of-scope ones untouched.
 
 **Lifetime primitives.** You process all the lifetime primitives of your type,
-regarless whether they are wrap/port-scope or out-of-scope.
+regarless whether they are wrap- or port- or out-of-scope.
 
 ### Discover your items 
 
@@ -61,7 +59,7 @@ existing safe wrappers if necessary, justifying why they fix the existing state.
 
 ### Locate your files
 
-Use the `crustify-oracle` skill to locate the `.rs` module of your target set and their
+Use `crustify-cli scaffold` to locate the `.rs` module of your target set and their
 anchors, as well as the module of their deps (types, callbacks). Since you're wrapping
 both port- and wrap-scope types your target set may cover both types of anchros.
 
@@ -209,7 +207,7 @@ reference pointing at the new home and promote its anchor.
 Run `cargo check`, `cargo clippy`, and `cargo test` over the whole workspace (`--workspace`). 
 Fix errors before finishing.
 
-Run the audit command from the `crustify-oracle` skill to get potential sites that are
+Run `crustify-cli audit` to get potential sites that are
 still using your type naked or in a raw pointer statements, which may be signals that they
 need to use the wrapped types and the `crustify-prim` smart pointers / traits. Fix them,
 unless justified.

@@ -1,42 +1,17 @@
-# syms.json schema
+# Symbol record schema
 
-Field **meaning** for the per-stem `syms.json` manifests (produced by
-`compose/syms_manifest.py`). This file is the single source of field semantics;
-`crustify-cli query syms --schema` emits it. The exact JSON shape a wrapper agent submits
--- and its validation rules -- is the *contract*, served separately by `crustify-cli
-query syms --update-help`, so meaning and shape never duplicate.
+Field **meaning** for a symbol record — the properties the deterministic
+symbols composer infers, and the ownership judgements an agent submits. The
+exact JSON shape of a submission, and its validation rules, are the *contract*,
+served separately by `crustify-oracle <repo> <target> query symbols
+--update-help`, so meaning and shape never duplicate.
 
-One entry per symbol (function, macro, global, or callback -- a function-pointer
-typedef) whose definition -- or, when the symbol is never defined (a header
-typedef/decl), its declaration -- lives in a file of this stem-group.
+One record per symbol: a function, macro, global, or callback (a
+function-pointer typedef), keyed by its definition site — or, when the symbol
+is never defined (a header typedef/decl), its canonical declaration.
 
 Each `## <field>` section documents one record field; the heading name is the
 field key.
-
-## partition
-
-Files are grouped into one manifest dir per `path_partition.manifest_dir_for(file)`
--- stem-grouped. `ssl/record/record.c` and `ssl/record/record.h` both land in
-`analysis/ssl/record/record/`. System / external files (CodeQL reports these by
-absolute path) route under `analysis/system/` (e.g. `/usr/include/string.h` ->
-`analysis/system/usr/include/string/syms.json`).
-
-## reach fields
-
-`used_by` and `depends_on` are emitted for EVERY entry, port-scope and
-wrap-scope alike, and carry the full scope-agnostic reach: `depends_on`
-includes body-level callees and field accesses even for an entry no target
-ever ports. The manifest is a shared repo-tier record of facts; it holds no
-port/wrap shape, and consumers apply scope themselves against
-`crustify/targets/<target>/scope.json`.
-
-Two do. `analyze dag` narrows edges per node -- a wrap-scope node contributes
-only its signature, since a binding is emitted from the signature alone and
-its body is never translated. `query --methods` filters the consumer
-footprints to scope at read time. Both derive scope; neither is baked here.
-
-A macro's body is never emitted; the agent reads the expansion from source
-when it needs to classify or port it.
 
 ## name
 
@@ -64,6 +39,34 @@ into multiple `kind:callback` entries, same name/type but distinct
 composer-emitted; >=1 = agent-created fork) and a partitioned `used_by.call`. One
 entry = one Rust wrapper. The `variant` field is absent/0 for the common
 single-contract case.
+
+## variant
+
+Callback forks only, absent otherwise. A function-pointer typedef whose invokers
+realize different ownership contracts is split into several records sharing a
+`name`: the primary is variant 0 (implicit), each fork 1..N. A fork carries its
+own `ptr_args` / `ptr_ret` / `lifetime`, and its `used_by.call` is the subset of
+invokers realizing that contract -- the variants partition the invoker set.
+Agent-created, through `forks` in a submission.
+
+## _analysis
+
+Derived at read time, never stored and never submitted.
+
+- **`submitted`** -- whether the ownership store holds a record for this entity.
+  A null slot cannot say this on its own: `lifetime: null` reads the same
+  whether nobody has looked or an agent looked and found no lifecycle role.
+- **`pending`** -- the pointer slots carrying no ownership block, as dotted
+  paths. Under `--port-only` / `--wrap-only` it counts only the fields that
+  scope's code touches, so it agrees with what `--fields` shows.
+
+`submitted: true` with a non-empty `pending` is a partial analysis.
+
+## _comment_agent
+
+Free-text note from the agent that analyzed the entity: the reasoning behind a
+judgement, the evidence for it, and anything the structured slots cannot carry.
+Agent-filled, absent until one is submitted.
 
 ## declared_in
 
@@ -304,8 +307,3 @@ signature types (parameters/return) with body-touched types from
 `t2/field_accesses.csv`; signature types come first (signature order), body-only
 types follow (first-encounter order); a signature type whose body touches no
 field carries `fields:[]` (opaque use).
-
-## provenance
-
-Illustrative slice only; a real run emits hundreds-to-thousands of entries per
-manifest dir depending on stem-group density.

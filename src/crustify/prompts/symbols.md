@@ -16,8 +16,6 @@ not a full port. The deterministic scheduler chose which symbols.
 - `{workspace_root}`: shared Cargo workspace (crustify/rust), homing modules and
 translations across multiple port sessions.
 
-- `{analysis_root}`: ownership and lifecycle analysis tree for symbols and types.
-
 - `{build_json}`: the build manifest -- libraries, link deps, build / test
   commands, feature flags.
 
@@ -37,11 +35,11 @@ before proceeding with the wrappers. Use our established principles and the
 meaning of each agent-owned block.
 
 **Lifetime primitives.** If your target set contains the special marker `lifetime-for : <spec>` then
-use the appropriate `crustify-oracle` command to fetch existing records
-for `<spec>` and assess correctness. If no lifetime records for `<spec>`
-exist then you enter discovery mode and scout the codebase for them using
-our recommended heuristics, then submit your findings through the oracle.
-Narrow your lifetime primitives set to wrap-scope candidates only.
+use the appropriate `crustify-oracle` command check if any existing records
+for `<spec>` exist. If they do, assess correctness. Otherwise, you enter discovery
+mode and scout the codebase for lifetime primitives using
+our recommended heuristics, then submit your findings through the oracle. Your process 
+all the lifetime primitives codebase-wide, regarless whether they are wrap- or port-scope.
 
 **Reviewer mode.** If the agent-owned analysis of one of your items exists already, 
 or if its safe wrappers have already been emitted, then you act as a reviewer assessing their
@@ -51,7 +49,7 @@ existing safe wrappers if necessary, justifying why they fix the existing state.
 
 ### Locate your files
 
-Use the `crustify-oracle` skill to locate the `.rs` module of your target set
+Use `crustify-cli scaffold` to locate the `.rs` module of your target set
 and their anchors, as well as the module of their deps (symbols, types, callbacks). 
 
 Find the generated `bindings.rs` for the `<lib>-sys` crate of the crate that
@@ -190,7 +188,7 @@ so we can account them.
 Run `cargo check`, `cargo clippy`, and `cargo test` over the **whole workspace**
 (`--workspace`). Fix errors before finishing.
 
-Run the audit command from the `crustify-oracle` skill to get potential sites
+Run `crustify-cli audit` to get potential sites
 that are still using your type naked or in a raw pointer statements, which may
 be signals that they need to use the wrapped types and the `crustify-prim`
 smart pointers / traits. Fix them, unless justified.

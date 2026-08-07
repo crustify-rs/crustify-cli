@@ -1,4 +1,4 @@
-"""Compose per-stem `types.json` manifests at the repo-root tier.
+"""Compose the type records, grouped by source stem.
 
 Mirrors `syms_manifest.py`'s seed + closure model, adapted to types:
 
@@ -55,7 +55,7 @@ from typing import Any
 
 from . import scope
 from .filter_spec import FilterSpec, is_seed
-from .manifest_merge import merge_manifest_file, type_key
+from .manifest_merge import type_key
 from .path_partition import manifest_dir_for
 from .reach import Reach
 
@@ -838,12 +838,7 @@ def main() -> None:
     port_dirs = 0
     wrap_dirs = 0
     for rel_dir, entries in sorted(entries_by_dir.items()):
-        manifest = {"_comment": _COMMENT, "types": entries}
-        _pre, _added, _updated, after = merge_manifest_file(
-            args.out_root / rel_dir / "types.json", manifest,
-            entries_key="types", key=type_key,
-        )
-        total += after
+        total += len(entries)
         if dir_scope.get(rel_dir) == "port":
             port_dirs += 1
         else:

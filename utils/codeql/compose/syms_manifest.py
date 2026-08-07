@@ -1,9 +1,7 @@
-"""Compose per-stem `syms.json` manifests at the repo-root tier.
+"""Compose the symbol records, grouped by source stem.
 
-Each manifest dir at `<repo_root>/.crustify/analysis/<dir>/<stem>/`
-gets a `syms.json` listing every symbol (function, macro, global, or
-callback — a function-pointer typedef) defined or declared in the
-stem-grouped file(s) of that dir.
+Each stem group lists every symbol (function, macro, global, or callback — a
+function-pointer typedef) defined or declared in its file(s).
 
 **Scope gates EMISSION, never CONTENT.** Which records are emitted (and
 how they're tagged / post-filtered by `--port-only` / `--wrap-only`) is a
@@ -53,7 +51,7 @@ from typing import Any
 
 from . import scope
 from .filter_spec import FilterSpec, is_seed
-from .manifest_merge import merge_manifest_file, symbol_key
+from .manifest_merge import symbol_key
 from .path_partition import manifest_dir_for
 from .reach import Reach
 
@@ -1093,13 +1091,7 @@ def main() -> None:
     port_dirs = 0
     wrap_dirs = 0
     for rel_dir, entries in sorted(entries_by_dir.items()):
-        manifest = {"_comment": _COMMENT, "symbols": entries}
-        pre, added, updated, after = merge_manifest_file(
-            args.out_root / rel_dir / "syms.json",
-            manifest,
-            entries_key="symbols",
-            key=symbol_key,
-        )
+        after = len(entries)
         total += after
         if dir_scope.get(rel_dir) == "port":
             port_dirs += 1

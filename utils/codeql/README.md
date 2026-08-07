@@ -46,17 +46,17 @@ scalar/aggregate), `includes`.
 | `scope.py` | scope predicates (def-anchored classify, typedef walk, `type_method_syms`) | all composers |
 | `reach.py` | per-entity T2 reach rollups (callers, field accesses, type uses) | manifests, dag |
 | `filter_spec.py` / `path_partition.py` | `scope.json` in-scope filter; stem-group -> manifest-dir map | all stages |
-| `scope_manifest.py` | `scope.json` (port set + wrap import-closure) | `analyze scope` |
+| `scope_manifest.py` | in-memory port set; `wrap_closure.py` adds the import-closure. `analyze scope --dump` snapshots the pair | `analyze scope`, and every stage via `crustify.scope.build` |
 | `wrap_closure.py` | the wrap-scope closure reached from port code | scope / wrap scheduling |
 | `types_manifest.py` / `syms_manifest.py` | `types.json` / `syms.json` skeletons + full dependency edges | `analyze types` / `symbols` |
-| `deps_dag.py` | `deps-dag.json` - unified layered types+symbols DAG (cast-centrality + fallback/back-fill edges) | `analyze dag`, wrap/port scheduler |
+| `deps_dag.py` | in-memory unified layered types+symbols DAG (cast-centrality + fallback/back-fill edges); `analyze dag --dump` snapshots it | `analyze dag`, `query dag`, wrap scheduler |
 | `scaffold_manifest.py` | **legacy** — only `sync_workspace` (the shared `rust/` Cargo workspace member list) is still live, called from `bindgen_manifest`. `crates.json` has no producer: it is authored outside the pipeline (see `docs/schemas/crates.md`), and `.rs` stubs come from `crustify.scaffold` | `bindgen` |
 | `bindgen_manifest.py` | `<lib>-sys` crate scaffolds - per-kind allowlists + include closure (no `fn main`, no shims) | `bindgen` |
 | `audit_manifest.py` | JSON to stdout (per-seed own + naked-ffi surface, tree-wide `global` scan, `totals`); nothing written to disk | `audit` |
 | `manifest_merge.py` | union-by-key merge of agent findings into a manifest | `query --update` |
 | `check_types_consistency.py` | consistency gate (every op homed once; acyclic) | standalone (`python -m`, manual) |
 
-All artifacts are deterministic from the CSVs + `scope.json`; the analyze
+All artifacts are deterministic from the CSVs + `scope-config.json`; the analyze
 `types`/`symbols` skeletons carry judgement fields that the WRAP-stage
 agents fill in later, via `query --update`
 (ownership, lifecycle, ptr facets) - every other composer output is final.

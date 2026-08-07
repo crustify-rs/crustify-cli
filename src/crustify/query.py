@@ -22,7 +22,6 @@ import re
 import sys
 from pathlib import Path
 
-from crustify.layout import manifest_name
 
 # The composer package lives at ``utils/codeql/compose/`` in the crustify
 # checkout, not as an installed package. Put its parent on sys.path so
@@ -35,7 +34,7 @@ if str(_COMPOSE_PARENT) not in sys.path:
 def query(
     target: Path,
     *,
-    subject: str,                       # "types" | "syms"
+    subject: str,                       # "types" | "symbols"
     names: list[str] | None = None,
     files: list[str] | None = None,
     wrap_only: bool = False,
@@ -50,7 +49,6 @@ def query(
     create: str | None = None,
     rs: bool = False,
     manifest: bool = False,
-    rng: str | None = None,
     lifetime_for: str | None = None,
     taking: str | None = None,
     calling: str | None = None,
@@ -105,7 +103,7 @@ def query(
         _introspect(target, kind=kind, names=name_list, files=files,
                     fields=fields, ops=ops, methods=methods, field_touchers=field_touchers,
                     update=update, manifest=manifest,
-                    rng=rng, wrap_only=wrap_only, port_only=port_only)
+                    wrap_only=wrap_only, port_only=port_only)
     else:
         _enumerate(target, kind=kind, files=files,
                    wrap_only=wrap_only, port_only=port_only)
@@ -151,20 +149,33 @@ def _arg_is_array(a: dict) -> bool:
     return (a.get("ptr") or {}).get("array") is not None
 
 
-def _callee_index(layout) -> dict:
+# ---------------------------------------------------------- composed records
+
+def _entries(layout, target, kind: str) -> list:
+    """Every record of ``kind`` (``"type"``/``"types"`` | ``"sym"``/``"symbols"``),
+    composed from the CodeQL tables and overlaid with `ownership-store.json`.
+
+    Replaces the rglob over the per-stem tree every reader here used to do. The
+    records are identical in shape; only their provenance changed."""
+    from crustify import manifests as _m
+    k = "types" if kind in ("type", "types") else "symbols"
+    return _m.entries(layout, target, k, stage="query")
+
+
+def _entry_pair(layout, target) -> tuple[list, list]:
+    return (_entries(layout, target, "types"),
+            _entries(layout, target, "symbols"))
+
+
+def _callee_index(layout, target) -> dict:
     """name -> set(callee names), from the composer's `depends_on.syms`. Since
     scope gates emission and not content, this is codebase-wide for every
     emitted record."""
     idx: dict = {}
-    for f in layout.analysis.rglob(manifest_name("symbols")):
-        try:
-            doc = json.loads(f.read_text())
-        except (OSError, ValueError):
-            continue
-        for s in doc.get("symbols", []):
-            cs = {d.get("name") for d in (s.get("depends_on") or {}).get("syms") or []}
-            if cs:
-                idx.setdefault(s.get("name"), set()).update(cs)
+    for s in _entries(layout, target, "symbols"):
+        cs = {d.get("name") for d in (s.get("depends_on") or {}).get("syms") or []}
+        if cs:
+            idx.setdefault(s.get("name"), set()).update(cs)
     return idx
 
 
@@ -190,20 +201,15 @@ def _reaches(start: str, targets: set, idx: dict, hops: int) -> set:
     return hit
 
 
-def _type_aliases(layout, type_name: str) -> set:
+def _type_aliases(layout, target, type_name: str) -> set:
     """All spellings of a type (struct tag + typedef(s)) so an arg's ``type``
     string can be matched whichever alias the composer recorded."""
-    for f in layout.analysis.rglob(manifest_name("types")):
-        try:
-            doc = json.loads(f.read_text())
-        except (OSError, ValueError):
-            continue
-        for t in doc.get("types", []):
-            td = t.get("typedef")
-            tds = td if isinstance(td, list) else ([td] if td else [])
-            aliases = {t.get("name"), *tds} - {None}
-            if type_name in aliases:
-                return aliases
+    for t in _entries(layout, target, "types"):
+        td = t.get("typedef")
+        tds = td if isinstance(td, list) else ([td] if td else [])
+        aliases = {t.get("name"), *tds} - {None}
+        if type_name in aliases:
+            return aliases
     return {type_name}
 
 
@@ -226,17 +232,13 @@ def _taking(target: Path, spec: str, calling: str | None,
     from crustify.layout import Layout
 
     layout = Layout.discover(target)
-    aliases = (_type_aliases(layout, spec) if spec not in _SPEC_KEYWORDS
+    aliases = (_type_aliases(layout, target, spec) if spec not in _SPEC_KEYWORDS
                else {spec})
     want = {c.strip() for c in (calling or "").split(",") if c.strip()}
-    idx = _callee_index(layout) if want else {}
+    idx = _callee_index(layout, target) if want else {}
     rows = []
-    for f in sorted(layout.analysis.rglob(manifest_name("symbols"))):
-        try:
-            doc = json.loads(f.read_text())
-        except (OSError, ValueError):
-            continue
-        for s in doc.get("symbols", []):
+    if True:
+        for s in _entries(layout, target, "symbols"):
             hits = [a for a in s.get("ptr_args") or []
                     if _arg_matches_spec(a, spec, aliases)
                     and (not array_only or _arg_is_array(a))]
@@ -282,18 +284,14 @@ def _lifetime_for(target: Path, type_name: str, array_only: bool = False) -> Non
     from crustify.layout import Layout
 
     layout = Layout.discover(target)
-    aliases = (_type_aliases(layout, type_name)
+    aliases = (_type_aliases(layout, target, type_name)
                if type_name not in _SPEC_KEYWORDS else {type_name})
     result = {"type": type_name, "matched_aliases": sorted(aliases),
               "array_only": array_only,
               "dropped_by": [], "fields_disposed_by": [], "cloned_by": []}
     seen = set()
-    for f in sorted(layout.analysis.rglob(manifest_name("symbols"))):
-        try:
-            doc = json.loads(f.read_text())
-        except (OSError, ValueError):
-            continue
-        for s in doc.get("symbols", []):
+    if True:
+        for s in _entries(layout, target, "symbols"):
             lf = s.get("lifetime")
             if not isinstance(lf, dict):
                 continue
@@ -349,12 +347,11 @@ def _enumerate(
     from compose import scope
     from crustify.layout import Layout
 
+    from crustify import scope as _scope_mod
     layout = Layout.discover(target)
-    sj = layout.scope(target)
     file_set = set(files or [])
     arr, tagkey = (("types", "name") if kind == "type"
                    else ("symbols", "name"))
-    manifest = manifest_name(kind)
 
     # Scope membership is read straight from scope.json — the authoritative,
     # deduped port/wrap closures — NOT a re-derived "not-port ⇒ wrap"
@@ -366,18 +363,18 @@ def _enumerate(
     # Synthetic types (string/array clusters) are NOT in scope.json — they are
     # *always* wrap-scope, classified by kind here.
     sub = ("types",) if kind == "type" else ("functions", "globals", "macros")
+    # Composed only on the branch that needs it — an unfiltered enumeration
+    # must not pay the wrap closure.
+    sj = (_scope_mod.try_build(layout, target)
+          if (port_only or wrap_only) else None)
     port_keys = (scope.scope_membership(sj, "port", kinds=sub)
-                 if port_only and sj.exists() else set())
+                 if port_only and sj is not None else set())
     wrap_keys = (scope.scope_membership(sj, "wrap", kinds=sub)
-                 if wrap_only and sj.exists() else set())
+                 if wrap_only and sj is not None else set())
 
     rows: list[dict] = []
-    for f in layout.analysis.rglob(manifest):
-        try:
-            doc = json.loads(f.read_text())
-        except (OSError, ValueError):
-            continue
-        for e in doc.get(arr, []):
+    if True:
+        for e in _entries(layout, target, kind):
             tag = e.get(tagkey)
             if not tag:
                 continue
@@ -423,16 +420,8 @@ def _enumerate(
         print(f"{tag}\t{k}\t{d}\t{','.join(decls or [])}")
 
 
-def _window(seq: list, rng: str | None) -> list:
-    rg = _parse_range(rng)
-    if rg is None:
-        return seq
-    a, b = rg
-    return seq[a:b]
-
-
 def _introspect(
-    target: Path, *, kind: str, names, files, fields, ops, manifest, rng,
+    target: Path, *, kind: str, names, files, fields, ops, manifest,
     wrap_only, port_only, methods=False, field_touchers=False,
     update=None,
 ) -> None:
@@ -444,13 +433,15 @@ def _introspect(
     from crustify import dag as D
 
     if fields or ops or methods or field_touchers or manifest or update is not None:
-        layout, node, by_key = _resolve(target, kind=kind, name=names[0], files=files)
+        layout, node, by_key = _resolve(target, kind=kind, name=names[0],
+                                        files=files,
+                                        with_ops=bool(ops or methods))
         if manifest:
-            p = _manifest_path(layout.analysis, kind, node.id, node.defined_in)
-            if p is None:
-                raise SystemExit(
-                    f"query {kind}: no manifest file for {node.id!r}.")
-            print(p)
+            # One store for the whole repo now -- the per-stem manifest an
+            # entity used to home in is gone. Kept because agents call it to
+            # learn where their submissions land.
+            from crustify import store as _store
+            print(_store.path(layout))
             return
         if update is not None:
             if kind == "type":
@@ -465,17 +456,19 @@ def _introspect(
             # not just the target's scope). --port-only / --wrap-only intersect
             # with that scope's functions (scope.json membership). Schema-agnostic
             # — the agent never opens the manifest.
-            entry = _load_type_entry(layout.analysis, node.id, node.defined_in) or {}
+            entry = _load_type_entry(layout, target, node.id, node.defined_in) or {}
             pool = {s for grp in ("opaque_in", "non_opaque_in")
                     for syms in (entry.get(grp) or {}).values() for s in syms}
-            sj = layout.scope(target)
-            if (wrap_only or port_only) and sj.exists():
+            from crustify import scope as _scope_mod
+            sj = (_scope_mod.try_build(layout, target)
+                  if (wrap_only or port_only) else None)
+            if sj is not None:
                 from compose import scope as _sc
                 keep = {k[0] for k in _sc.scope_membership(
                     sj, "wrap" if wrap_only else "port",
                     kinds=("functions", "globals", "macros"))}
                 pool &= keep
-            win = _window(sorted(pool), rng)
+            win = sorted(pool)
             print("\n".join(win) if win else "[]")
             return
         if field_touchers:
@@ -488,10 +481,10 @@ def _introspect(
             _field_touchers(layout, target, node.id, node.defined_in,
                        wrap_only=wrap_only, port_only=port_only)
             return
-        meta = D.load_type_meta(layout.analysis)
+        meta = D.load_type_meta(_entry_pair(layout, target))
         flds, lifecycle = meta.get(node.id, ([], set()))
         if fields:
-            entry = _load_type_entry(layout.analysis, node.id, node.defined_in)
+            entry = _load_type_entry(layout, target, node.id, node.defined_in)
             objs = (entry.get("fields") if entry else None) or [{"name": f} for f in flds]
             # ALL declared fields by default; --port-only/--wrap-only narrow to
             # fields touched by that scope's code (raw field_accesses ∩ scope.json
@@ -500,7 +493,7 @@ def _introspect(
                                    wrap_only=wrap_only, port_only=port_only)
             if keep is not None:
                 objs = [o for o in objs if o.get("name") in keep]
-            win = _window(objs, rng)
+            win = objs
             print(json.dumps(win, indent=2))
             return
         # --ops: names only, lifecycle-first, scope-filterable via scope.json
@@ -508,15 +501,17 @@ def _introspect(
         op_pred = lambda _n: True            # noqa: E731
         if wrap_only or port_only:
             from compose import scope as _sc
-            sj = layout.scope(target)
+            from crustify import scope as _scope_mod
+            sj = _scope_mod.try_build(layout, target)
             op_pred = (_sc.in_scope_pred(sj, "wrap" if wrap_only else "port")
-                       if sj.exists() else (lambda _n: False))
-        win = _window(D.ordered_ops(node, by_key, lifecycle, op_pred), rng)
+                       if sj is not None else (lambda _n: False))
+        win = D.ordered_ops(node, by_key, lifecycle, op_pred)
         print("\n".join(o.id for o in win))
         return
 
     # record(s): always the whole record.
-    return _records(target, kind, names, files)
+    return _records(target, kind, names, files,
+                    wrap_only=wrap_only, port_only=port_only)
 
 
 _TOUCHED_CACHE: dict = {}
@@ -553,8 +548,9 @@ def scope_touched_index(layout, target, which: str) -> dict:
     key = (str(layout.repo_root), str(target), which)
     if key in _TOUCHED_CACHE:
         return _TOUCHED_CACHE[key]
-    sj = layout.scope(target)
-    if not sj.exists():
+    from crustify import scope as _scope_mod
+    sj = _scope_mod.try_build(layout, target)
+    if sj is None:
         return {}
     funcs = {k[0] for k in _sc.scope_membership(
         sj, which, kinds=("functions", "globals", "macros"))}
@@ -615,7 +611,7 @@ def _field_touchers(layout, target, tag: str, defined_in: str | None, *,
     import csv as _csv
     from collections import defaultdict
 
-    entry = _load_type_entry(layout.analysis, tag, defined_in) or {}
+    entry = _load_type_entry(layout, target, tag, defined_in) or {}
     declared = [f.get("name") for f in entry.get("fields") or [] if f.get("name")]
 
     complete: dict[str, set] = defaultdict(set)
@@ -654,7 +650,9 @@ _FINDINGS_TOP = {"fields", "_comment_agent"}
 # up_ref vs `*_free` and `*_dup`) -- the wrapper is `CBox` either way -- and it
 # names the field a generated shim reads when the type carries a refcount but
 # exposes no up_ref function.
-_FIELD_AGENT_KEYS = {"ptr", "locked_by", "refcount"}
+# Ordered, not a set: this drives the key order an agent's submission lands in,
+# and set iteration made that arbitrary. Mirrors `store.FIELD_KEYS`.
+_FIELD_AGENT_KEYS = ("ptr", "refcount", "locked_by")
 
 # Symbol findings (functions / callbacks / macros) — the agent-fillable surface.
 _SYM_FINDINGS_TOP = {"ptr_args", "ptr_ret", "lifetime", "forks", "ptr",
@@ -967,15 +965,21 @@ def _locked_update(path: Path, apply) -> None:
 
 def _update_type(layout, target, tag: str, defined_in: str | None,
                  src: str) -> None:
-    """Ingest an agent *findings* doc and merge it into the type's manifest
-    entry — the schema boundary, so the agent never opens types.json.
+    """Ingest an agent *findings* doc into `ownership-store.json` — the schema
+    boundary, so the agent never opens the store.
 
     `src` is a path, or ``"-"`` for stdin. The findings doc is the flat,
-    name-keyed agent shape (lifecycle slots + `fields: {name: {ptr}}` + optional
-    `_comment_agent`). We HARD-REJECT (and apply nothing) on structural
-    contradictions, unknown field names, hallucinated functions, a lifecycle op
-    that is a macro kind, and ptr-invariant violations; otherwise partial-merge
-    (only the slots/fields mentioned) under a lock + atomic rename."""
+    name-keyed agent shape (`fields: {name: {ptr, refcount, locked_by}}` +
+    optional `_comment_agent`). We HARD-REJECT (and apply nothing) on structural
+    contradictions, unknown field names and ptr-invariant violations; otherwise
+    partial-merge (only the fields mentioned) under a lock + atomic rename.
+
+    Validation reads the COMPOSED record and the write goes to the store: the
+    two halves the old single file conflated. That is what makes the store safe
+    to keep structure-free -- nothing is checked against a stored copy of the
+    layout that could have gone stale."""
+    from crustify import store as _store
+
     raw = sys.stdin.read() if src == "-" else Path(src).read_text()
     try:
         f = json.loads(raw)
@@ -988,11 +992,6 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
     if bad_top:
         raise SystemExit(f"--update: unknown findings key(s): {sorted(bad_top)}")
 
-    p = _manifest_path(layout.analysis, "type", tag, defined_in)
-    if p is None or not Path(p).exists():
-        raise SystemExit(f"--update: no manifest file homes type {tag!r}.")
-    path = Path(p)
-
     def _id_match(e: dict) -> bool:
         # Identity is `defined_in or canonical_decl(declared_in)`: an
         # anonymous-typedef struct (e.g. a STACK_OF instance) has a null
@@ -1004,50 +1003,57 @@ def _update_type(layout, target, tag: str, defined_in: str | None,
         return e.get("defined_in") is None and defined_in in (
             e.get("declared_in") or [])
 
+    # Validate against the COMPOSED skeleton. The store holds no structure, so
+    # this is the only thing that knows the type's field layout and each
+    # field's C type -- which is what makes "unknown field" and the ptr
+    # invariants checkable at all.
+    entry = next((e for e in _entries(layout, target, "types") if _id_match(e)),
+                 None)
+    if entry is None:
+        raise SystemExit(f"--update: no type {tag!r} in the composed records.")
+
+    field_by_name = {fld.get("name"): fld for fld in entry.get("fields") or []}
+    errors: list[str] = []
+    for fname, fa in (f.get("fields") or {}).items():
+        if fname not in field_by_name:
+            errors.append(f"unknown field {fname!r} (not in {tag}'s layout)")
+            continue
+        bad = set(fa) - set(_FIELD_AGENT_KEYS)
+        if bad:
+            errors.append(f"field {fname!r}: unknown key(s) {sorted(bad)}")
+        if "ptr" in fa and isinstance(fa["ptr"], dict):
+            errors += _ptr_invariant_errors(
+                fname, fa["ptr"], field_by_name[fname].get("type") or "")
+        if fa.get("locked_by") is not None:
+            errors += _locked_by_errors(
+                f"field {fname!r} locked_by", fa["locked_by"])
+        if "refcount" in fa and not isinstance(fa["refcount"], bool):
+            errors.append(f"field {fname!r}: refcount must be a boolean")
+    if errors:
+        raise SystemExit(
+            "--update REJECTED — fix and re-run:\n  - " + "\n  - ".join(errors))
+
     def _apply(doc: dict) -> None:
-        entries = doc.get("types", [])
-        entry = next((e for e in entries if _id_match(e)), None)
-        if entry is None:
-            raise SystemExit(f"--update: type {tag!r} not found in {path}.")
-
-        field_by_name = {fld.get("name"): fld
-                         for fld in entry.get("fields") or []}
-
-        errors: list[str] = []
-
-        # Per-field checks.
-        for fname, fa in (f.get("fields") or {}).items():
-            if fname not in field_by_name:
-                errors.append(f"unknown field {fname!r} (not in {tag}'s layout)")
-                continue
-            bad = set(fa) - _FIELD_AGENT_KEYS
-            if bad:
-                errors.append(f"field {fname!r}: unknown key(s) {sorted(bad)}")
-            if "ptr" in fa and isinstance(fa["ptr"], dict):
-                errors += _ptr_invariant_errors(
-                    fname, fa["ptr"], field_by_name[fname].get("type") or "")
-            if fa.get("locked_by") is not None:
-                errors += _locked_by_errors(
-                    f"field {fname!r} locked_by", fa["locked_by"])
-            if "refcount" in fa and not isinstance(fa["refcount"], bool):
-                errors.append(f"field {fname!r}: refcount must be a boolean")
-
-        if errors:
-            raise SystemExit(
-                "--update REJECTED — fix and re-run:\n  - "
-                + "\n  - ".join(errors))
-
-        # Merge (partial, idempotent): only the fields mentioned.
+        # Keyed by the COMPOSED entry's identity, not the caller's spelling: a
+        # type reached by a typedef alias, or with a null `defined_in`, must
+        # land on the same record the overlay will look for.
+        rec = _store.upsert_type(doc, entry.get("name") or entry.get("type"),
+                                 entry.get("defined_in"))
         if "_comment_agent" in f:
-            entry["_comment_agent"] = f["_comment_agent"]
+            rec["_comment_agent"] = f["_comment_agent"]
+        by_name = {x.get("name"): x for x in rec.setdefault("fields", [])}
         for fname, fa in (f.get("fields") or {}).items():
-            fld = field_by_name[fname]
+            dst = by_name.get(fname)
+            if dst is None:
+                dst = {"name": fname}
+                rec["fields"].append(dst)
+                by_name[fname] = dst
             for k in _FIELD_AGENT_KEYS:
                 if k in fa:
-                    fld[k] = fa[k]
+                    dst[k] = fa[k]
 
-    _locked_update(path, _apply)
-    print(f"updated {tag} in {path}")
+    _store.update(layout, _apply)
+    print(f"updated {tag} in {_store.path(layout)}")
 
 
 def _borrow_arg_ref_errors(label: str, borrowed, valid_args) -> list[str]:
@@ -1283,6 +1289,8 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
     or double-claimed callsite, or ptr-invariant violations; else partial-merge
     (primary) + idempotent fork replace, under a lock + atomic rename."""
 
+    from crustify import store as _store
+
     raw = sys.stdin.read() if src == "-" else Path(src).read_text()
     try:
         f = json.loads(raw)
@@ -1295,34 +1303,28 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
     if bad_top:
         raise SystemExit(f"--update: unknown findings key(s): {sorted(bad_top)}")
 
-    p = _manifest_path(layout.analysis, "symbol", name, defined_in)
-    if p is None or not Path(p).exists():
-        raise SystemExit(f"--update: no manifest file homes symbol {name!r}.")
-    path = Path(p)
-
     holder = {"n": 0}
 
+    def _is_primary(e: dict) -> bool:
+        # Identity is `defined_in or canonical_decl(declared_in)`: a callback
+        # (and other header-only decls) has a null `defined_in`, so a caller's
+        # file identifies it via `declared_in`.
+        if e.get("name") != name or (e.get("variant") or 0) != 0:
+            return False
+        if defined_in is None or e.get("defined_in") == defined_in:
+            return True
+        return e.get("defined_in") is None and defined_in in (
+            e.get("declared_in") or [])
+
+    # The primary (variant 0), from the COMPOSED records: signature, arg names
+    # and kind all come from there, which is what the validation below checks
+    # against. The store holds no structure to check against.
+    entry = next((e for e in _entries(layout, target, "symbols")
+                  if _is_primary(e)), None)
+    if entry is None:
+        raise SystemExit(f"--update: no symbol {name!r} in the composed records.")
+
     def _apply(doc: dict) -> None:
-        entries = doc.get("symbols", [])
-
-        def _is_primary(e: dict) -> bool:
-            # Identity is `defined_in or canonical_decl(declared_in)`: a
-            # callback (and other header-only decls) has a null `defined_in`,
-            # so a caller's file identifies it via `declared_in`.
-            if e.get("name") != name or (e.get("variant") or 0) != 0:
-                return False
-            if defined_in is None or e.get("defined_in") == defined_in:
-                return True
-            return e.get("defined_in") is None and defined_in in (
-                e.get("declared_in") or [])
-
-        # The primary entry (variant 0) — re-submits with existing forks on
-        # disk still target it.
-        entry = next((e for e in entries if _is_primary(e)), None)
-        if entry is None:
-            raise SystemExit(
-                f"--update: symbol {name!r} not found in {path}.")
-
         errors: list[str] = []
         ekind = entry.get("kind") or ""
 
@@ -1473,17 +1475,18 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
             elif not isinstance(forks, list):
                 errors.append("forks: must be a list")
             else:
-                # Full invoker set = primary ∪ existing forks, so a re-submit
-                # (where prior forks already drew callsites out of the
-                # primary) still validates the same partition.
+                # Full invoker set = the composed primary's, union whatever
+                # prior forks already claimed. The composed primary carries the
+                # WHOLE set (the subtraction that used to live on disk is
+                # applied at read time now), so the union is belt-and-braces
+                # for a store written by an older build.
                 all_calls = set((entry.get("used_by") or {}).get("call") or [])
-                for e in entries:
-                    if (e.get("name") == name
+                for r in doc.get("symbols") or []:
+                    if (r.get("name") == name
                             and (defined_in is None
-                                 or e.get("defined_in") == defined_in)
-                            and (e.get("variant") or 0) >= 1):
-                        all_calls |= set(
-                            (e.get("used_by") or {}).get("call") or [])
+                                 or r.get("defined_in") == defined_in)
+                            and (r.get("variant") or 0) >= 1):
+                        all_calls |= set(r.get("callsites") or [])
                 claimed: set = set()
                 for i, fk in enumerate(forks):
                     if not isinstance(fk, dict):
@@ -1516,147 +1519,127 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                 "--update REJECTED — fix and re-run:\n  - "
                 + "\n  - ".join(errors))
 
-        # Merge primary (partial, idempotent): only the slots/args mentioned.
-        _apply_ptr_agent(entry, f.get("ptr_args"), pr, f, "lifetime" in f)
+        # Merge the primary into its store record (partial, idempotent): only
+        # the slots/args mentioned. `_apply_ptr_agent` works on a full record,
+        # so it runs against a scratch copy of the composed entry and only the
+        # agent-owned result is kept.
+        rec = _store.upsert_sym(doc, entry["name"], entry.get("defined_in"))
+        scratch = json.loads(json.dumps(entry))
+        _apply_ptr_agent(scratch, f.get("ptr_args"), pr, f, "lifetime" in f)
+        _harvest_sym_agent(rec, scratch)
         # Globals: the singular `ptr` IS the ownership block (no composer keys
-        # mixed in -- name/type/const live at the entry level), so it is replaced
-        # wholesale, like an arg/ret record's nested `ptr`. `locked_by` is one
-        # cohesive block, likewise replaced wholesale (null clears it).
+        # mixed in -- name/type/const live at the entry level), so it is
+        # replaced wholesale. `locked_by` is one cohesive block, likewise
+        # (null clears it).
         if gptr is not None:
-            entry["ptr"] = gptr
+            rec["ptr"] = gptr
         if "locked_by" in f:
-            entry["locked_by"] = f["locked_by"]
+            rec["locked_by"] = f["locked_by"]
 
-        # Materialize forks (idempotent replace): drop any prior forks, then
-        # spawn one variant>=1 entry per cluster (inheriting the primary's
-        # composer structure), and PARTITION used_by.call so each invoker
-        # belongs to exactly one variant.
+        # Forks (idempotent replace): drop this symbol's prior fork records,
+        # then store one per cluster. Only the fork's OWN judgement and its
+        # callsites are stored -- the composer structure it inherits is applied
+        # by `manifests._materialize_forks` at read time, so a fork can never
+        # carry a frozen copy of a signature that has since changed.
         if forks is not None:
-            import copy as _copy
-            # Recover the FULL invoker set (primary ∪ existing forks) before
-            # dropping the old forks — so re-partitioning (incl. un-forking
-            # via `forks: []`) restores every callsite to the right variant.
-            full_call = list((entry.get("used_by") or {}).get("call") or [])
-            seen_call = set(full_call)
-            for e in entries:
-                if (e.get("name") == name
-                        and (defined_in is None
-                             or e.get("defined_in") == defined_in)
-                        and (e.get("variant") or 0) >= 1):
-                    for s in (e.get("used_by") or {}).get("call") or []:
-                        if s not in seen_call:
-                            full_call.append(s)
-                            seen_call.add(s)
-            entries[:] = [e for e in entries
-                          if not (e.get("name") == name
-                                  and (defined_in is None
-                                       or e.get("defined_in") == defined_in)
-                                  and (e.get("variant") or 0) >= 1)]
-            fork_sites = {s for fk in forks for s in (fk.get("callsites") or [])}
-            entry.setdefault("used_by", {})["call"] = [
-                s for s in full_call if s not in fork_sites]
+            key = (entry["name"], entry.get("defined_in") or "")
+            doc["symbols"] = [
+                r for r in doc["symbols"]
+                if not ((r.get("name"), r.get("defined_in") or "") == key
+                        and (r.get("variant") or 0) >= 1)]
             for i, fk in enumerate(forks, start=1):
-                fe = _copy.deepcopy(entry)
-                fe["variant"] = i
-                fe["used_by"] = {"call": sorted(fk.get("callsites") or []),
-                                 "ref": []}
-                _apply_ptr_agent(fe, fk.get("ptr_args"), fk.get("ptr_ret"),
+                fr = _store.upsert_sym(doc, entry["name"],
+                                       entry.get("defined_in"), variant=i)
+                fscratch = json.loads(json.dumps(entry))
+                _apply_ptr_agent(fscratch, fk.get("ptr_args"), fk.get("ptr_ret"),
                                  fk, "lifetime" in fk)
-                entries.append(fe)
-            doc["symbols"] = entries
+                _harvest_sym_agent(fr, fscratch)
+                fr["callsites"] = sorted(fk.get("callsites") or [])
             holder["n"] = len(forks)
 
-
-    _locked_update(path, _apply)
+    _store.update(layout, _apply)
 
     n = holder["n"]
     tail = f" (+{n} fork{'s' if n != 1 else ''})" if n else ""
-    print(f"updated {name} in {path}{tail}")
+    print(f"updated {name} in {_store.path(layout)}{tail}")
 
 
-def _records(target, kind, names, files) -> None:
+def _harvest_sym_agent(rec: dict, full: dict) -> None:
+    """Copy the agent-owned slots off a fully-shaped symbol record into its
+    store record, dropping every composer key on the way.
+
+    `_apply_ptr_agent` is written against the full record (it needs
+    `ptr_args[i].name` / `position` to place a submission), so a submission is
+    applied to a scratch copy of the composed entry and harvested here. Keeps
+    one implementation of the merge rules rather than a second one that knows
+    only the store shape."""
+    from crustify import store as _store
+    for k in ("lifetime",):
+        if full.get(k) is not None:
+            rec[k] = full[k]
+    args = [{"name": a.get("name"), "ptr": a["ptr"]}
+            for a in (full.get("ptr_args") or [])
+            if isinstance(a, dict) and a.get("ptr") and a.get("name")]
+    if args:
+        rec["ptr_args"] = args
+    ret = full.get("ptr_ret")
+    if isinstance(ret, dict) and ret.get("ptr"):
+        rec["ptr_ret"] = {"ptr": ret["ptr"]}
+    if full.get("_comment_agent"):
+        rec["_comment_agent"] = full["_comment_agent"]
+
+
+def _records(target, kind, names, files, *, wrap_only=False,
+             port_only=False) -> None:
     # record(s): always the whole record.
+    from crustify import manifests as _m
+
     load = _load_type_entry if kind == "type" else _load_sym_entry
     recs: list = []
     for nm in names:
-        layout, node, _bk = _resolve(target, kind=kind, name=nm, files=files)
-        entry = load(layout.analysis, node.id, node.defined_in)
+        layout, node, _bk = _resolve(target, kind=kind, name=nm, files=files,
+                                     with_ops=False)
+        entry = load(layout, target, node.id, node.defined_in)
         if entry is None:
             raise SystemExit(f"query {kind}: no manifest entry for {nm!r}.")
+        # `_analysis.pending` is stamped scope-agnostically; under a scope
+        # filter it must count the same fields `--fields` shows, or it reports
+        # work the caller's scope never touches.
+        if kind == "type" and (wrap_only or port_only):
+            keep = _field_keep_set(layout, target, node.id, node.defined_in,
+                                   wrap_only=wrap_only, port_only=port_only)
+            entry = dict(entry)
+            entry["_analysis"] = _m.analysis_state(
+                entry, "types", entry.get("_analysis", {}).get("submitted", False),
+                keep)
         recs.append(entry)
     print(json.dumps(recs[0] if len(recs) == 1 else recs, indent=2))
 
 
-def _parse_range(s: str | None) -> tuple[int, int | None] | None:
-    """``"20:40"`` → ``(20, 40)``; open ends allowed (``"20:"`` / ``":40"``)."""
-    if s is None:
-        return None
-    parts = s.split(":")
-    if len(parts) != 2:
-        raise SystemExit(f"--range must be A:B (got {s!r}).")
-    a = int(parts[0]) if parts[0] else 0
-    b = int(parts[1]) if parts[1] else None
-    return (a, b)
-
-
-def _load_type_entry(analysis: Path, tag: str, defined_in: str | None) -> dict | None:
+def _load_type_entry(layout, target, tag: str, defined_in: str | None) -> dict | None:
     """The raw ``types.json`` manifest entry for ``tag`` (preferring the one whose
     ``defined_in`` matches, to disambiguate a same-tag collision)."""
     fallback = None
-    for f in analysis.rglob(manifest_name("type")):
-        try:
-            doc = json.loads(f.read_text())
-        except (OSError, ValueError):
+    for e in _entries(layout, target, "types"):
+        if (e.get("name") or e.get("type")) != tag:
             continue
-        for e in doc.get("types", []):
-            if (e.get("name") or e.get("type")) != tag:
-                continue
-            if defined_in and e.get("defined_in") == defined_in:
-                return e
-            fallback = fallback or e
+        if defined_in and e.get("defined_in") == defined_in:
+            return e
+        fallback = fallback or e
     return fallback
 
 
-def _manifest_path(analysis: Path, kind: str, tag: str,
-                   defined_in: str | None) -> Path | None:
-    """The manifest file that homes ``tag`` (the file an annotating agent writes
-    back to) — ``types.json`` for a type, ``syms.json`` for a symbol — preferring
-    the one whose entry matches ``defined_in``."""
-    arr, tagkey = (("types", "name") if kind == "type"
-                   else ("symbols", "name"))
-    manifest = manifest_name(kind)
-    fallback = None
-    for f in analysis.rglob(manifest):
-        try:
-            doc = json.loads(f.read_text())
-        except (OSError, ValueError):
-            continue
-        for e in doc.get(arr, []):
-            if e.get(tagkey) != tag:
-                continue
-            if defined_in and e.get("defined_in") == defined_in:
-                return f
-            fallback = fallback or f
-    return fallback
+def _resolve(target, *, kind: str, name: str, files: list[str] | None,
+             with_ops: bool = True):
+    """``(layout, node, by_key)`` for one type/symbol, resolved from the composed
+    records (never the dag — see the note above). For a *type*, ``by_key`` is
+    populated with the type's op nodes so :func:`dag.ordered_ops` can serve
+    ``--ops`` — it selects them out of ``by_key`` by lifecycle name, the dag
+    storing none. Raises ``SystemExit`` on miss/ambiguity.
 
-
-# ----------------------------------------------------------------- resolution
-# `query type`/`query sym` read ONE entity (its record / fields / ops) — an
-# intra-entity lookup, so the **manifest is authoritative**: it's the
-# composer-emitted source of truth, fresh at analyze time. The deps-dag.json is
-# a POST-analyze graph overlay — absent on a first pass, and STALE on a re-run
-# (it predates the manifest edits the agent is making right now), so `_resolve`
-# never reads it. (`--ops` ordering is intra-type — lifecycle-first over the
-# type's own ops, built here from syms.json — so it works without the dag; only
-# `query dag` reads the post-analyze artifact, and it loads it itself.)
-
-def _resolve(target, *, kind: str, name: str, files: list[str] | None):
-    """``(layout, node, by_key)`` for one type/symbol, resolved from the
-    composer-emitted manifest tree (never the dag — see the note above). For a
-    *type*, ``by_key`` is populated with the type's op nodes (resolved from
-    ``syms.json``) so :func:`dag.ordered_ops` can serve ``--ops`` — it
-    selects them out of ``by_key`` by lifecycle name, the dag storing none.
-    Raises ``SystemExit`` on miss/ambiguity."""
+    ``with_ops=False`` skips that: reverse-deriving the lifecycle needs the
+    SYMBOL records as well as the type ones, so a plain record lookup was
+    composing the whole symbol side to build an op list nothing then read."""
     from crustify import dag as D
     from crustify.layout import Layout
 
@@ -1677,17 +1660,13 @@ def _resolve(target, *, kind: str, name: str, files: list[str] | None):
     layout = Layout.discover(target)
     file_set = set(files or [])
 
-    # walk the manifest tree (existence + defined_in are composer-filled).
+    # existence + defined_in are composer-filled, so this walks the composed
+    # records rather than a tree of files.
     arr, tagkey = (("types", "name") if kind == "type"
                    else ("symbols", "name"))
-    manifest = manifest_name(kind)
     uniq: dict = {}                                   # defined_in -> entry (dedup)
-    for f in layout.analysis.rglob(manifest):
-        try:
-            doc = json.loads(f.read_text())
-        except (OSError, ValueError):
-            continue
-        for e in doc.get(arr, []):
+    if True:
+        for e in _entries(layout, target, kind):
             if e.get(tagkey) != name:
                 continue
             if file_set and e.get("defined_in") not in file_set:
@@ -1705,15 +1684,15 @@ def _resolve(target, *, kind: str, name: str, files: list[str] | None):
 
     node = _pick([_mk(e) for e in uniq.values()])
     by_key = {node.key: node}
-    if kind == "type":
+    if kind == "type" and with_ops:
         from compose import scope
         # Method surface = the type's lifecycle, reverse-derived from the
         # symbols that carry the role — never a stored `ops` list.
         op_names = scope.type_method_syms(
             uniq.get(node.defined_in) or {},
-            scope.build_lifecycle_index(layout.analysis))
+            scope.build_lifecycle_index(_entry_pair(layout, target)))
         if op_names:
-            sidx = _syms_index(layout.analysis)
+            sidx = _syms_index(layout, target)
             for nm in op_names:
                 se = sidx.get(nm) or {}
                 onode = D.Node(id=nm, node_kind="symbol",
@@ -1724,34 +1703,24 @@ def _resolve(target, *, kind: str, name: str, files: list[str] | None):
     return layout, node, by_key
 
 
-def _syms_index(analysis: Path) -> dict:
-    """``name -> first syms.json entry`` for pre-dag op resolution."""
+def _syms_index(layout, target) -> dict:
+    """``name -> first symbol record`` for pre-dag op resolution."""
     idx: dict = {}
-    for f in analysis.rglob(manifest_name("symbols")):
-        try:
-            doc = json.loads(f.read_text())
-        except (OSError, ValueError):
-            continue
-        for e in doc.get("symbols", []):
-            idx.setdefault(e.get("name"), e)
+    for e in _entries(layout, target, "symbols"):
+        idx.setdefault(e.get("name"), e)
     return idx
 
 
-def _load_sym_entry(analysis: Path, name: str, defined_in: str | None) -> dict | None:
-    """The raw ``syms.json`` manifest entry for ``name`` (preferring the one whose
-    ``defined_in`` matches, to disambiguate same-named file-local statics)."""
+def _load_sym_entry(layout, target, name: str, defined_in: str | None) -> dict | None:
+    """The symbol record for ``name`` (preferring the one whose ``defined_in``
+    matches, to disambiguate same-named file-local statics)."""
     fallback = None
-    for f in analysis.rglob(manifest_name("symbols")):
-        try:
-            doc = json.loads(f.read_text())
-        except (OSError, ValueError):
+    for e in _entries(layout, target, "symbols"):
+        if e.get("name") != name:
             continue
-        for e in doc.get("symbols", []):
-            if e.get("name") != name:
-                continue
-            if defined_in and e.get("defined_in") == defined_in:
-                return e
-            fallback = fallback or e
+        if defined_in and e.get("defined_in") == defined_in:
+            return e
+        fallback = fallback or e
     return fallback
 
 
@@ -1802,7 +1771,10 @@ def _dag_loc(by_key, by_name, names, files, layer, as_json, keep=None,
                 and (n.node_kind == "type" or not is_folded_op(n))
                 and (keep is None or keep(n))]
     elif names:
+        from crustify import dag as D
         file_set = set(files or [])
+        D.require_unambiguous(names, by_key, by_name, file_set,
+                              stage="query dag --loc")
         rows, unknown = [], []
         for nm in names:
             hits = [by_key[k] for k in by_name.get(nm, [])
@@ -1838,8 +1810,9 @@ def _scope_predicate(layout, target, wrap_only: bool, port_only: bool):
     if not (wrap_only or port_only):
         return None
     from compose import scope as _sc
-    sj = layout.scope(target)
-    keys = _sc.scope_membership(sj, "port" if port_only else "wrap") if sj.exists() else set()
+    from crustify import scope as _scope_mod
+    sj = _scope_mod.try_build(layout, target)
+    keys = _sc.scope_membership(sj, "port" if port_only else "wrap") if sj is not None else set()
 
     def keep(n) -> bool:
         return _sc.origin_key(n.id, n.defined_in, None) in keys
@@ -1891,18 +1864,14 @@ def query_dag(
     from crustify.layout import Layout
 
     layout = Layout.discover(target)
-    dag_path = layout.deps_dag(target)
-    if not dag_path.exists():
-        raise SystemExit(
-            f"query dag: no deps-dag.json at {layout.analysis}. "
-            f"Run `crustify-cli {target} analyze dag` first.")
-    dag = json.loads(dag_path.read_text())
+    dag = D.build(layout, target, stage="query dag")
     by_key, by_name = D.load_nodes(dag)
     keep = _scope_predicate(layout, target, wrap_only, port_only)
 
     # ── mode: LoC view ─────────────────────────────────────────────────
     if loc:
-        ops_of = {t: lc for t, (_f, lc) in D.load_type_meta(layout.analysis).items()}
+        ops_of = {t: lc for t, (_f, lc)
+                  in D.load_type_meta(_entry_pair(layout, target)).items()}
         _dag_loc(by_key, by_name, names, files, layer, False, keep, ops_of)
         return
 
@@ -1959,6 +1928,7 @@ def query_dag(
 
     # Resolve each --name to its node key(s), --file disambiguating collisions.
     file_set = set(files or [])
+    D.require_unambiguous(names, by_key, by_name, file_set, stage="query dag")
     start: list = []
     unknown: list[str] = []
     for nm in names:
@@ -1972,25 +1942,23 @@ def query_dag(
     # ── mode: scc twins (fallback / back_fill) ─────────────────────────
     if scc:
         attr = "fallback" if scc == "hi-deps" else "back_fill"
-        tags: list[str] = []
+        twins: list = []
         for k in start:
-            tags.extend(getattr(by_key[k], attr))
+            twins.extend(getattr(by_key[k], attr))
         rows = []
-        for t in dict.fromkeys(tags):               # dedup, preserve order
-            for dk in by_name.get(t, []):
-                if by_key[dk].node_kind == "type" and (keep is None or keep(by_key[dk])):
-                    rows.append((by_key[dk], None))
+        for dk in dict.fromkeys(twins):             # dedup, preserve order
+            n = by_key.get(dk)
+            if n is not None and n.node_kind == "type" and (keep is None or keep(n)):
+                rows.append((n, None))
         _emit(rows)
         return
 
     # ── mode: transitive dependency closure (BFS) ──────────────────────
     def _dep_keys(n) -> list:
-        out = []
-        for t in n.dep_types:                       # type tags → their type node
-            out.extend(k for k in by_name.get(t, [])
-                       if by_key[k].node_kind == "type")
-        out.extend(sk for sk in n.dep_syms if sk in by_key)  # in-tree sym deps
-        return out
+        # Both sides are `(name, defined_in)` node keys, so a dep resolves by
+        # lookup. No name-scan: a TU-local type used to fan out to every
+        # same-tagged node in the tree, pulling unrelated TUs into the closure.
+        return [dk for dk in (*n.dep_types, *n.dep_syms) if dk in by_key]
 
     start_keys = set(start)
     hop: dict = {k: 0 for k in start}               # BFS: first visit = min hop
@@ -2033,26 +2001,15 @@ def query_files(
     from compose import scope as scope_mod
     from crustify.layout import Layout
 
+    from crustify import scope as _scope_mod
     layout = Layout.discover(target)
-    scope_path = layout.scope(target)
-    if not scope_path.exists():
-        raise SystemExit(
-            f"error: scope.json not found at {scope_path}. Run "
-            f"`crustify-cli {target} analyze scope --port-only` first.")
-    doc = json.loads(scope_path.read_text())
+    doc = _scope_mod.build(layout, target, stage="query files")
 
     port_files = wrap_files = None
     if port_only or not wrap_only:
-        port_files = sorted(scope_mod.load_port_paths(scope_path))
+        port_files = sorted(scope_mod.load_port_paths(doc))
     if wrap_only or not port_only:
-        wrap = doc.get("wrap")
-        if wrap is None:
-            raise SystemExit(
-                f"error: scope.json has no `wrap` section at {scope_path}. Run "
-                f"`crustify-cli {target} analyze scope --wrap-only` first "
-                f"(composer-only; needs just the `port` section + "
-                f"`analyze extract-ql`).")
-        wrap_files = sorted(set(wrap.get("files") or []))
+        wrap_files = sorted(set((doc.get("wrap") or {}).get("files") or []))
 
     if port_only:
         for f in port_files:

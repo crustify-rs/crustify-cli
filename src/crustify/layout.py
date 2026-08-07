@@ -7,10 +7,13 @@ walking the filesystem — and its artifacts live at ``repo_root/crustify/``:
 
     <repo_root>/
       crustify/
-        build.json  cli-config.json               # repo-tier, project-wide
-        analysis/    codeql/{t1,t2,db}/
+        build.json  crates.json  cli-config.json   # repo-tier, project-wide
+        ownership-store.json                      # the authored analysis
+        codeql/{t1,t2,db}/                        # CodeQL db + fact tables
         targets/<repo-relative-target>/           # per-target invocation state
-          scope-config.json   scope.json   logs/
+          scope-config.json                       # authored: the port set
+          scope.json  deps-dag.json               # derived, fingerprinted
+          logs/
         rust/                                     # the shared Rust crates
       ssl/  crypto/  …                            # vanilla C tree (no artifacts)
 
@@ -25,48 +28,6 @@ import os
 from pathlib import Path
 
 CRUSTIFY = "crustify"
-
-OUT_SUFFIX_ENV = "CRUSTIFY_OUT_SUFFIX"
-
-
-def manifest_name(kind: str) -> str:
-    """Per-stem manifest filename for a manifest `kind` (``type``/``types``
-    -> ``types.json``; anything else -> ``syms.json``), honoring the
-    ``CRUSTIFY_OUT_SUFFIX`` env var for isolated parallel runs.
-
-    With ``CRUSTIFY_OUT_SUFFIX=opus`` the names become ``types_opus.json`` /
-    ``syms_opus.json`` so concurrent runs write disjoint files, leaving the
-    canonical (suffix-less) tree untouched. Set by ``analyze types/syms
-    --out-suffix`` and ``wrap --out-suffix``; read by the composer emit and by
-    every ``crustify-cli query`` the agents shell out to (env inheritance) -
-    the agents pass no path, so the suffix must travel through the
-    environment.
-
-    Who follows the suffix, and who does not:
-
-      the WRAP SCHEDULER does — `_schedule.load_type_meta` and
-      `wrap._lifetime_by_sym` resolve through here, so an arm sees its own
-      submissions when scheduling its later waves. A suffixed run is a branch
-      of the analysis; an arm blind to its own findings would schedule every
-      wave after the first off data that ignores what it just learned.
-
-      the SCAFFOLDER, the DAG COMPOSER and the CRATES VALIDATOR do not. They
-      feed the Rust tree, which ``--out-suffix`` does NOT fork - that side is
-      isolated by per-agent session branches instead - so two arms working from
-      divergent field sets would contend for the same anchors in one shared
-      tree.
-
-    **Every** manifest access must route through here, reads included. The
-    cross-cutting scans in :mod:`crustify.query` (``--taking``,
-    ``--lifetime-for``, the callee and type-alias indices) used to hardcode
-    ``rglob("syms.json")``, which under a suffix sent writes to the suffixed
-    manifest while reads still came from the canonical one — an agent could not
-    see its own submissions, and the reverse lifecycle lookup stayed empty no
-    matter what it submitted."""
-    base = "types" if kind in ("type", "types") else "syms"
-    suffix = os.environ.get(OUT_SUFFIX_ENV, "").strip()
-    return f"{base}_{suffix}.json" if suffix else f"{base}.json"
-
 
 _REPO_ROOT: Path | None = None  # pinned once by the CLI; never marker-walked
 
@@ -100,10 +61,6 @@ class Layout:
         return cls(find_repo_root(start))
 
     # ----------------------------------------------------- repo-tier (shared)
-    @property
-    def analysis(self) -> Path:
-        return self.root / "analysis"
-
     @property
     def codeql(self) -> Path:
         return self.root / "codeql"
@@ -178,22 +135,23 @@ class Layout:
 
     def config(self, target: Path) -> Path:
         """The target's authored SCOPE definition (``scope-config.json``):
-        ``target``, ``port_files``, ``out_of_scope``. Input to ``analyze
-        scope``, which compiles it into the sibling ``scope.json`` — kept a
-        separate file so a regen of that computed output can never clobber it."""
+        ``target``, ``port_files``, ``out_of_scope``. Input to the scope
+        composer, which derives the sibling ``scope.json`` — a separate file so
+        a recompute of that derived output can never clobber it."""
         return self.target_dir(target) / "scope-config.json"
 
     def scope(self, target: Path) -> Path:
+        """The derived port set + wrap closure — a fingerprinted cache
+        (:mod:`crustify.cache`)."""
         return self.target_dir(target) / "scope.json"
 
     def deps_dag(self, target: Path) -> Path:
-        """Per-TARGET dependency DAG, beside scope.json.
+        """The layered dependency graph, beside scope.json — a fingerprinted
+        cache (:mod:`crustify.cache`).
 
-        Target-tier rather than repo-tier because its edges are narrowed by
-        scope: a wrap-scope node contributes only its signature, so the graph
-        — and therefore the layering that schedules wrap/port — differs per
-        target. The analysis tree it is built from stays scope-agnostic and
-        shared."""
+        Target-tier because the graph is: its edges are narrowed by scope, so a
+        wrap-scope node contributes only its signature and the layering differs
+        per target."""
         return self.target_dir(target) / "deps-dag.json"
 
     def logs(self, target: Path) -> Path:

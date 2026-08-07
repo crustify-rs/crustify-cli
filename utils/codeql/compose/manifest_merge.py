@@ -1,44 +1,8 @@
-"""Union-by-key merge with field-level additions for repo-root manifests.
+"""Union-by-key merge for composed records.
 
-Per-source-file manifests at `<repo_root>/.crustify/analysis/<dir>/<stem>/`
-accumulate entries across target invocations: each target's composer
-run only reaches a slice of each manifest dir, and the union of those
-slices grows over time as new targets are introduced.
-
-Across-target evolution is handled by **field-level merge** rather
-than the older "existing entry wins, ignore new" semantic:
-
-  - **New keys** (entries not in the existing manifest) are appended.
-  - **Composer-owned values are refreshed** (a cheap re-run of `analyze types`/`symbols` is a
-    deterministic structural refresh): a type entry's composer-owned top-level
-    keys (`_TYPE_COMPOSER_KEYS` — ``kind`` / ``declared_in`` / ``defined_in`` /
-    ``casted`` / footprints) are overwritten from the new run, and each field's
-    composer-owned structure (``name`` / ``type`` / ``ref`` / ``array`` + the
-    *presence* of ``ptr``) is overlaid by `_merge_fields` → `_overlay_field`.
-    This is what lets a composer fix land without a full `--reset` (e.g. a
-    typedef'd function pointer that used to collapse to a bare scalar now
-    surfaces as a proper pointer field).
-  - **Agent-owned values are preserved**: on each field the ``ptr`` ownership
-    *block* contents plus the flat ``refcount`` / ``locked_by`` judgements
-    (`_FIELD_AGENT_KEYS`), and the entry-level ``lifetime`` / ``ops`` —
-    `_overlay_field` keeps the existing ``ptr`` when the field is still a
-    pointer, and the composer never emits ``lifetime`` / ``ops`` values, so the
-    add-missing rule leaves them untouched. The same holds for a **symbol**
-    entry's ``ptr_args[*].ptr`` / ``ptr_ret.ptr`` and its entry-level
-    ``lifetime`` (the symbol's lifecycle role): the composer emits all three as
-    ``null``, and ``ptr_args`` / ``ptr_ret`` / ``lifetime`` are existing keys,
-    so a re-compose never clobbers an analyzed contract.
-  - **Grow-only composer sets** are set-UNIONED rather than frozen, so a
-    record accumulates across runs (and across a wrap→port promotion, whose
-    port re-emit is strictly richer): ``fields[]`` on type entries (by field
-    name) and ``used_by`` / ``depends_on`` on symbol entries
-    (`_merge_used_by` / `_merge_depends_on`). Symbol composer keys
-    (``ptr_args`` / ``ptr_ret``) stay under the add-missing rule as before.
-  - **A full reset** (drop agent annotations too) remains the explicit
-    `--reset`, which deletes matching entries before the compose.
-
-This module is intentionally narrow — no hashing, no staleness
-detection beyond the field-level merge above.
+Folds entries that share an identity: composer-owned scalars are add-missing
+(the first wins), `fields[]` overlays per field name, and `used_by` /
+`depends_on` set-union.
 """
 from __future__ import annotations
 
@@ -345,73 +309,3 @@ def merge_entries(
     return existing, added, updated
 
 
-def merge_manifest_file(
-    path: Path,
-    new_manifest: dict[str, Any],
-    *,
-    entries_key: str,
-    key: KeyFn,
-    comment_keys: Iterable[str] = ("_comment",),
-) -> tuple[int, int, int, int]:
-    """Merge `new_manifest` into the manifest at `path`.
-
-    `entries_key` selects which top-level key holds the entry list
-    (``"symbols"`` / ``"types"``). `key` is the entry
-    identity function (use ``symbol_key`` or ``type_key``).
-    Top-level ``_comment*`` keys are taken from
-    ``new_manifest`` when present, otherwise inherited from the
-    existing file. Parent directories are created if missing.
-
-    Returns ``(existing_count, added_count, updated_count, total_count)``.
-
-    The read-merge-write is serialized against concurrent writers — other
-    composer runs AND the oracle's ``--update``/``--create`` path — by the same
-    discipline as ``query._locked_update``: an exclusive ``flock`` on the
-    manifest's PARENT DIRECTORY fd (a stable inode ``os.replace`` never moves),
-    with the existing file (re-)read only AFTER the lock is taken and the merge
-    committed by an atomic temp-file ``os.replace``. Without this a process-level
-    fan-out that lands two writers on one stem dir would lose updates or read a
-    torn file (bare ``write_text`` is neither locked nor atomic).
-    """
-    import fcntl
-    import os
-    import tempfile
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    dirfd = os.open(str(path.parent), os.O_RDONLY)
-    try:
-        fcntl.flock(dirfd, fcntl.LOCK_EX)
-        # Read INSIDE the lock so we merge against the latest committed content.
-        if path.exists():
-            existing_doc = json.loads(path.read_text())
-            existing_entries: list[Entry] = list(existing_doc.get(entries_key, []))
-        else:
-            existing_doc = {}
-            existing_entries = []
-
-        pre_existing = len(existing_entries)
-        new_entries = list(new_manifest.get(entries_key, []))
-        merged, added, updated = merge_entries(existing_entries, new_entries, key=key)
-
-        out: dict[str, Any] = {}
-        for ck in comment_keys:
-            if ck in new_manifest:
-                out[ck] = new_manifest[ck]
-            elif ck in existing_doc:
-                out[ck] = existing_doc[ck]
-        out[entries_key] = merged
-
-        blob = json.dumps(out, indent=2) + "\n"
-        tmp = tempfile.NamedTemporaryFile(
-            "w", dir=str(path.parent), delete=False)
-        try:
-            tmp.write(blob)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-        finally:
-            tmp.close()
-        os.replace(tmp.name, path)
-    finally:
-        fcntl.flock(dirfd, fcntl.LOCK_UN)
-        os.close(dirfd)
-    return pre_existing, added, updated, len(merged)

@@ -63,7 +63,7 @@ def scaffold(
     layout = Layout.discover(target)
 
     if validate:
-        _validate(layout)
+        _validate(layout, target)
         return
 
     doc = crates.load(layout)
@@ -77,7 +77,8 @@ def scaffold(
                 f"(see templates/crates.json for the schema) before scaffolding.")
         entries = _all_entries(doc)
     elif name:
-        misses = [n for n in name if not crates.lookup_all(doc, n)]
+        _require_one_home(doc, name, file)
+        misses = [n for n in name if not crates.lookup_all(doc, n, file=file)]
         if misses:
             # Split the miss two ways so the message is actionable: a name that is
             # not in scope at all is a typo / wrong target, while an in-scope name
@@ -94,7 +95,7 @@ def scaffold(
                            + ", ".join(repr(n) for n in unplaced)
                            + " — add them to the oracle, then re-run.")
             raise SystemExit("scaffold: " + "; ".join(msg))
-        entries, missing = _entries_for_names(doc, name)
+        entries, missing = _entries_for_names(doc, name, file)
         for n in missing:
             print(f"scaffold: {n}: not placed", file=sys.stderr)
         if missing and not entries:
@@ -127,11 +128,11 @@ def _in_scope_names(layout, target: Path) -> set[str]:
     """Every in-scope symbol/type name the scaffolder is allowed to place —
     the authoritative ``scope.json`` universe (port ∪ wrap). Functions, globals
     and macros key on ``name``; types key on ``name`` (port) or ``type`` (wrap).
-    Empty set if ``scope.json`` is absent/unreadable (callers gate on emptiness)."""
-    scope_path = layout.scope(target)
+    Empty set when scope cannot be composed (callers gate on emptiness)."""
+    from crustify import scope as _scope_mod
     try:
-        doc = json.loads(scope_path.read_text())
-    except (OSError, ValueError):
+        doc = _scope_mod.build(layout, target, stage="scaffold")
+    except SystemExit:
         return set()
     names: set[str] = set()
     for section in (doc.get("port") or {}), (doc.get("wrap") or {}):
@@ -147,11 +148,12 @@ def _scope_map(layout, target: Path) -> dict[str, str]:
     """``name -> "port" | "wrap"`` from scope.json — the anchor-verb selector: a
     wrap-scope item anchors as ``// Wraps:``, a port-scope one as ``// Replaces:``.
     Types key on ``name`` (port) / ``type`` (wrap); functions/globals on ``name``.
-    Port is applied second so it wins on the (rare) overlap. Empty when scope.json
-    is absent -> everything falls back to ``Replaces``."""
+    Port is applied second so it wins on the (rare) overlap. Empty when scope
+    cannot be composed -> everything falls back to ``Replaces``."""
+    from crustify import scope as _scope_mod
     try:
-        doc = json.loads(layout.scope(target).read_text())
-    except (OSError, ValueError):
+        doc = _scope_mod.build(layout, target, stage="scaffold")
+    except SystemExit:
         return {}
     out: dict[str, str] = {}
     for sec in ("wrap", "port"):   # port second -> overrides on overlap
@@ -181,7 +183,10 @@ def _port_touched(layout, target) -> dict[str, set] | None:
     # raise: None means "anchor every field", so swallowing an error here would
     # quietly restore the over-anchoring this function exists to prevent, and
     # look like it worked.
-    if not layout.scope(target).exists():
+    from crustify import scope as _scope_mod
+    try:
+        _scope_mod.build(layout, target, stage="scaffold")
+    except SystemExit:
         return None
     idx = scope_touched_index(layout, target, "port")
     return {tag: {f for s in by_file.values() for f in s}
@@ -211,16 +216,12 @@ def _field_map(layout, target=None) -> dict[str, list[str]]:
     type is translated wholesale, so its own ported code touches its fields.
     """
     out: dict[str, list[str]] = {}
-    tree = layout.analysis
-    if not tree.exists():
+    if target is None:
         return out
-    touched = _port_touched(layout, target) if target is not None else None
-    for p in tree.rglob("types.json"):
-        try:
-            doc = json.loads(p.read_text())
-        except (OSError, ValueError):
-            continue
-        for e in doc.get("types", []):
+    from crustify import manifests as _manifests
+    touched = _port_touched(layout, target)
+    if True:
+        for e in _manifests.entries(layout, target, "types", stage="scaffold"):
             tag = e.get("name") or e.get("type")
             if not tag:
                 continue
@@ -233,16 +234,20 @@ def _field_map(layout, target=None) -> dict[str, list[str]]:
     return out
 
 
-def _validate(layout) -> None:
+def _validate(layout, target=None) -> None:
     from crustify import crates
     doc = crates.load(layout)
     errs = crates.validate(doc)
-    # `depends_on` vs placement + the tree's type references. Needs the analysis
-    # tree, so it only runs once that exists; bindgen derives the -sys blocklist
-    # and the `pub use <dep>_sys::*` imports from `depends_on` alone, and a
-    # missing edge there is silent until `cargo check` much later.
-    if layout.analysis.exists():
-        errs += crates.validate_depends_on(doc, layout.analysis)
+    # `depends_on` vs placement + the composed records' by-value type
+    # references. Needs a target (records are composed per target, since scope
+    # narrows them), so `--validate` without one checks only the pure
+    # crates.json properties. bindgen derives the -sys blocklist and the
+    # `pub use <dep>_sys::*` imports from `depends_on` alone, and a missing
+    # edge there is silent until `cargo check` much later.
+    if target is not None:
+        from crustify import manifests as _manifests
+        errs += crates.validate_depends_on(
+            doc, _manifests.entries(layout, target, "types", stage="scaffold"))
     if errs:
         for e in errs:
             print(f"scaffold: {e}", file=sys.stderr)
@@ -267,14 +272,48 @@ def _all_entries(doc: dict) -> list[dict]:
     return out
 
 
-def _entries_for_names(doc: dict, names: list[str]) -> tuple[list[dict], list[str]]:
-    """Every home of every name. A name with several homes is a real placement
-    fact (one per ``tu``, see :func:`crates.lookup_all`), so all of them ride —
-    returning only the first silently hides a module the caller has to edit."""
+def _require_one_home(doc: dict, names: list[str], file: str | None) -> None:
+    """Refuse a ``--name`` with several homes unless ``--file`` picks one.
+
+    A name with several homes is a real placement fact (one per ``tu``, see
+    :func:`crates.lookup_all`) — but they are DIFFERENT entities, not one entity
+    in two places: `ossl_record_layer_st` is the TLS record layer in
+    `recmethod_local.h` and a private QUIC struct in `quic_tls.c`. Scaffolding
+    both because the caller typed one tag lays anchors in a module they never
+    meant to touch. `--file` is the qualifier, matching either the ``tu`` or a
+    header (same rule as :func:`crates.lookup_all`)."""
+    from crustify import crates
+    bad = []
+    for n in dict.fromkeys(names):
+        hits = crates.lookup_all(doc, n, file=file)
+        if len(hits) > 1:
+            bad.append((n, hits))
+    if not bad:
+        return
+    lines = []
+    for n, hits in bad:
+        lines.append(f"  - {n}  ({len(hits)} homes)")
+        for h in hits:
+            # A header-only `.rs` has no `tu`; `lookup_all` matches headers too,
+            # so quote one of those instead of printing an unusable placeholder.
+            qual = h.get("tu") or (h.get("headers") or [None])[0]
+            lines.append(f"      --file {qual or '?'}   → {h['crate']}/{h['rs']}")
+    narrowed = " (already narrowed by --file)" if file else ""
+    raise SystemExit(
+        f"scaffold: {len(bad)} name(s) are placed in more than one module"
+        f"{narrowed} — pass --file to pick one:\n" + "\n".join(lines))
+
+
+def _entries_for_names(doc: dict, names: list[str],
+                       file: str | None = None) -> tuple[list[dict], list[str]]:
+    """The home of every name, narrowed by ``file`` when given. Ambiguity is
+    already refused by :func:`_require_one_home`, so exactly one home rides per
+    name; the dedup on ``(crate, rs)`` stays because two names in one call may
+    share a module."""
     from crustify import crates
     entries, missing, seen = [], [], set()
     for n in names:
-        hits = crates.lookup_all(doc, n)
+        hits = crates.lookup_all(doc, n, file=file)
         if not hits:
             missing.append(n)
             continue

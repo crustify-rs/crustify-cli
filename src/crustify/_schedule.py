@@ -309,25 +309,23 @@ def bundle_deps(
 ) -> tuple[list[str], list[SymKey]]:
     """First-layer deps of the whole bundle: the type's field-type deps ∪ every
     member's deps, minus members of the unit itself."""
-    inside = {m.key for m in unit.members} | {(t, None) for t in []}
-    dt: set[str] = set()
+    inside = {m.key for m in unit.members}
+    dt: set[SymKey] = set()
     ds: set[SymKey] = set()
     for m in unit.members:
         dt.update(m.dep_types)
         ds.update(m.dep_syms)
     ds = {k for k in ds if k not in inside}
-    return sorted(dt), sorted(ds, key=lambda k: (k[0], k[1] or ""))
+    bykey = lambda k: (k[0], k[1] or "")
+    return sorted(dt, key=bykey), sorted(ds, key=bykey)
 
 
-def _scope_label(key: SymKey | str, by_key, in_scope) -> str:
-    """`(wrap)` / `(port)` / `(ext)` tag for a dep, for the prompt."""
-    if isinstance(key, str):
-        cands = [n for k, n in by_key.items() if k[0] == key and n.node_kind == "type"]
-    else:
-        cands = [by_key[key]] if key in by_key else []
-    if not cands:
-        return "ext"
-    return "wrap" if in_scope(cands[0]) else "port"
+def _scope_label(key: SymKey, by_key, in_scope) -> str:
+    """`(wrap)` / `(port)` / `(ext)` tag for a dep, for the prompt. Both sides
+    are `(name, defined_in)` now, so this is a plain lookup — no name-scan, and
+    no chance of labelling one TU's `version_info` from another's node."""
+    n = by_key.get(key)
+    return "ext" if n is None else ("wrap" if in_scope(n) else "port")
 
 
 def show_plan(
@@ -342,25 +340,27 @@ def show_plan(
     for u in units:
         print(f"  • {u.label()}")
 
-    dt: set[str] = set()
+    dt: set[SymKey] = set()
     ds: set[SymKey] = set()
     for u in units:
         a, b = bundle_deps(u, by_key)
         dt.update(a)
         ds.update(b)
-    inside = {m.id for u in units for m in u.members}
-    type_deps = sorted(t for t in dt if t not in inside)
-    sym_deps = [(n, df) for n, df in sorted(ds) if n not in inside]
+    inside = {m.key for u in units for m in u.members}
+    bykey = lambda k: (k[0], k[1] or "")
+    type_deps = sorted((k for k in dt if k not in inside), key=bykey)
+    sym_deps = sorted((k for k in ds if k not in inside), key=bykey)
 
     if type_deps:
         print("\nFirst-layer TYPE deps (emit these first, in your order):")
-        for t in type_deps:
-            print(f"  - {t} ({_scope_label(t, by_key, in_scope)})")
+        for t, df in type_deps:
+            where = f" [{df}]" if df else ""
+            print(f"  - {t}{where} ({_scope_label((t, df), by_key, in_scope)})")
     if sym_deps:
         by_scope: dict[str, int] = {}
-        for n, df in sym_deps:
-            by_scope[_scope_label((n, df), by_key, in_scope)] = \
-                by_scope.get(_scope_label((n, df), by_key, in_scope), 0) + 1
+        for k in sym_deps:
+            lbl = _scope_label(k, by_key, in_scope)
+            by_scope[lbl] = by_scope.get(lbl, 0) + 1
         tally = ", ".join(f"{v} {k}" for k, v in sorted(by_scope.items()))
         print(f"\n+ {len(sym_deps)} symbol dep(s) ({tally}) — the C/FFI bridge "
               f"covers any not-yet-emitted.")
@@ -646,7 +646,7 @@ def _isolated_wave(
 def schedule(
     *,
     dag: dict,
-    analysis_root: Path,
+    entry_pair: tuple[list, list],
     names: list[str],
     stage: Stage,
     parallelize: bool = False,
@@ -664,7 +664,7 @@ def schedule(
         raise SystemExit("schedule: nothing selected in scope.")
 
     bare_gate(nodes)
-    type_meta = load_type_meta(analysis_root)
+    type_meta = load_type_meta(entry_pair)
     # Type selection uses `in_scope`; op-facading uses `op_in_scope` (a type may
     # be selected scope-blind yet only own its same-stage ops).
     units = form_units(nodes, by_key, stage.op_in_scope or stage.in_scope, type_meta)

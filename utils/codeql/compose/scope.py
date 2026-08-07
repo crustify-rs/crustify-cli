@@ -211,7 +211,21 @@ def classify_type(row: dict, by_name: dict[str, dict], port_paths: set[str]) -> 
 
 # ---------------------------------------------------------------- I/O helpers
 
-def load_port_paths(scope_json: Path) -> set[str]:
+def _doc(scope_src) -> dict:
+    """Accept the scope manifest either as a `Path` to a `scope.json` or as the
+    composed dict itself.
+
+    The dict form is the live one: `crustify.scope.build` composes the manifest
+    in memory, so nothing has to have written it out first — and a `scope.json`
+    on disk can no longer be silently stale against the `scope-config.json` a
+    human just edited. The `Path` form stays for the standalone composer CLIs
+    and the `--dump` snapshot."""
+    if isinstance(scope_src, dict):
+        return scope_src
+    return json.loads(Path(scope_src).read_text())
+
+
+def load_port_paths(scope_json) -> set[str]:
     """Read `<target>/.crustify/scope.json` and return its port-scope
     file-path set.
 
@@ -225,12 +239,11 @@ def load_port_paths(scope_json: Path) -> set[str]:
 
     Every other file in the analysis tree is implicitly wrap-scope.
     """
-    data = json.loads(scope_json.read_text())
-    port = data.get("port", {})
+    port = _doc(scope_json).get("port", {})
     return set(port.get("files", []))
 
 
-def load_port_entities(scope_json: Path, kind: str) -> set[tuple[str, str]]:
+def load_port_entities(scope_json, kind: str) -> set[tuple[str, str]]:
     """Return the v2 port-scope entity set for `kind`
     (``"functions"`` | ``"globals"`` | ``"macros"`` | ``"types"``) as a
     set of ``(name, defined_in)`` keys.
@@ -241,18 +254,16 @@ def load_port_entities(scope_json: Path, kind: str) -> set[tuple[str, str]]:
     carve-out) and wrote the port subset here, so downstream composers
     test ``(name, defined_in) in load_port_entities(...)``.
     """
-    data = json.loads(scope_json.read_text())
-    port = data.get("port", {})
+    port = _doc(scope_json).get("port", {})
     return {(e["name"], e.get("defined_in") or "") for e in port.get(kind, [])}
 
 
-def load_wrap_entities(scope_json: Path, kind: str) -> set[tuple[str, str]]:
+def load_wrap_entities(scope_json, kind: str) -> set[tuple[str, str]]:
     """Wrap-scope entity set for `kind` as ``(name, def_file)`` keys — the
     closure :func:`compose_wrap` derived. Mirror of :func:`load_port_entities`
     for the ``wrap`` section, whose entries key the tag on ``type`` (types) /
     ``name`` (syms) and the file on ``defined_in``."""
-    data = json.loads(scope_json.read_text())
-    wrap = data.get("wrap", {})
+    wrap = _doc(scope_json).get("wrap", {})
     tagk = "type" if kind == "types" else "name"
     return {(e.get(tagk), e.get("defined_in") or "") for e in wrap.get(kind, [])}
 
@@ -274,7 +285,7 @@ def origin_key(name: str, defined_in: str | None, declared_in) -> tuple[str, str
 
 
 def scope_membership(
-    scope_json: Path, which: str, *,
+    scope_json, which: str, *,
     kinds: tuple[str, ...] = _SCOPE_KINDS,
 ) -> set[tuple[str, str]]:
     """Unified scope-membership key set for ``which`` (``"port"`` | ``"wrap"``):
@@ -288,7 +299,7 @@ def scope_membership(
     a symbol query the three sym buckets). Every entry is a real C entity: the
     scope sections are anchored on the CodeQL T1 tables, so there is nothing
     synthesized to filter out."""
-    sec = json.loads(scope_json.read_text()).get(which, {})
+    sec = _doc(scope_json).get(which, {})
     keys: set[tuple[str, str]] = set()
     for kind in kinds:
         for e in sec.get(kind, []):
@@ -330,6 +341,31 @@ def _empty_lifecycle() -> dict:
             "fields_disposed_by": []}
 
 
+def _entry_pair(src) -> tuple[list, list]:
+    """Accept either the composed ``(type_entries, sym_entries)`` pair or a
+    legacy analysis-root path, and return the pair.
+
+    The pair is the live form: records are composed and store-overlaid by
+    :mod:`crustify.manifests`, with no per-stem tree to walk. The path form
+    stays for the standalone composer CLIs, which run outside the orchestrator
+    and still take a directory."""
+    if isinstance(src, tuple):
+        return src
+    root = Path(src)
+    types, syms = [], []
+    for tj in sorted(root.rglob("types.json")):
+        try:
+            types += json.loads(tj.read_text()).get("types") or []
+        except (OSError, ValueError):
+            pass
+    for sj in sorted(root.rglob("syms.json")):
+        try:
+            syms += json.loads(sj.read_text()).get("symbols") or []
+        except (OSError, ValueError):
+            pass
+    return types, syms
+
+
 def build_lifecycle_index(analysis_root) -> dict[str, dict]:
     """Reverse-derive every type's lifecycle roles from the SYMS tree.
 
@@ -347,55 +383,45 @@ def build_lifecycle_index(analysis_root) -> dict[str, dict]:
     types tree's ``typedef`` aliases to the struct tag (``ssl_st``) so both
     spellings land on one entry. Types with no role are absent, not empty.
     """
-    root = Path(analysis_root)
+    type_entries, sym_entries = _entry_pair(analysis_root)
 
     # alias -> canonical tag. `name` is the canonical spelling; every `typedef`
     # alias resolves to it. setdefault, not assignment: a canonical name always
     # wins over an alias of the same string.
     canon: dict[str, str] = {}
-    for tj in sorted(root.rglob("types.json")):
-        try:
-            doc = json.loads(tj.read_text())
-        except (OSError, ValueError):
+    for t in type_entries:
+        tag = entry_tag(t)
+        if not tag:
             continue
-        for t in doc.get("types") or []:
-            tag = entry_tag(t)
-            if not tag:
-                continue
-            canon[tag] = tag
-            td = t.get("typedef")
-            for alias in (td if isinstance(td, list) else [td] if td else []):
-                if alias:
-                    canon.setdefault(alias, tag)
+        canon[tag] = tag
+        td = t.get("typedef")
+        for alias in (td if isinstance(td, list) else [td] if td else []):
+            if alias:
+                canon.setdefault(alias, tag)
 
     out: dict[str, dict] = {}
-    for sj in sorted(root.rglob("syms.json")):
-        try:
-            doc = json.loads(sj.read_text())
-        except (OSError, ValueError):
+    for s in sym_entries:
+        lf = s.get("lifetime")
+        if not isinstance(lf, dict):
             continue
-        for s in doc.get("symbols") or []:
-            lf = s.get("lifetime")
-            if not isinstance(lf, dict):
-                continue
-            arg = next((a for a in s.get("ptr_args") or []
-                        if a.get("name") == lf.get("for")), None)
-            fn = s.get("name")
-            if arg is None or not fn:
-                continue
-            tag = canon.get(arg.get("type")) or arg.get("type")
-            if not tag:
-                continue
-            rec = out.setdefault(tag, _empty_lifecycle())
-            if lf.get("is_dropper") is True:
-                rec["dropped_by"].append(fn)
-            if lf.get("is_disposer") is True:
-                rec["fields_disposed_by"].append(fn)
-            cl = lf.get("is_cloner")
-            if isinstance(cl, dict):
-                for mode in ("deep", "upref"):
-                    if cl.get(mode):
-                        rec["cloned_by"][mode].append(fn)
+        arg = next((a for a in s.get("ptr_args") or []
+                    if a.get("name") == lf.get("for")), None)
+        fn = s.get("name")
+        if arg is None or not fn:
+            continue
+        tag = canon.get(arg.get("type")) or arg.get("type")
+        if not tag:
+            continue
+        rec = out.setdefault(tag, _empty_lifecycle())
+        if lf.get("is_dropper") is True:
+            rec["dropped_by"].append(fn)
+        if lf.get("is_disposer") is True:
+            rec["fields_disposed_by"].append(fn)
+        cl = lf.get("is_cloner")
+        if isinstance(cl, dict):
+            for mode in ("deep", "upref"):
+                if cl.get(mode):
+                    rec["cloned_by"][mode].append(fn)
 
     def _dedup(xs):
         seen: set[str] = set()
@@ -483,7 +509,7 @@ def type_method_fns(analysis_root: Path, lifecycle=None) -> set[str]:
     return fns
 
 
-def in_scope_pred(scope_json: Path, which: str, **kw):
+def in_scope_pred(scope_json, which: str, **kw):
     """A predicate ``pred(node) -> bool`` over a dag Node, backed by
     :func:`scope_membership`. ``Node.defined_in`` is already the node's
     ``origin()`` (defined_in or canonical decl), so it keys directly. This is
