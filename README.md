@@ -1,6 +1,6 @@
 # Crustify
 
-Crustify is an end-to-end harness that leverages LLMs to automates the 
+Crustify is an end-to-end harness that leverages LLMs to automate the 
 migration of production C/C++ codebases to Rust, at scale. 
 
 Given a codebase, Crustify maps its
