@@ -52,20 +52,6 @@
 import cpp
 import identity
 
-string structDefFileOf(Field f) {
-  if exists(f.getDeclaringType().(Struct).getDefinition())
-  then result = pathOf(f.getDeclaringType().(Struct).getDefinition().getFile())
-  else if exists(f.getDeclaringType().(Union).getDefinition())
-  then result = pathOf(f.getDeclaringType().(Union).getDefinition().getFile())
-  else result = ""
-}
-
-string typeDefFileOf(UserType t) {
-  if exists(t.getDefinition())
-  then result = pathOf(t.getDefinition().getFile())
-  else result = ""
-}
-
 string typeKindOf(UserType t) {
   if t instanceof Struct then result = "struct"
   else if t instanceof Union then result = "union"
@@ -97,55 +83,6 @@ predicate reachableUserType(Type outer, UserType t) {
   reachableUserType(outer.(RoutineType).getAParameterType(), t)
 }
 
-/**
- * The aggregate a field EMBEDS by value — arrays and cv-qualifiers unwrapped,
- * pointers NOT (a pointer to an anonymous struct does not contain it).
- * Mirrors `entities/fields.ql`.
- */
-Type embeddedTypeOf(Type t) {
-  if t instanceof ArrayType
-  then result = embeddedTypeOf(t.(ArrayType).getBaseType())
-  else
-    if t instanceof SpecifiedType
-    then result = embeddedTypeOf(t.(SpecifiedType).getBaseType())
-    else result = t
-}
-
-/** The ANONYMOUS struct/union a field embeds by value, if any. */
-UserType anonMemberAggregate(Field f) {
-  result = embeddedTypeOf(f.getType()) and
-  result.getName().prefix(1) = "(" and
-  (result instanceof Struct or result instanceof Union)
-}
-
-/**
- * `f` is reachable from `root` through ANONYMOUS embedded members; `path` is
- * the dotted access path. Mirrors `entities/fields.ql` so the two agree on
- * which fields belong to which named struct.
- */
-predicate anonEmbeddedField(UserType root, Field f, string path) {
-  exists(Field outer |
-    outer.getDeclaringType() = root and
-    f.getDeclaringType() = anonMemberAggregate(outer) and
-    path = outer.getName() + "." + f.getName()
-  )
-  or
-  exists(Field outer, string sub |
-    outer.getDeclaringType() = root and
-    anonEmbeddedField(anonMemberAggregate(outer), f, sub) and
-    path = outer.getName() + "." + sub
-  )
-}
-
-string aggDefFileOf(UserType u) {
-  if exists(u.(Struct).getDefinition())
-  then result = pathOf(u.(Struct).getDefinition().getFile())
-  else
-    if exists(u.(Union).getDefinition())
-    then result = pathOf(u.(Union).getDefinition().getFile())
-    else result = ""
-}
-
 from Field f, UserType t, string struct_name, string struct_def_file, string field_name
 where
   reachableUserType(f.getType(), t) and
@@ -153,15 +90,19 @@ where
   typeKindOf(t) != "other" and
   (
     // Field of a struct/union that HAS an identity of its own -- its tag, or
-    // for shape A (`typedef struct {…} T;`) the naming typedef, resolved
-    // SIDEWAYS through the alias chain by `canonicalTypeName`. Without that
-    // resolution an anonymous typedef'd struct matched neither this disjunct
-    // nor the embedded one below, and every one of its field-type edges was
-    // dropped: `CLIENTHELLO_MSG` produced ZERO rows while the manifest knew it
-    // reached `PACKET` and `raw_extension_st`.
-    not isAnonNamed(canonicalTypeName(f.getDeclaringType())) and
-    struct_name = canonicalTypeName(f.getDeclaringType()) and
-    struct_def_file = structDefFileOf(f) and
+    // for shape A (`typedef struct {…} T;`) the naming typedef. `ownerOf` is
+    // the SAME resolver `entities/fields.ql` uses, so the T1 field list and
+    // this T2 edge table agree on which entity declares a field.
+    //
+    // This disjunct previously hand-rolled the resolution through
+    // `canonicalTypeName(f.getDeclaringType())` + a local `structDefFileOf`.
+    // It resolved no shape-A owner at all: 213 of the 214 structs with a
+    // non-scalar field but ZERO rows here were shape A, against 0 of the 373
+    // that had rows -- 594 of 1585 non-scalar field edges missing. The type
+    // DAG reads this table, so `git_cache` (typedef struct {…} git_cache;)
+    // landed at layer 0 with no deps and `git_repository`'s closure lost 16
+    // of its 45 types.
+    ownerOf(f.getDeclaringType(), struct_name, struct_def_file) and
     field_name = f.getName()
     or
     // Field of an ANONYMOUS aggregate embedded by value: its type is a
@@ -169,10 +110,8 @@ where
     // member path (`ext.hostname`). Without this the type edge was attributed
     // to `(unnamed …)` and dropped.
     exists(UserType root |
-      not isAnonNamed(canonicalTypeName(root)) and
-      anonEmbeddedField(root, f, field_name) and
-      struct_name = canonicalTypeName(root) and
-      struct_def_file = aggDefFileOf(root)
+      ownerOf(root, struct_name, struct_def_file) and
+      anonEmbeddedField(root, f, field_name)
     )
   )
 select struct_name,
@@ -180,4 +119,4 @@ select struct_name,
        field_name,
        canonicalTypeName(t) as type_name,
        typeKindOf(t) as type_kind,
-       typeDefFileOf(t) as type_def_file
+       defFileOf(t) as type_def_file

@@ -117,3 +117,117 @@ string canonicalNameOfType(Type t) {
   then result = canonicalTypeName(t.(UserType))
   else result = t.getName()
 }
+
+/*
+ * ---------------------------------------------------------------------------
+ * Aggregate OWNERSHIP identity: which named entity a field belongs to.
+ *
+ * `canonicalTypeName` above answers "what is this type called". These answer
+ * "which entity declares this field, and where is it defined" — the pair every
+ * field-keyed table joins on. They lived in `entities/fields.ql` while
+ * `edges/field_type_uses.ql` hand-rolled its own struct-side resolution, and
+ * the two drifted: `fields.ql` emitted every shape-A (`typedef struct {…} T;`)
+ * field, `field_type_uses.ql` emitted NONE of them — 213 of 214 structs with
+ * no field-type edge at all were shape A, against 0 of the 373 that had them.
+ * The type DAG reads the T2 table, so every one of those field edges was
+ * missing from the graph. One definition, imported by both.
+ * ---------------------------------------------------------------------------
+ */
+
+/** The typedef that gives an otherwise-anonymous aggregate its name. */
+predicate namingTypedef(UserType anon, TypedefType td) {
+  isAnonymous(anon) and
+  (anon instanceof Struct or anon instanceof Union) and
+  unwrappedUserType(td.getBaseType(), anon)
+}
+
+/** Definition-site path of an aggregate, or "" when only declared. */
+string anonDefFileOf(UserType anon) {
+  if exists(anon.(Struct).getDefinition())
+  then result = pathOf(anon.(Struct).getDefinition().getFile())
+  else
+    if exists(anon.(Union).getDefinition())
+    then result = pathOf(anon.(Union).getDefinition().getFile())
+    else result = ""
+}
+
+/** Strip arrays and cv-qualifiers, but NOT pointers: a pointer to an
+ * anonymous struct does not embed it. */
+Type embeddedTypeOf(Type t) {
+  if t instanceof ArrayType
+  then result = embeddedTypeOf(t.(ArrayType).getBaseType())
+  else
+    if t instanceof SpecifiedType
+    then result = embeddedTypeOf(t.(SpecifiedType).getBaseType())
+    else result = t
+}
+
+/** The ANONYMOUS struct/union a field embeds by value, if any. */
+UserType anonMemberAggregate(Field f) {
+  result = embeddedTypeOf(f.getType()) and
+  isAnonymous(result) and
+  (result instanceof Struct or result instanceof Union)
+}
+
+/**
+ * `f` is reachable from `root` through ANONYMOUS embedded members; `path` is
+ * the dotted access path (`ext.hostname`). Recursion stops at the first NAMED
+ * aggregate — a member of named type is its own entity with its own edge.
+ */
+predicate anonEmbeddedField(UserType root, Field f, string path) {
+  exists(Field outer |
+    outer.getDeclaringType() = root and
+    f.getDeclaringType() = anonMemberAggregate(outer) and
+    path = outer.getName() + "." + f.getName()
+  )
+  or
+  exists(Field outer, string sub |
+    outer.getDeclaringType() = root and
+    anonEmbeddedField(anonMemberAggregate(outer), f, sub) and
+    path = outer.getName() + "." + sub
+  )
+}
+
+/**
+ * The manifest identity of an aggregate: its own tag when named, else the
+ * typedef that names it. Single definition shared by every field-keyed query
+ * so their struct sides cannot drift.
+ */
+predicate ownerOf(UserType t, string name, string file) {
+  not isAnonymous(t) and
+  name = t.getName() and
+  file = anonDefFileOf(t)
+  or
+  exists(TypedefType td |
+    namingTypedef(t, td) and
+    not isAnonNamed(td.getName()) and
+    name = td.getName() and
+    file = anonDefFileOf(t)
+  )
+}
+
+/** The anonymous aggregate a typedef names (`typedef struct {…} T;`). */
+UserType anonBaseOf(TypedefType td) {
+  unwrappedUserType(td.getBaseType(), result) and
+  isAnonymous(result)
+}
+
+/**
+ * The DEFINITION-site path of a type, the value every `*_def_file` column
+ * carries. A typedef has no `getDefinition()` of its own, so shape A falls
+ * through to the inline aggregate it names — that body site IS the type's
+ * definition site.
+ *
+ * Shared because a `*_def_file` is half of every entity key: `entities/types.ql`
+ * had this fallback and `edges/field_type_uses.ql`'s own `typeDefFileOf` did
+ * not, so 1,133 field edges pointed at `(name, "")` while the node they meant
+ * was keyed `(name, <path>)` — the target did not resolve and the edge died.
+ */
+string defFileOf(UserType t) {
+  if exists(t.getDefinition())
+  then result = pathOf(t.getDefinition().getFile())
+  else
+    if exists(anonBaseOf(t).getDefinition())
+    then result = pathOf(anonBaseOf(t).getDefinition().getFile())
+    else result = ""
+}

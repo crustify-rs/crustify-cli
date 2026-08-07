@@ -105,17 +105,7 @@
  * them by `def_file = ""`.
  */
 import cpp
-
-/**
- * Repository-relative path, falling back to absolute for files outside the
- * source root (system / external headers). Out-of-root types thus get a
- * path instead of "" and are captured under a `system/` manifest dir.
- */
-string pathOf(File f) {
-  if exists(f.getRelativePath())
-  then result = f.getRelativePath()
-  else result = f.getAbsolutePath()
-}
+import identity
 
 string declFilesOf(UserType t) {
   result = concat(File h |
@@ -125,50 +115,12 @@ string declFilesOf(UserType t) {
   )
 }
 
-/**
- * The inline anonymous aggregate (struct/union/enum) a typedef directly
- * names, if any — the `struct { … }` in `typedef struct { … } git_cache;`.
- * The typedef IS that aggregate's only identity, so the aggregate's body
- * site is the typedef's definition site. (`unwrappedUserType` is defined
- * below; QL predicate order is irrelevant.)
- */
-UserType anonBaseOf(TypedefType td) {
-  unwrappedUserType(td.getBaseType(), result) and
-  result.getName().prefix(1) = "("
-}
-
-string defFileOf(UserType t) {
-  if exists(t.getDefinition())
-  then result = pathOf(t.getDefinition().getFile())
-  else if exists(anonBaseOf(t).getDefinition())
-  // Anonymous-aggregate typedef (`typedef struct { … } Name;`): the typedef
-  // carries no `getDefinition()` of its own, but the inline aggregate it
-  // names does — that body site IS this type's definition site (delivers the
-  // "typedef-declaration site for typedef" the def_file doc promises).
-  then result = pathOf(anonBaseOf(t).getDefinition().getFile())
-  else result = ""
-}
-
 string kindOf(UserType t) {
   if t instanceof Struct then result = "struct"
   else if t instanceof Union then result = "union"
   else if t instanceof Enum then result = "enum"
   else if t instanceof TypedefType then result = "typedef"
   else result = "other"
-}
-
-/**
- * Unwrap a single chain of pointers, arrays, and cv-qualifiers from
- * `t` and bind `b` to the first non-derived `UserType` reached.
- * Does NOT follow typedef chains — typedefs are surfaced as `b`
- * directly, and the consumer walks the chain by cross-indexing this
- * same manifest. Yields no row if the chain terminates at a
- * primitive type before reaching a UserType.
- */
-predicate unwrappedUserType(Type t, UserType b) {
-  b = t
-  or
-  unwrappedUserType(t.(DerivedType).getBaseType(), b)
 }
 
 /**
