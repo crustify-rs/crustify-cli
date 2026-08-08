@@ -32,6 +32,16 @@ _PROMPT_BY_KIND: dict[str, str] = {
     "struct":           "types.md",
     "union":            "types.md",
     "enum":             "types.md",
+    # A type-minting macro (`generates` non-empty) — the GENERATOR of a template
+    # family. Its deliverable is a struct, so it takes the type recipe: the
+    # generic its instances alias, with the `CCell` impl, the layout gate and
+    # the field accessors that only `types.md` describes.
+    #
+    # Every macro that reaches this table is a generator: `wrap._is_macro`
+    # excludes all others from the selection, so `subkind == "macro"` here
+    # already means "minting". `_schedule.form_units` is what puts one in a type
+    # batch; this entry is the other half of that routing.
+    "macro":            "types.md",
 }
 # Type kinds with no wrapper codegen yet. Callbacks are NOT here: they route as
 # sym-units (see _schedule.form_units) to symbols.md §3.

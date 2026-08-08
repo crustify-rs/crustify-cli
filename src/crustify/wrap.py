@@ -517,13 +517,17 @@ def wrap_types(
     # is true of a constant or a function-like macro -- there is nothing to
     # facade. A generator is different: its expansion is a whole aggregate, so
     # the family wants one generic Rust type that its instances alias, and that
-    # generic is code this stage has to write. `generates` is non-empty only for
-    # a macro with >= 2 minted types (`compose.macro_families`), so a one-off
-    # definition stays excluded.
+    # generic is code this stage has to write. `generates` carries EVERY minting
+    # macro (`compose.macro_families` sets no count threshold: a family of one
+    # here can be a family of three under another cmake flag), so the judgement
+    # of whether a family earns a generic is the wrapper agent's, not this gate's.
+    #
+    # `_schedule.is_generator` is the same test from the other side — it routes
+    # these to `types.md`. Shared so the two cannot disagree about a node.
     def _is_macro(n) -> bool:
-        return (n.node_kind == "symbol"
-                and (n.subkind or "").startswith("macro")
-                and not getattr(n, "generates", None))
+        return ((n.subkind or "").startswith("macro")
+                and n.node_kind == "symbol"
+                and not S.is_generator(n))
     in_scope = lambda n: base_in_scope(n) and not _is_macro(n)
     skipped, kept = [], []
     for nm in sel_names:

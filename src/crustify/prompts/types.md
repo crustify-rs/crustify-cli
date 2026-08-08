@@ -85,8 +85,10 @@ that's the case, rebuild / reconfigure the target in your worktree to obtain the
   following the crate's guidelines and principles.
   
 **Polymorphism.** Use the `crustify-oracle` skill to find the set of types that this type
-  is cast `to` and that others cast `into` this type. Read its topology to decide whether
-  it can be represented by a generic paremtrized newtype:
+  is cast `to` and that others cast `into` this type. Check whether the type is a synthetic
+  type generator, i.e. a macro whose expansion emits type definitions, which may not be casted
+  to / from its instances. Read its topology to decide whether it can be represented by a
+  generic paremtrized newtype:
 
   - **Generic parametrized newtype**: if the type is the convergence point of a larger,
   homogeneous family, i.e. multiple same-shaped sibling types type-erase to and from you,

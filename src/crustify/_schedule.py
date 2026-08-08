@@ -96,6 +96,24 @@ def bare_gate(nodes: list[Node]) -> None:
 
 # --------------------------------------------------------------------- units
 
+def is_generator(n) -> bool:
+    """``n`` is a type-minting macro — a macro whose expansion is a whole
+    aggregate, so it stands for a FAMILY of same-shaped types.
+
+    The one predicate two stages share: :mod:`crustify.wrap` uses it to exempt
+    generators from "macros are bindgen's", and :func:`form_units` to route them
+    to the type wrapper. Keeping one definition is the point — the two were
+    written apart and are the same question ("does this macro owe Rust a type?"),
+    so they must not be able to disagree about a given node.
+
+    ``generates`` is populated by ``compose.macro_families`` for EVERY minting
+    macro, one instance or twenty: whether a family is a template is decided by
+    conditional compilation, not by what this build happened to extract."""
+    return (n.node_kind == "symbol"
+            and (n.subkind or "").startswith("macro")
+            and bool(getattr(n, "generates", None)))
+
+
 @dataclass
 class Unit:
     kind: str                  # "type" | "sym"
@@ -136,11 +154,22 @@ def form_units(
     `node_kind == "symbol"` node in the dag, so it falls through to the
     sym-unit branch on its own — the wrap stage's `symbols.md` (its
     callback section) emits the `#[repr(transparent)]` fn-pointer handle, not a
-    struct wrapper."""
+    struct wrapper.
+
+    A **generator** (a type-minting macro, `generates` non-empty) is also a
+    `node_kind == "symbol"` node, but it does NOT fall through: its deliverable
+    is a struct — the Rust generic every instance it mints aliases, with a
+    `CCell` impl, a layout gate and field accessors — so it forms a TYPE-unit
+    and routes to `types.md`. Left as a sym-unit it pooled into a shared syms
+    batch under `symbols.md`, which is written for thin safe views over an FFI
+    surface and has no lifecycle/accessor recipe; the generic came out right
+    anyway, but by the agent reaching past its prompt. Becoming a type-unit also
+    buys the never-split guarantee in `pack`, so a generator can no longer share
+    an agent with unrelated symbols."""
     type_meta = type_meta or {}
     units: list[Unit] = []
     for n in nodes:
-        if n.node_kind == "type":
+        if n.node_kind == "type" or is_generator(n):
             fields, lifecycle = type_meta.get(n.id, ([], set()))
             ops = ordered_ops(n, by_key, lifecycle, in_scope)
             units.append(Unit("type", n, ops, list(fields)))
