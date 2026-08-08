@@ -596,7 +596,7 @@ def _stub(e: dict, scope_map: dict[str, str] | None = None,
     lines = ["//! crustify:managed — generated module skeleton.",
              "//!",
              f"//! C source: {src}",
-             "//! Each item below is a scaffolded anchor the wrap/port stage fills.",
+             "//! Each item below is a scaffolded anchor the translate stage fills.",
              ""]
     m = e["members"]
     any_member = False

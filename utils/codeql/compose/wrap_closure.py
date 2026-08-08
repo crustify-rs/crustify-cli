@@ -413,7 +413,7 @@ def compose_wrap(
         via = narrow(decls, tu)
         if not via:
             return  # no header to import from — a compiler builtin / intrinsic,
-                    # not a wrappable FFI item (the port stage lowers these).
+                    # not a wrappable FFI item.
         rec = sym_items.setdefault((name, df), {
             "name": name, "defined_in": df, "declared_in": set()})
         rec["declared_in"].update(via)

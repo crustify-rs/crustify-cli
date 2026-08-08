@@ -31,12 +31,27 @@ dirs never collide and clobber each other's ``<stage>.log``.
 # A TYPE is never split — it is one batch with all its ops and accessors. Only
 # the free-symbol pool is budgeted.
 
-WRAP_MAX_SYMS: int = 50
+TRANSLATE_MAX_SYMS: int = 50
 """Per-batch unit budget for the translate stage — wired as the scheduler's
 ``max_syms``. It bounds BOTH the type pool and the free-symbol pooling per file
 (how many wrap-scope free syms ride one ``wrap syms`` agent). Was
 ``WRAP_MAX_OPS`` — renamed to reflect its true dual role now that op sets are
 small."""
+
+TRANSLATE_MAX_LOC: int = 500
+"""Per-batch lines-of-code budget, binding together with
+``TRANSLATE_MAX_SYMS`` — whichever cap is hit first closes a batch.
+
+The count cap guards the many-tiny-symbols case; this one guards the
+few-huge-functions case, which only started applying to this stage when
+port-scope symbols became schedulable here: their bodies are translated, not
+faceted, so a batch of a few large functions can blow an agent's context while
+the symbol *count* is still well under the other cap.
+
+Per-symbol LoC is the CodeQL body line-span (`functions.csv` `loc`); globals
+count 1, macros 0. When `loc` is absent, a symbol contributes 0 and the count
+cap binds alone. A lone symbol heavier than this still gets its own batch — a
+function is never split."""
 
 
 # ---------------------------------------------------------------------------

@@ -391,15 +391,16 @@ def wrap_types(
     chain_policy: str = "per-agent",
     parallel_max: int = 8,
     max_syms: int | None = None,
+    max_loc: int | None = None,
     dry_run: bool = False,
     emit_fn=None,
 ) -> None:
-    """Wrap selected wrap-scope units via the shared ``--name`` scheduler.
+    """Translate the selected in-scope units via the ``--name`` scheduler.
 
-    Selection is ``--name`` (repeatable). A named **type** brings its
-    in-scope ops (budget-split); named free symbols pool per file. The
-    scheduler runs in dependency-layer order and prints the first-layer deps
-    as a heads-up (no prompt).
+    Selection is ``--name`` (repeatable), a dag layer, or a dependency
+    closure. Types and free symbols are each their own unit and pool
+    separately under the batch budget. The scheduler runs in dependency-layer
+    order and prints the first-layer deps as a heads-up (no prompt).
     """
     from compose import scope
     from crustify import config as _cfg
@@ -408,7 +409,9 @@ def wrap_types(
     from crustify.layout import Layout
 
     if max_syms is None:
-        max_syms = _cfg.WRAP_MAX_SYMS
+        max_syms = _cfg.TRANSLATE_MAX_SYMS
+    if max_loc is None:
+        max_loc = _cfg.TRANSLATE_MAX_LOC
 
     layout = Layout.discover(target)
     scope_json = _preflight(target, layout)
@@ -570,7 +573,7 @@ def wrap_types(
     stage = S.Stage(
         verb="wrap", in_scope=in_scope,
         emit_fn=emit_fn or _wrap_emit(target, layout, max_syms=max_syms),
-        max_syms=max_syms,
+        max_syms=max_syms, max_loc=max_loc,
         emit_factory=emit_factory, target=target, layout=layout,
     )
     failures = S.schedule(

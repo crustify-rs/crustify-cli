@@ -149,7 +149,13 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
         "--max-syms", type=int, default=None, metavar="N", dest="max_syms",
         help="Per-batch symbol budget for wrap: a type's op-chunk size "
              "(lifecycle + method ops counted together) AND the free-symbol "
-             "pool size per file. Default: config.WRAP_MAX_SYMS.",
+             "pool size per file. Default: config.TRANSLATE_MAX_SYMS.",
+    )
+    p.add_argument(
+        "--max-loc", type=int, default=None, metavar="N", dest="max_loc",
+        help="Per-batch lines-of-code budget (Σ body span; global=1, macro=0), "
+             "binding together with --max-syms — whichever cap is hit first "
+             "closes a batch. Default: config.TRANSLATE_MAX_LOC.",
     )
     p.add_argument(
         "--dag-layer", type=int, default=None, metavar="N", dest="dag_layer",
@@ -560,6 +566,7 @@ def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
         chain_policy=getattr(args, "parallel_policy", "per-agent"),
         parallel_max=int(getattr(args, "parallel_max", 8)),
         max_syms=getattr(args, "max_syms", None),
+        max_loc=getattr(args, "max_loc", None),
         dry_run=bool(getattr(args, "dry_run", False)),
     )
 

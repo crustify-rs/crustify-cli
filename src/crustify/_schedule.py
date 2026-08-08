@@ -254,8 +254,8 @@ def pack(
     type, all its lifecycle ops and all its field accessors, because they are one
     design decision and only the first batch ever held the type definition.
 
-    Atomic sym-units pool under ``max_syms`` — and, when ``max_loc`` is set (the
-    port LoC budget), also under a per-batch ``Σ node.loc`` cap, whichever binds
+    Atomic sym-units pool under ``max_syms`` — and, when ``max_loc`` is set,
+    also under a per-batch ``Σ node.loc`` cap, whichever binds
     first (a lone symbol heavier than ``max_loc`` still gets its own batch — a
     function is never split).
 
@@ -403,13 +403,12 @@ EmitFn = Callable[[Batch], None]
 
 @dataclass
 class Stage:
-    verb: str                                    # "wrap" | "port"
+    verb: str                                    # stage label for messages
     in_scope: Callable[[Node], bool]             # type-SELECTION predicate (bound to port_paths)
     emit_fn: EmitFn                              # agent seam (serial / non-isolated)
     max_syms: int
-    # Per-type field-accessor cap — only the WRAP stage windows type fields;
-    # `max_loc` is the PORT lines-of-code budget that binds together with
-    # `max_syms` on the free-symbol pool (None = no LoC cap, e.g. for wrap).
+    # Lines-of-code budget, binding with `max_syms` on the free-symbol pool
+    # (None = no LoC cap).
     max_loc: int | None = None
     shared_artifact_fn: Callable[[], None] | None = None  # serialized post-step
     # Worktree-isolation seam. When wired, EVERY agent runs in its own worktree,
