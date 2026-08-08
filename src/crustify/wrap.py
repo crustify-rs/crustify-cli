@@ -561,9 +561,10 @@ def wrap_types(
         raise SystemExit(
             f"wrap: {len(bad_port)} selected "
             f"{'entity is a' if len(bad_port)==1 else 'entities are'} port-scope "
-            f"symbol — these belong to the PORT stage (wrap would emit a stray "
-            f"FFI shim, not the safe view):\n{listing}\n"
-            f"  Run `crustify-cli {target} port --name …` instead.")
+            f"symbol — their bodies are translated, not faceted, so translate "
+            f"would emit a stray FFI shim instead of the safe view:"
+            f"\n{listing}\n"
+            f"  No stage takes them yet: the port half is not implemented.")
     if bad_oos:
         listing = "\n".join(f"  - {i}" for i in bad_oos)
         raise SystemExit(

@@ -418,12 +418,11 @@ def main() -> None:
     )
 
     # -- wrap ------------------------------------------------------------
-    # `wrap` stays as an alias: it is the stage's name in every session log,
-    # worktree and branch on disk, and in the skills and docs that drive it.
-    # Note the SCOPE keeps its own name — `--wrap-only` and wrap-scope are the
-    # port/wrap dichotomy in scope.json, not this stage.
+    # The SCOPE keeps its own name: `--wrap-only` / `--port-only` and
+    # wrap-scope / port-scope are the dichotomy in scope.json, orthogonal to
+    # which stage runs. Only the stage is called `translate`.
     wrap_p = sub.add_parser(
-        "translate", aliases=["wrap"],
+        "translate",
         help=(
             "Translate stage: emit Rust wrappers for the selected wrap-scope "
             "units (types AND free symbols) in dependency-layer order. "
@@ -451,49 +450,6 @@ def main() -> None:
              "disposers / cloners are found by the TYPE wrapper from the type's "
              "record, as part of wrapping it (`wrap --name <tag>`). IS its own "
              "selector -- no --name.")
-
-    # -- port ------------------------------------------------------------
-    port_p = sub.add_parser(
-        "port",
-        help="Port stage: emit ported Rust via the --name scheduler.",
-    )
-    port_p.add_argument(
-        "--name", nargs="+", action="extend", metavar="NAME", default=None,
-        help="Select port-scope unit(s) by name. Pass all names as a "
-             "space-separated list after a single --name (e.g. "
-             "`--name T1 op2 op3`) to batch them; repeating the flag keeps "
-             "only the last group. A type name brings its in-scope ops; free "
-             "symbols / TU macros pool per file. The user supplies dependency "
-             "order.",
-    )
-    port_p.add_argument(
-        "--file", nargs="+", metavar="FILE", default=None, dest="files",
-        help="Restrict the selection to entities defined in these files "
-             "(disambiguates a --name collision).",
-    )
-    port_p.add_argument(
-        "--max-syms", type=int, default=None, metavar="N", dest="max_syms",
-        help="Per-batch symbol-count budget. Default: config.PORT_MAX_SYMS.",
-    )
-    port_p.add_argument(
-        "--max-loc", type=int, default=None, metavar="N", dest="max_loc",
-        help="Per-batch lines-of-code budget (Σ body span; global=1, macro=0), "
-             "binds together with --max-syms. Default: config.PORT_MAX_LOC.",
-    )
-    port_p.add_argument(
-        "--dag-layer", type=int, default=None, metavar="N", dest="dag_layer",
-        help="Select every port-scope symbol at dag layer N (lifecycle ops that "
-             "fold into a type are excluded). Combines with --name; e2e driver mode.",
-    )
-    port_p.add_argument(
-        "--skip", nargs="+", action="extend", default=None, metavar="NAME",
-        help="Blocklist: drop these names from the selection (manual already-done "
-             "list; the driver seeds it, crustify just honours it).",
-    )
-    port_p.add_argument(
-        "--dry-run", action="store_true", dest="dry_run",
-        help="Print the plan (units, batches, first-layer deps) and stop.",
-    )
 
     args = parser.parse_args()
 
@@ -545,22 +501,12 @@ def main() -> None:
         _handle_bindgen(args, target)
 
 
-    elif args.command in ("translate", "wrap"):
+    elif args.command == "translate":
         _handle_wrap(args, target)
 
-    elif args.command == "port":
-        _handle_port(args, target)
 
 
 # -- analyze dispatch -----------------------------------------------------
-
-def _handle_port(args: argparse.Namespace, target: Path) -> None:
-    raise SystemExit(
-        "port: not implemented.\n"
-        "  The command and its flags are kept so a driver that already calls "
-        "them keeps parsing; nothing is emitted."
-    )
-
 
 # -- scaffold dispatch ----------------------------------------------------
 
