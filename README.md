@@ -139,7 +139,7 @@ crustify picks up at `analyze extract-ql`.
 | **analyze** | the whole stage: `extract-ql`, `scope`, `types`/`symbols` skeletons + full dependency graph, `dag` | - (the schemas' judgement fields are submitted by the wrap agents) |
 | **scaffold** | `crates.json` -> `.rs` placement (query / create / validate) | - (`crates.json` is authored outside the stage; a lookup miss is a hard error) |
 | **bindgen** | `<lib>-sys` crate skeletons, allowlists, include closure | - (the `fn main`, clang args and shims are completed by hand) |
-| **translate** (alias `wrap`) | DAG-layered scheduler: scope filter, per-file/per-dep batching, budget slicing, per-wave isolation | per-unit wrapper agents (type / string / array / symbol); per-wave merge agent |
+| **translate** | DAG-layered scheduler: scope filter, per-file/per-dep batching, budget slicing, per-wave isolation | per-unit wrapper agents (type / string / array / symbol); per-wave merge agent |
 | **port** | not implemented | - |
 | **query / audit** | graph walks, record reads, surface counts | - (fully deterministic) |
 
@@ -216,7 +216,7 @@ emitted.
 
 `--name` takes a space-separated list (the user supplies dependency order);
 `--file` disambiguates same-named entities; `--dag-layer N` (wrap) selects a
-whole DAG layer. `wrap` drops a selected unit once its `// crustify:todo`
+whole DAG layer. `translate` drops a selected unit once its `// crustify:todo`
 placeholders are gone - the `// Wraps:` anchor plus, for a type, its port-scope
 `// Field:` anchors; `--review` keeps them. The scheduler never gates on whether
 a DEP is already emitted - the C/FFI bridge keeps every intermediate state

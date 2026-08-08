@@ -76,7 +76,7 @@ class CrustifyWrap(CrustifyAgent):
         # syms batch:
         rs_out: str | None = None,
         syms: list[dict] | None = None,
-        # Lifetime-discovery mode (`wrap --lifetime-for`):
+        # Lifetime-discovery mode (`translate --lifetime-for`):
         # instead of a resolved worklist, the agent is handed a SPEC and finds
         # the lifecycle primitives itself. Rides in `syms` as a mode marker so
         # the prompt has one input to read, exactly as the retired analyzer's rode in

@@ -5,7 +5,7 @@ Builds one scope-agnostic directed graph whose
 nodes are **types** and **all symbols** (functions / macros / globals,
 including a type's lifecycle methods), where ``A -> B`` means "A needs B
 emitted first". Topo-sorted (Tarjan SCC → longest-path layers) it drives both
-the wrap stage (wrap-scope subset) and the port stage (the whole graph, in
+the translate stage (wrap-scope subset) and, once it exists, a port stage (the whole graph, in
 order). See ``docs/WRAP_STAGE_PLAN.md``.
 
 Relationships come straight from the analysis tree:

@@ -7,7 +7,7 @@ their ``--name``. Pure read — no side effects.
 
 Output modes:
   * plain (default): one bare ``id`` per line, deduped, sorted by ``(layer, id)``
-    — xargs-ready (``crustify <t> query types --wrap-only | xargs crustify <t> wrap --name``).
+    — xargs-ready (``crustify <t> query types --wrap-only | xargs crustify <t> translate --name``).
     Name collisions (same-named statics in different TUs, or a type/symbol tag
     clash) print the id once; use ``--file`` to target one, or ``--json`` to see
     the multiplicity.

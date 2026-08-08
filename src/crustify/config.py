@@ -49,23 +49,6 @@ small."""
 # a type and its methods ride one batch. The agent receives a fixed working set
 # and is unaware it is capped.
 #
-# Two budgets bind together (whichever is hit first closes a batch): a COUNT cap
-# (``PORT_MAX_SYMS``) guards the many-tiny-symbols case, and a LINES-OF-CODE cap
-# (``PORT_MAX_LOC``) guards the few-huge-functions case. Per-symbol LoC is the
-# CodeQL body line-span (functions.csv `loc` column); globals count as 1 and
-# macros as 0 (we don't port macros). When `loc` is absent (un-re-extracted
-# functions.csv), a symbol contributes 0 and the count cap binds alone.
-
-PORT_MAX_SYMS: int = 20
-"""Maximum number of port-scope symbols (functions / globals / macros, plus a
-scheduled type's folded ops) in a single ``CrustifyPort`` batch."""
-
-PORT_MAX_LOC: int = 500
-"""Maximum total lines-of-code (summed per-symbol body span) in a single
-``CrustifyPort`` batch — binds together with ``PORT_MAX_SYMS`` (first cap hit
-closes the batch). Functions contribute their body line-span; globals 1; macros
-0. Keeps a batch of a few large functions from blowing the agent's context even
-when the symbol *count* is well under ``PORT_MAX_SYMS``."""
 
 
 # ---------------------------------------------------------------------------

@@ -1,17 +1,18 @@
-"""Orchestration for the ``wrap`` command — wrap-stage glue over the shared
+"""Orchestration for the ``translate`` command — stage glue over the
 ``--name`` scheduler.
 
-Wrap-stage codegen is driven by :mod:`crustify._schedule`: selection is
-``--name`` (repeatable); a named **type** brings its in-scope ops
-(budget-split), named **free symbols** pool per file. The user supplies the
-dependency order (the DAG is what they read to choose it); a confirmation
-prompt lists first-layer deps.
+Codegen is driven by :mod:`crustify._schedule`: selection is ``--name``
+(repeatable) or a dag layer / dependency closure. Types and free symbols are
+each their own unit and pool separately under the batch budget — a type no
+longer absorbs its ops. The user supplies the dependency order (the DAG is
+what they read to choose it); a confirmation prompt lists first-layer deps.
 
-This module owns only the wrap-specific pieces — the scope-blind selection
-predicate (:func:`_selection_pred`), the bindgen gate, and the emit seam to :class:`crustify.agents.wrap.CrustifyWrap` — plus
-the stub-index / preflight / budget helpers the scheduler and the port stage
-reuse. Scope (wrap/port) is applied **here**, never in the DAG, via the same
-``compose.scope`` classifier the manifests use.
+This module owns only the stage-specific pieces — the selection predicate
+(:func:`_selection_pred`), the wrap-bound-op index (:func:`_wrap_bound_ops`),
+the bindgen gate, and the emit seam to
+:class:`crustify.agents.wrap.CrustifyWrap`. Scope (wrap/port) is applied
+**here**, never in the DAG, via the same ``compose.scope`` classifier the
+manifests use — as a filter the caller opts into, not a routing decision.
 
 The scheduler schedules blindly — it emits every selected unit (budget-bounded),
 checking only that each home ``.rs`` exists; it does not skip already-filled

@@ -21,7 +21,7 @@ def _parallel_max_type(s: str) -> int:
     return n
 
 
-#: The untyped lifetime tiers `wrap --lifetime-for` accepts, in the order they
+#: The untyped lifetime tiers `translate --lifetime-for` accepts, in the order they
 #: must be run — a typed cluster's Drop usually delegates to the untyped one's.
 #: A struct tag is deliberately NOT accepted: a type's own droppers / disposers
 #: / cloners are the TYPE wrapper's job, found from its record while it wraps
@@ -32,13 +32,13 @@ LIFETIME_TIERS = ("void", "string")
 
 
 def _lifetime_tier(s: str) -> str:
-    """argparse type for `wrap --lifetime-for`: one of :data:`LIFETIME_TIERS`."""
+    """argparse type for `translate --lifetime-for`: one of :data:`LIFETIME_TIERS`."""
     if s not in LIFETIME_TIERS:
         raise argparse.ArgumentTypeError(
             f"--lifetime-for: expected {' or '.join(LIFETIME_TIERS)}, got {s!r}. "
             f"Only the untyped tiers are wrapped this way; a type's lifecycle "
             f"ops are discovered by the type wrapper from the type's own record "
-            f"(wrap --name {s})."
+            f"(translate --name {s})."
         )
     return s
 
@@ -112,7 +112,7 @@ def _add_subject_scope_flags(
 
 
 def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
-    """Selection flags for the unified `wrap` command (types + free symbols,
+    """Selection flags for the unified `translate` command (types + free symbols,
     no subject split). Wrap is **scope-blind by default**
     — a named entity wraps regardless of port/wrap scope (no refusal).
     `--wrap-only` / `--port-only` are opt-in *narrowing* filters, and `--file`
@@ -450,7 +450,7 @@ def main() -> None:
              "since a typed cluster's Drop usually delegates to the untyped "
              "one's. A struct tag is NOT accepted: a type's own droppers / "
              "disposers / cloners are found by the TYPE wrapper from the type's "
-             "record, as part of wrapping it (`wrap --name <tag>`). IS its own "
+             "record, as part of wrapping it (`translate --name <tag>`). IS its own "
              "selector -- no --name.")
 
     args = parser.parse_args()

@@ -1,4 +1,4 @@
-"""_schedule.py — the shared ``--name`` scheduler for the wrap and port stages.
+"""_schedule.py — the ``--name`` scheduler behind the ``translate`` stage.
 
 Both stages select work by ``--name`` (repeatable), turn the selection into
 budget-bounded batches, and run them — sequential within a source file,
