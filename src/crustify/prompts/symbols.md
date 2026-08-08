@@ -41,11 +41,11 @@ mode and scout the codebase for lifetime primitives using
 our recommended heuristics, then submit your findings through the oracle. Your process 
 all the lifetime primitives codebase-wide, regarless whether they are wrap- or port-scope.
 
-**Reviewer mode.** If the agent-owned analysis of one of your items exists already, 
-or if its safe wrappers have already been emitted, then you act as a reviewer assessing their
+**LLM-as-a-Judge.** If the agent-owned analysis of one of your items exists already, 
+or if its safe wrappers have already been emitted, then you act as the LLM-as-a-Judge assessing their
 quality and accuracy by verifying its claims against our principles and instructions. If
 you notice any inconsistencies, submit your new findings through the oracle, and fix / extend its
-existing safe wrappers if necessary, justifying why they fix the existing state. 
+existing safe wrappers if necessary, justifying why they fix the existing state.  
 
 ### Locate your files
 
