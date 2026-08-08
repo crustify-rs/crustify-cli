@@ -33,12 +33,12 @@ dirs never collide and clobber each other's ``<stage>.log``.
 
 TRANSLATE_MAX_SYMS: int = 50
 """Per-batch unit budget for the translate stage — wired as the scheduler's
-``max_syms``. It bounds BOTH the type pool and the free-symbol pooling per file
+``max_syms``. It bounds the free-symbol pooling per file
 (how many wrap-scope free syms ride one ``wrap syms`` agent). Was
 ``WRAP_MAX_OPS`` — renamed to reflect its true dual role now that op sets are
 small."""
 
-TRANSLATE_MAX_LOC: int = 500
+TRANSLATE_MAX_LOC: int = 1000
 """Per-batch lines-of-code budget, binding together with
 ``TRANSLATE_MAX_SYMS`` — whichever cap is hit first closes a batch.
 

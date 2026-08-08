@@ -250,9 +250,8 @@ def pack(
     max_loc: int | None = None,
     syms_by_file: bool = False,
 ) -> list[Batch]:
-    """Budget-bounded batches. A type-unit is NEVER split: one batch carries the
-    type, all its lifecycle ops and all its field accessors, because they are one
-    design decision and only the first batch ever held the type definition.
+    """Budget-bounded batches. A type-unit gets a batch to itself, bounded by
+    neither cap — see the comment below.
 
     Atomic sym-units pool under ``max_syms`` — and, when ``max_loc`` is set,
     also under a per-batch ``Σ node.loc`` cap, whichever binds
@@ -280,16 +279,21 @@ def pack(
     batches: list[Batch] = []
     pool: dict[str | None, list[Node]] = {}
 
-    # Types and symbols pool SEPARATELY — they route to different agents and
-    # different prompts, so a batch must be homogeneous — but neither gets a
-    # per-unit batch any more. A type unit is now just the type and its field
-    # names; with its ops gone there is nothing left to split, so the
-    # one-batch-per-type rule guarded a working set that no longer exists.
-    tpool: dict[str | None, list[Unit]] = {}
-
     for u in units:
         if u.kind == "type":
-            tpool.setdefault(u.file if syms_by_file else None, []).append(u)
+            # ONE batch per type, bounded by nothing. A type is not budgetable
+            # in the units these caps are denominated in: `max_syms` counts
+            # symbol wrappers, and a type costs several of them; `max_loc`
+            # counts body line span, and a type node's `loc` is its FIELD
+            # count. Pooling under either compares unlike things — 50 types
+            # under a 50-symbol cap is ~7x the intended load, and a count cap
+            # cannot tell `ssl_connection_st` (250 fields) from an opaque
+            # handle (0). So a type stands alone and the caps stay symbol-only.
+            b = Batch(file=u.file, units=[u],
+                      op_range=(0, 0), field_range=(0, len(u.fields)))
+            b.members.append(u.node)
+            b.fields = list(u.fields)
+            batches.append(b)
         else:
             # `None` key = one global pool for the layer (the default): the
             # defining file is not a write boundary, so it must not bound a batch.
@@ -299,16 +303,6 @@ def pack(
     # when set, lines-of-code (Σ loc <= max_loc) — whichever cap is hit first
     # closes the batch. A single sym whose loc already exceeds max_loc still goes
     # in its own batch (we never split a function).
-    def _flush_types(fpath, chunk: list[Unit]):
-        b = Batch(file=fpath, units=list(chunk))
-        b.members = [u.node for u in chunk]
-        b.fields = [f for u in chunk for f in u.fields]
-        batches.append(b)
-
-    for fpath, tus in tpool.items():
-        for i in range(0, len(tus), max_syms):
-            _flush_types(fpath, tus[i:i + max_syms])
-
     def _flush(fpath, chunk):
         b = Batch(file=fpath, units=[Unit("sym", s) for s in chunk])
         b.members = list(chunk)
