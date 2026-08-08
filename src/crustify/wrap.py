@@ -469,11 +469,16 @@ def wrap_types(
         # Skipped rather than refused: `--name`ing a primitive is a mistake and
         # `_reject_lifetime_primitives` says so, but a layer slice is a bulk
         # selector — one primitive in the layer must not sink the whole wave.
-        _elig = _wrap_eligible_pred(scope_json)
+        # `base_in_scope`, not the bare eligibility predicate: it carries the
+        # `--wrap-only` / `--port-only` / `--file` narrowing. Selecting on
+        # eligibility alone picked up port-scope TYPES (eligible, since every
+        # type is wrapped) that the scope gate below then refused under
+        # `--wrap-only` — 60 of them at ssl layer 1 — so the flag turned a
+        # slice into a hard error instead of narrowing it.
         _prim = {nm for (nm, _f) in _lifetime_by_sym(layout)}
         sel_names += sorted({
             n.id for n in by_key.values()
-            if n.layer == dag_layer and _elig(n)
+            if n.layer == dag_layer and base_in_scope(n)
             and not (n.node_kind == "symbol"
                      and ((n.subkind or "").startswith("macro") or n.id in _prim))})
     if transitive:
