@@ -29,7 +29,7 @@ use rustc_middle::ty::{self, Ty, TyCtxt, TypeckResults};
 use rustc_span::def_id::DefId;
 use rustc_span::hygiene::{ExpnKind, MacroKind};
 use rustc_span::Span;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// FFI-seam conversion routines (audit `_SEAM_FN_NAMES`): raw pointers in
 /// these signatures are the expected boundary, not a smell.
@@ -43,14 +43,14 @@ fn is_seam_fn(tcx: TyCtxt<'_>, did: DefId) -> bool {
     tcx.opt_item_name(did).is_some_and(|n| SEAM_FNS.contains(&n.as_str()))
 }
 
-/// True if `t` is `&mut W` where `W` is a `define_type!` wrapper. Catches both
+/// True if `t` is `&mut W` where `W` is a wrapper (implements `CCell`). Catches both
 /// the `&mut self` receiver (its type is `&mut Self` = `&mut W`) and explicit
 /// `&mut W` params. A discipline smell: wrappers interior-mutate via `&self`.
 fn is_mut_ref_wrapper(tcx: TyCtxt<'_>, t: Ty<'_>) -> bool {
     if let ty::TyKind::Ref(_, pointee, m) = t.kind() {
         if m.is_mut() {
             if let ty::TyKind::Adt(def, _) = pointee.kind() {
-                return is_define_type_wrapper(tcx, def.did());
+                return is_wrapper(tcx, def.did());
             }
         }
     }
@@ -76,29 +76,76 @@ fn raw_pointee<'tcx>(t: Ty<'tcx>) -> Option<Ty<'tcx>> {
     }
 }
 
-/// True if the pointee `p` is a C type that has a `define_type!` wrapper
+/// True if the pointee `p` is a C type that has a wrapper
 /// (i.e. a safe wrapper exists for it) — or is itself such a wrapper.
 fn pointee_has_wrapper(tcx: TyCtxt<'_>, p: Ty<'_>, wrapped_c: &HashSet<DefId>) -> bool {
     match p.kind() {
         ty::TyKind::Adt(def, _) => {
-            wrapped_c.contains(&def.did()) || is_define_type_wrapper(tcx, def.did())
+            wrapped_c.contains(&def.did()) || is_wrapper(tcx, def.did())
         }
         _ => false,
     }
 }
 
-/// Is `did` a struct produced by `crustify::define_type!`? (The macro expands
-/// to `pub struct $name(CType<$c_type>)`, so the struct's def-span carries the
-/// `define_type` expansion context.)
-fn is_define_type_wrapper(tcx: TyCtxt<'_>, did: DefId) -> bool {
-    if !matches!(tcx.def_kind(did), DefKind::Struct) {
-        return false;
+/// `wrapper ADT -> its C type ADT`, one entry per local `impl CCell for W`.
+///
+/// `CCell` is the definition of "wrapper" in this codebase: `define_type!`
+/// expands to `unsafe impl CCell for $name { type C = $c_type; }`, and the
+/// wrappers the macro cannot express — generic (`OpensslStackOwned<E>`,
+/// `Lhash<E>`) or lifetime-carrying (`Packet<'buf>`, `WPacket<'_>`) — write the
+/// same impl by hand. Keying on the trait therefore covers both, and reads the
+/// C type from the `type C` associated item instead of guessing at field 0.
+fn ccell_wrappers(tcx: TyCtxt<'_>) -> HashMap<DefId, DefId> {
+    let mut out = HashMap::new();
+    for ld in tcx.hir_crate_items(()).definitions() {
+        let did = ld.to_def_id();
+        if !matches!(tcx.def_kind(did), DefKind::Impl { of_trait: true }) {
+            continue;
+        }
+        let tr = tcx.impl_trait_ref(did).skip_binder();
+        if tcx.item_name(tr.def_id).as_str() != "CCell" {
+            continue;
+        }
+        let ty::TyKind::Adt(sdef, _) = tr.self_ty().kind() else { continue };
+        for it in tcx.associated_items(did).in_definition_order() {
+            if !matches!(tcx.def_kind(it.def_id), DefKind::AssocTy) {
+                continue;
+            }
+            if tcx.item_name(it.def_id).as_str() != "C" {
+                continue;
+            }
+            if let ty::TyKind::Adt(cdef, _) = tcx.type_of(it.def_id).skip_binder().kind() {
+                out.insert(sdef.did(), cdef.did());
+            }
+        }
     }
-    let data = tcx.def_span(did).ctxt().outer_expn_data();
-    // invoked either bare (`define_type!`) or path-qualified
-    // (`crustify::define_type!`) -> match the last path segment.
-    matches!(data.kind, ExpnKind::Macro(MacroKind::Bang, name)
-        if name.as_str().rsplit("::").next() == Some("define_type"))
+    out
+}
+
+thread_local! {
+    /// Built once per compilation (the driver is one rustc invocation per crate).
+    static WRAPPERS: std::cell::RefCell<Option<HashMap<DefId, DefId>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn with_wrappers<R>(tcx: TyCtxt<'_>, f: impl FnOnce(&HashMap<DefId, DefId>) -> R) -> R {
+    WRAPPERS.with(|c| {
+        let mut b = c.borrow_mut();
+        if b.is_none() {
+            *b = Some(ccell_wrappers(tcx));
+        }
+        f(b.as_ref().unwrap())
+    })
+}
+
+/// Is `did` a wrapper type — i.e. does it implement `CCell`?
+fn is_wrapper(tcx: TyCtxt<'_>, did: DefId) -> bool {
+    with_wrappers(tcx, |m| m.contains_key(&did))
+}
+
+/// The C type `did` wraps, from its `CCell::C`.
+fn wrapper_c_ty(tcx: TyCtxt<'_>, did: DefId) -> Option<DefId> {
+    with_wrappers(tcx, |m| m.get(&did).copied())
 }
 
 /// The `DefId` of an impl's self-type (`impl T` / `impl Tr for T` -> `T`), via
@@ -144,13 +191,13 @@ fn in_any_impl(tcx: TyCtxt<'_>, mut did: DefId) -> bool {
 }
 
 /// True if `did` is (transitively) inside an `impl T { .. }` / `impl Tr for T`
-/// whose `T` is a `define_type!` wrapper.
+/// whose `T` is a wrapper (implements `CCell`).
 fn in_wrapper_impl(tcx: TyCtxt<'_>, mut did: DefId) -> bool {
     while let Some(parent) = tcx.opt_parent(did) {
         match tcx.def_kind(parent) {
             DefKind::Impl { .. } => {
                 return impl_self_def(tcx, parent)
-                    .is_some_and(|s| is_define_type_wrapper(tcx, s));
+                    .is_some_and(|s| is_wrapper(tcx, s));
             }
             DefKind::Mod | DefKind::ForeignMod => return false,
             _ => did = parent,
@@ -165,19 +212,19 @@ struct Counts {
     unsafe_block_stmts: u64,
     unsafe_block_lines: u64,      // raw brace-to-brace span (incl. blanks/comments)
     unsafe_block_code_lines: u64, // non-blank, non-`//`-comment lines only
-    unsafe_blocks_wrapper_impl: u64, // unsafe blocks inside `impl <define_type! T>`
+    unsafe_blocks_wrapper_impl: u64, // unsafe blocks inside `impl <wrapper T>`
     wrapper_impl_macro: u64,         //   of which macro-generated (get/get_mut)
     wrapper_impl_handwritten: u64,   //   of which hand-written methods
     unsafe_blocks_ffi_export: u64,   // unsafe blocks inside `mod ffi_export`
     // signature raw pointers (args/rets), region-classified:
-    rp_wrap_nonseam_args: u64, // in `impl <define_type! T>`, non-seam methods
+    rp_wrap_nonseam_args: u64, // in `impl <wrapper T>`, non-seam methods
     rp_wrap_nonseam_rets: u64,
-    rp_wrap_nonseam_wrapped: u64, //   of those, pointee has a define_type! wrapper
+    rp_wrap_nonseam_wrapped: u64, //   of those, pointee has a wrapper
     rp_outside_args: u64, // outside wrapper impls AND outside `mod ffi_export`
     rp_outside_rets: u64,
-    rp_outside_wrapped: u64, //        of those, pointee has a define_type! wrapper
+    rp_outside_wrapped: u64, //        of those, pointee has a wrapper
     mut_borrow_wrapper: u64, // `&mut W` (incl. `&mut self`) in signatures, W a wrapper
-    // `(*p).field` where `p: *C` and `C` has a define_type! wrapper (bypasses the
+    // `(*p).field` where `p: *C` and `C` has a wrapper (bypasses the
     // accessor): total, and the subset outside any impl/trait (the smell).
     field_proj_wrapped: u64,
     field_proj_outside_impl: u64,
@@ -244,7 +291,7 @@ struct BodyVisitor<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     typeck: &'tcx TypeckResults<'tcx>,
     depth: u32,       // unsafe-block nesting depth
-    in_wrapper: bool, // this body is inside an `impl <define_type! T>`
+    in_wrapper: bool, // this body is inside an `impl <wrapper T>`
     in_ffi: bool,     // this body is inside a `mod ffi_export`
     in_impl: bool,    // this body is inside any impl/trait
     wrapped_c: &'a HashSet<DefId>,
@@ -480,22 +527,6 @@ struct Seed {
     c_name: String,       // C tag — naked match for `*-sys` fn calls (Func seed)
 }
 
-/// Map a `define_type!` wrapper struct to the C type it wraps (`CType<C>`'s `C`).
-fn wrapper_c(tcx: TyCtxt<'_>, w: DefId) -> Option<DefId> {
-    if !matches!(tcx.def_kind(w), DefKind::Struct) {
-        return None;
-    }
-    let field = tcx.adt_def(w).all_fields().next()?;
-    if let ty::TyKind::Adt(_, args) = tcx.type_of(field.did).skip_binder().kind() {
-        if let Some(c0) = args.types().next() {
-            if let ty::TyKind::Adt(cdef, _) = c0.kind() {
-                return Some(cdef.did());
-            }
-        }
-    }
-    None
-}
-
 fn def_file(tcx: TyCtxt<'_>, did: DefId) -> String {
     tcx.sess.source_map().span_to_filename(tcx.def_span(did)).into_local_path()
         .map(|p| p.to_string_lossy().into_owned())
@@ -514,14 +545,14 @@ fn resolve_seeds(tcx: TyCtxt<'_>) -> Vec<Seed> {
     for ld in tcx.hir_crate_items(()).definitions() {
         let did = ld.to_def_id();
         let kind = match tcx.def_kind(did) {
-            DefKind::Struct if is_define_type_wrapper(tcx, did) => SeedKind::Type,
+            DefKind::Struct if is_wrapper(tcx, did) => SeedKind::Type,
             DefKind::Fn | DefKind::AssocFn => SeedKind::Func,
             _ => continue,
         };
         let rust_name = tcx.item_name(did).to_string();
         let (c_did, c_name) = match kind {
             SeedKind::Type => {
-                let c = wrapper_c(tcx, did);
+                let c = wrapper_c_ty(tcx, did);
                 let cn = c.map(|c| tcx.item_name(c).to_string()).unwrap_or_default();
                 (c, cn)
             }
@@ -640,14 +671,7 @@ impl<'a, 'v> Visitor<'v> for NakedTyVisitor<'a> {
 /// `UM_MODE=seed`: per-seed audit metrics (own-region + naked footprint).
 fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
     // wrapped C types (for naked-ref matching + wrapper detection reuse).
-    let mut wrapped_c: HashSet<DefId> = HashSet::new();
-    for ld in tcx.hir_crate_items(()).definitions() {
-        if let Some(c) = wrapper_c(tcx, ld.to_def_id()) {
-            if is_define_type_wrapper(tcx, ld.to_def_id()) {
-                wrapped_c.insert(c);
-            }
-        }
-    }
+    let wrapped_c: HashSet<DefId> = with_wrappers(tcx, |m| m.values().copied().collect());
     let seeds = resolve_seeds(tcx);
     let mut metrics: Vec<Counts> = (0..seeds.len()).map(|_| Counts::default()).collect();
     let mut sites: Vec<Sites> = (0..seeds.len()).map(|_| Sites::default()).collect();
@@ -766,8 +790,8 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
         let st = &sites[i];
         let kind = if s.kind == SeedKind::Type { "type" } else { "func" };
         format!(
-            "{{\"name\":\"{}\",\"kind\":\"{}\",\"region_owners\":{},\"unsafe_blocks\":{},\"unsafe_block_code_lines\":{},\"wrapper_macro\":{},\"wrapper_handwritten\":{},\"raw_ptr_derefs\":{},\"field_proj\":{},\"field_proj_outside_impl\":{},\"mut_borrow_wrapper\":{},\"void_ptr_smell\":{},\"naked\":{},\"naked_sites\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{}}}",
-            s.name, kind, region_owners[i], m.unsafe_blocks, m.unsafe_block_code_lines,
+            "{{\"name\":\"{}\",\"c_name\":\"{}\",\"kind\":\"{}\",\"region_owners\":{},\"unsafe_blocks\":{},\"unsafe_block_code_lines\":{},\"wrapper_macro\":{},\"wrapper_handwritten\":{},\"raw_ptr_derefs\":{},\"field_proj\":{},\"field_proj_outside_impl\":{},\"mut_borrow_wrapper\":{},\"void_ptr_smell\":{},\"naked\":{},\"naked_sites\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{}}}",
+            s.name, s.c_name, kind, region_owners[i], m.unsafe_blocks, m.unsafe_block_code_lines,
             m.wrapper_impl_macro, m.wrapper_impl_handwritten, m.raw_ptr_derefs,
             m.field_proj_wrapped, m.field_proj_outside_impl, m.mut_borrow_wrapper,
             m.void_ptr_smell, naked[i],
@@ -812,7 +836,7 @@ impl Callbacks for MetricsCallbacks {
                         ExpnKind::Macro(_, s) => s.to_string(),
                         k => format!("{k:?}"),
                     };
-                    if is_define_type_wrapper(tcx, did) {
+                    if is_wrapper(tcx, did) {
                         nw += 1;
                     }
                     if shown < 10 {
@@ -823,23 +847,9 @@ impl Callbacks for MetricsCallbacks {
             }
             eprintln!("CRATE structs={ns} detected_wrappers={nw}");
         }
-        // Set of C types that have a `define_type!` wrapper (a safe wrapper
+        // Set of C types that have a wrapper (a safe wrapper
         // exists). Each wrapper `struct W(CType<C>)` contributes its `C`.
-        let mut wrapped_c: HashSet<DefId> = HashSet::new();
-        for ld in tcx.hir_crate_items(()).definitions() {
-            let did = ld.to_def_id();
-            if is_define_type_wrapper(tcx, did) {
-                if let Some(field) = tcx.adt_def(did).all_fields().next() {
-                    if let ty::TyKind::Adt(_, args) = tcx.type_of(field.did).skip_binder().kind() {
-                        if let Some(c0) = args.types().next() {
-                            if let ty::TyKind::Adt(cdef, _) = c0.kind() {
-                                wrapped_c.insert(cdef.did());
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let wrapped_c: HashSet<DefId> = with_wrappers(tcx, |m| m.values().copied().collect());
 
         let mut c = Counts::default();
         let mut sites = Sites::default();
