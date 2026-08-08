@@ -418,10 +418,14 @@ def main() -> None:
     )
 
     # -- wrap ------------------------------------------------------------
+    # `wrap` stays as an alias: it is the stage's name in every session log,
+    # worktree and branch on disk, and in the skills and docs that drive it.
+    # Note the SCOPE keeps its own name — `--wrap-only` and wrap-scope are the
+    # port/wrap dichotomy in scope.json, not this stage.
     wrap_p = sub.add_parser(
-        "wrap",
+        "translate", aliases=["wrap"],
         help=(
-            "Wrap stage: emit Rust wrappers for the selected wrap-scope "
+            "Translate stage: emit Rust wrappers for the selected wrap-scope "
             "units (types AND free symbols) in dependency-layer order. "
             "Select with --name. One unified scheduler dispatches each unit "
             "to its wrapper (type / symbol); no subject split. Requires the "
@@ -541,7 +545,7 @@ def main() -> None:
         _handle_bindgen(args, target)
 
 
-    elif args.command == "wrap":
+    elif args.command in ("translate", "wrap"):
         _handle_wrap(args, target)
 
     elif args.command == "port":

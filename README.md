@@ -126,7 +126,7 @@ inference, codegen, merge). Artifacts for a repo live under
 
 ```
 (manual: toolchains, build.json, project build, CodeQL db)
-  -> analyze -> scaffold -> bindgen -> wrap -> port
+  -> analyze -> scaffold -> bindgen -> translate -> port
           query / audit  (read-only, anytime)
 ```
 
@@ -139,7 +139,7 @@ crustify picks up at `analyze extract-ql`.
 | **analyze** | the whole stage: `extract-ql`, `scope`, `types`/`symbols` skeletons + full dependency graph, `dag` | - (the schemas' judgement fields are submitted by the wrap agents) |
 | **scaffold** | `crates.json` -> `.rs` placement (query / create / validate) | - (`crates.json` is authored outside the stage; a lookup miss is a hard error) |
 | **bindgen** | `<lib>-sys` crate skeletons, allowlists, include closure | - (the `fn main`, clang args and shims are completed by hand) |
-| **wrap** | DAG-layered scheduler: scope filter, per-file/per-dep batching, budget slicing, per-wave isolation | per-unit wrapper agents (type / string / array / symbol); per-wave merge agent |
+| **translate** (alias `wrap`) | DAG-layered scheduler: scope filter, per-file/per-dep batching, budget slicing, per-wave isolation | per-unit wrapper agents (type / string / array / symbol); per-wave merge agent |
 | **port** | not implemented | - |
 | **query / audit** | graph walks, record reads, surface counts | - (fully deterministic) |
 

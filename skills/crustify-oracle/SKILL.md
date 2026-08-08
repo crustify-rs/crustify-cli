@@ -106,4 +106,4 @@ really necessary.
   `used_by` are codebase-wide whatever its scope, so a wrap-scope node's
   `depends_on.syms` is populated and safe to walk.
 
-- **Enumerate into a stage:** `query types --wrap-only | xargs … wrap --name`.
+- **Enumerate into a stage:** `query types --wrap-only | xargs … translate --name`.
