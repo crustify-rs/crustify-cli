@@ -42,7 +42,7 @@ class CrustifyWrap(CrustifyAgent):
     """Emit safe Rust wrapper(s) for one scheduled wrap batch (type or syms)."""
 
     name = "CrustifyWrap"
-    model = "anthropic/claude-opus-4-8"
+    model = "anthropic/claude-opus-5"
     output = None  # scheduler gates via the per-item todo; agent runs when called.
 
     def __init__(
