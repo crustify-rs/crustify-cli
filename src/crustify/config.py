@@ -32,10 +32,8 @@ dirs never collide and clobber each other's ``<stage>.log``.
 # the free-symbol pool is budgeted.
 
 WRAP_MAX_SYMS: int = 50
-"""Per-batch symbol budget for the wrap stage — wired as the scheduler's
-``max_syms``. It bounds BOTH a type's op-chunking (its lifecycle ops --
-droppers / disposers / cloners -- counted together, lifecycle-first so the
-shape-bearing surface is never dropped) AND the free-symbol pooling per file
+"""Per-batch unit budget for the translate stage — wired as the scheduler's
+``max_syms``. It bounds BOTH the type pool and the free-symbol pooling per file
 (how many wrap-scope free syms ride one ``wrap syms`` agent). Was
 ``WRAP_MAX_OPS`` — renamed to reflect its true dual role now that op sets are
 small."""

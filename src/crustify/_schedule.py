@@ -142,13 +142,17 @@ class Unit:
 def form_units(
     nodes: list[Node],
     by_key: dict[SymKey, Node],
-    in_scope: Callable[[Node], bool],
     type_meta: dict[str, tuple[list[str], set[str]]] | None = None,
 ) -> list[Unit]:
-    """Type → type-unit (type + its **in-scope** ops + field names); non-type →
-    atomic unit. Ops are scope-filtered so wrap and port partition a type's ops,
-    and ordered **lifecycle-first** (droppers/disposers/cloners) so the
-    shape-bearing surface always lands in the first, type-def-bearing batch.
+    """Type → type-unit (type + field names); non-type → atomic unit.
+
+    A type no longer absorbs its ops. The fold pulled a type's lifecycle
+    symbols out of the WHOLE dag rather than the selection, so naming a type
+    dragged in work nobody asked for, and it only worked once a `lifetime`
+    record existed — empty exactly when a first wave needed it. Ops are plain
+    symbol units now: selected on their own, packed with the other symbols, and
+    the type agent still binds its Drop/Clone from the record, which is where it
+    read them from all along.
 
     A **callback** (a function-pointer typedef, `subkind == "callback"`) is a
     `node_kind == "symbol"` node in the dag, so it falls through to the
@@ -170,9 +174,8 @@ def form_units(
     units: list[Unit] = []
     for n in nodes:
         if n.node_kind == "type" or is_generator(n):
-            fields, lifecycle = type_meta.get(n.id, ([], set()))
-            ops = ordered_ops(n, by_key, lifecycle, in_scope)
-            units.append(Unit("type", n, ops, list(fields)))
+            fields, _lifecycle = type_meta.get(n.id, ([], set()))
+            units.append(Unit("type", n, [], list(fields)))
         else:
             units.append(Unit("sym", n))
     return units
@@ -277,30 +280,16 @@ def pack(
     batches: list[Batch] = []
     pool: dict[str | None, list[Node]] = {}
 
+    # Types and symbols pool SEPARATELY — they route to different agents and
+    # different prompts, so a batch must be homogeneous — but neither gets a
+    # per-unit batch any more. A type unit is now just the type and its field
+    # names; with its ops gone there is nothing left to split, so the
+    # one-batch-per-type rule guarded a working set that no longer exists.
+    tpool: dict[str | None, list[Unit]] = {}
+
     for u in units:
         if u.kind == "type":
-            # ONE batch per type — never split by op or field count.
-            #
-            # A type is an indivisible working set: its `define_type!`, its
-            # Drop/Clone, and its accessors are one design decision, and only
-            # batch 0 ever carried the type def, so a split handed later batches
-            # accessors for a shape they could not see. It also put two agents in
-            # one `.rs` for a single type, which is the one case `per-agent`
-            # chaining cannot excuse.
-            #
-            # The budgets were sized when EVERY declared field carried an anchor
-            # (v1) — 41 fields on `evp_pkey_asn1_method_st`, 38 on
-            # `evp_signature_st`. Anchors are now narrowed to the PORT-TOUCHED
-            # subset, which tops out at 5 across this whole target, so the cap
-            # guarded a case that no longer exists. `max_syms` still bounds the
-            # free-symbol pool below; it just no longer touches types.
-            ops, fields = list(u.ops), list(u.fields)
-            b = Batch(file=u.file, units=[u],
-                      op_range=(0, len(ops)), field_range=(0, len(fields)))
-            b.members.append(u.node)
-            b.members.extend(ops)          # for confirm/labels (agent pulls names)
-            b.fields = fields
-            batches.append(b)
+            tpool.setdefault(u.file if syms_by_file else None, []).append(u)
         else:
             # `None` key = one global pool for the layer (the default): the
             # defining file is not a write boundary, so it must not bound a batch.
@@ -310,6 +299,16 @@ def pack(
     # when set, lines-of-code (Σ loc <= max_loc) — whichever cap is hit first
     # closes the batch. A single sym whose loc already exceeds max_loc still goes
     # in its own batch (we never split a function).
+    def _flush_types(fpath, chunk: list[Unit]):
+        b = Batch(file=fpath, units=list(chunk))
+        b.members = [u.node for u in chunk]
+        b.fields = [f for u in chunk for f in u.fields]
+        batches.append(b)
+
+    for fpath, tus in tpool.items():
+        for i in range(0, len(tus), max_syms):
+            _flush_types(fpath, tus[i:i + max_syms])
+
     def _flush(fpath, chunk):
         b = Batch(file=fpath, units=[Unit("sym", s) for s in chunk])
         b.members = list(chunk)
@@ -412,11 +411,6 @@ class Stage:
     # `max_loc` is the PORT lines-of-code budget that binds together with
     # `max_syms` on the free-symbol pool (None = no LoC cap, e.g. for wrap).
     max_loc: int | None = None
-    # OP-FACADING predicate — which of a type's ops THIS stage owns. Decoupled
-    # from `in_scope` so wrap can select types scope-blind yet facade only
-    # wrap-scope ops (port-scope ops go to the port stage), and port windows
-    # only port-scope ops. Defaults to `in_scope` when unset.
-    op_in_scope: Callable[[Node], bool] | None = None
     shared_artifact_fn: Callable[[], None] | None = None  # serialized post-step
     # Worktree-isolation seam. When wired, EVERY agent runs in its own worktree,
     # serial or parallel alike: isolation is what makes an agent's scoped
@@ -694,9 +688,7 @@ def schedule(
 
     bare_gate(nodes)
     type_meta = load_type_meta(entry_pair)
-    # Type selection uses `in_scope`; op-facading uses `op_in_scope` (a type may
-    # be selected scope-blind yet only own its same-stage ops).
-    units = form_units(nodes, by_key, stage.op_in_scope or stage.in_scope, type_meta)
+    units = form_units(nodes, by_key, type_meta)
     # ---- Dependency-layer scheduling --------------------------------------
     # Partition the selected units by their dag layer and run ascending: same
     # layer runs as one wave (batched per home .rs + effort budget, one worktree

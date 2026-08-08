@@ -70,54 +70,6 @@ def _lifetime_by_sym(layout: "Layout") -> dict:
             if r.get("lifetime")}
 
 
-def _reject_lifetime_primitives(layout: "Layout", target: Path, sel_nodes) -> None:
-    """Refuse a SYMBOL selection that names a lifecycle primitive.
-
-    A symbol carrying a `lifetime` block in syms.json drops, disposes or clones
-    some subject, and its Rust form is a STRATEGY (the ZST a `CBox` / `CVec` /
-    `CrustifyStr` selects its `CDropped` / `CCloned` on) — not the free-standing
-    safe `fn` the symbol wrapper emits. Wrapping it here would produce a second,
-    unrelated surface for one C routine, with nothing downstream to notice: the
-    anchors differ, the files may differ, and `audit` does not look for it.
-
-    The two legitimate routes both exist already, and this points at them.
-    `--lifetime-for void|string` owns the untyped tiers; a typed cluster's
-    droppers/cloners are bound by its TYPE wrapper, from the type's own record.
-    Types are unaffected — the gate is symbol-only.
-    """
-    lf = _lifetime_by_sym(layout)
-    if not lf:
-        return
-    hits = []
-    for n in sel_nodes:
-        if n.node_kind != "symbol":
-            continue
-        blk = lf.get((n.id, n.defined_in))
-        if blk is None:                      # same name, another TU
-            blk = next((v for (nm, _f), v in lf.items() if nm == n.id), None)
-        if blk:
-            hits.append((n.id, blk))
-    if not hits:
-        return
-    def _role(b: dict) -> str:
-        r = [k[3:] for k in ("is_dropper", "is_disposer") if b.get(k)]
-        if b.get("is_cloner"):
-            r.append("cloner")
-        return "/".join(r) or "lifecycle"
-    listing = "\n".join(
-        f"  - {i} ({_role(b)} on `{b.get('for')}`)" for i, b in sorted(hits))
-    raise SystemExit(
-        f"wrap: {len(hits)} selected symbol"
-        f"{'' if len(hits) == 1 else 's'} carr"
-        f"{'ies' if len(hits) == 1 else 'y'} a `lifetime` block — "
-        f"{'it is a' if len(hits) == 1 else 'these are'} lifecycle "
-        f"primitive{'' if len(hits) == 1 else 's'}, wrapped as a STRATEGY, not "
-        f"as a free function:\n{listing}\n"
-        f"  Untyped tiers: `crustify-cli {target} wrap --lifetime-for void|string`.\n"
-        f"  A typed cluster's droppers/cloners are bound by its type wrapper: "
-        f"`crustify-cli {target} wrap --name <tag>`.")
-
-
 def _check_bindgen(layout: "Layout", target: Path, linked: set[str]) -> None:
     """Ensure each library a job binds has a scaffolded ``<lib>-sys`` crate.
 
@@ -191,13 +143,14 @@ def _wrap_emit(
     def emit(batch) -> None:  # batch: _schedule.Batch
         type_units = [u for u in batch.units if u.kind == "type"]
         if type_units:
-            # type-pull: the tag plus its full field-accessor set; the agent
-            # pulls lifecycle and the cast graph from the record itself. One
-            # type per batch (`_schedule.pack`), never split.
-            u = type_units[0]
+            # type-pull: the batch's tags plus their field-accessor sets; the
+            # agent pulls lifecycle and the cast graph from each record itself.
+            # A batch may carry several types now that a type no longer absorbs
+            # its ops (`_schedule.pack`); `types.md` is written for a target SET.
             CrustifyWrap(
                 target, batch_kind="type",
-                tags=[u.node.id], kinds=[u.node.subkind],
+                tags=[u.node.id for u in type_units],
+                kinds=[u.node.subkind for u in type_units],
                 repo_root=layout.repo_root,
             ).run()
             return
@@ -449,10 +402,6 @@ def wrap_types(
         scope_json, wrap_only=wrap_only, port_only=port_only,
         files=set(files or []))
 
-    # Op-facading is wrap-scope ONLY — a type's port-scope ops are the port
-    # stage's (it translates their bodies), so wrap must not facade them.
-    _wrap_op = scope.in_scope_pred(scope_json, "wrap")
-
     sel_names = list(names or [])
     if dag_layer is not None:
         # e2e driver mode: EVERY in-scope unit at dag layer N — types (any
@@ -468,21 +417,17 @@ def wrap_types(
         # tiers too (`CRYPTO_free` acts on `void`, so it belongs to no type's
         # method surface and the fold never held it).
         #
-        # Skipped rather than refused: `--name`ing a primitive is a mistake and
-        # `_reject_lifetime_primitives` says so, but a layer slice is a bulk
-        # selector — one primitive in the layer must not sink the whole wave.
         # `base_in_scope`, not the bare eligibility predicate: it carries the
         # `--wrap-only` / `--port-only` / `--file` narrowing. Selecting on
         # eligibility alone picked up port-scope TYPES (eligible, since every
         # type is wrapped) that the scope gate below then refused under
         # `--wrap-only` — 60 of them at ssl layer 1 — so the flag turned a
         # slice into a hard error instead of narrowing it.
-        _prim = {nm for (nm, _f) in _lifetime_by_sym(layout)}
         sel_names += sorted({
             n.id for n in by_key.values()
             if n.layer == dag_layer and base_in_scope(n)
             and not (n.node_kind == "symbol"
-                     and ((n.subkind or "").startswith("macro") or n.id in _prim))})
+                     and (n.subkind or "").startswith("macro"))})
     if transitive:
         _before = len(sel_names)
         sel_names = _closure_names(sel_names, by_key, by_name, base_in_scope)
@@ -563,7 +508,6 @@ def wrap_types(
     # owning library is its crate in crates.json (crate name == link unit);
     # a unit not placed there contributes nothing (skipped).
     sel_nodes, _ = S.resolve_names(sel_names, by_key, by_name, in_scope)
-    _reject_lifetime_primitives(layout, target, sel_nodes)
     from crustify import crates as _crates
     _doc = _crates.load(layout)
 
@@ -579,7 +523,7 @@ def wrap_types(
     emit_factory = None if emit_fn else (
         lambda t, l: _wrap_emit(t, l, max_syms=max_syms))
     stage = S.Stage(
-        verb="wrap", in_scope=in_scope, op_in_scope=_wrap_op,
+        verb="wrap", in_scope=in_scope,
         emit_fn=emit_fn or _wrap_emit(target, layout, max_syms=max_syms),
         max_syms=max_syms,
         emit_factory=emit_factory, target=target, layout=layout,
