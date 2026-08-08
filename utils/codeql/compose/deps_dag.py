@@ -317,7 +317,19 @@ def _collect(analysis_root: Path,
         if in_scope_types is not None and tag not in in_scope_types:
             continue
         n = types.setdefault(key, TypeNode(tag, df))
-        n.kind = n.kind or m["kind"]
+        # A node's kind is what the type IS, not how it was spelled. T1's `kind`
+        # column is the raw C form, so shape A (`typedef struct {…} T;`) reads
+        # `typedef` there while `unaliased_kind` carries the aggregate. The
+        # manifest this collection replaced reported the RESOLVED kind, and
+        # every consumer was written against that: `agents/wrap._PROMPT_BY_KIND`
+        # dispatches on `node.subkind` and accepts only struct/union/enum, so
+        # emitting the raw kind made 411 of 727 type nodes undispatchable -- a
+        # whole wave died with `unsupported manifest kind 'typedef'`. Resolve
+        # through `uak` so a node agrees with `query types --name`.
+        _k = m["kind"]
+        if _k == "typedef" and (m.get("uak") or "") in _AGGREGATE_UAK:
+            _k = m["uak"].split("_")[0]        # struct_anonymous -> struct
+        n.kind = n.kind or _k
         n.defined_in = n.defined_in or (df or None)
         n.declared_in = n.declared_in or _scope.canonical_decl(sorted(m["decls"])) if m["decls"] else n.declared_in
         # A wrap struct only orders work through the fields the port scope
