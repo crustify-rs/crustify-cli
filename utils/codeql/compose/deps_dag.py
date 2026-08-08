@@ -279,7 +279,7 @@ def _collect(analysis_root: Path,
              port_syms: set | None = None,
              port_fields: dict[str, set[str]] | None = None,
              codeql_dir: Path | None = None,
-             in_scope_types: set[str] | None = None):
+             in_scope_types: set | None = None):
     """Collect nodes/edges from the analysis tree, narrowed to one target.
 
     The tree is scope-agnostic and ACCUMULATES across targets: an entry that
@@ -314,7 +314,8 @@ def _collect(analysis_root: Path,
         # The CSVs carry every type in the DB; the graph is per TARGET. Keep the
         # scope's types only — reading the analysis tree used to narrow this
         # implicitly, since the composer only ever emitted in-scope entries.
-        if in_scope_types is not None and tag not in in_scope_types:
+        if in_scope_types is not None and not (
+                (tag, df) in in_scope_types or tag in in_scope_types):
             continue
         n = types.setdefault(key, TypeNode(tag, df))
         # A node's kind is what the type IS, not how it was spelled. T1's `kind`
@@ -982,8 +983,22 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
     if scope_json is not None and (isinstance(scope_json, dict)
                                    or Path(scope_json).is_file()):
         _sj = _scope._doc(scope_json)
-        in_scope_types = {e["name"] for side in ("port", "wrap")
-                          for e in _sj.get(side, {}).get("types") or []}
+        # Pair-keyed where the scope knows the defining file, name-keyed where
+        # it does not. Nodes are keyed `(tag, def_file)`, so a bare-name filter
+        # admits an out-of-scope type whenever ANY in-scope type shares its
+        # name -- `entry` (libgit2) rode in from deps/xdiff on the unrelated
+        # `entry` in indexer.c, and `ring_buf` (openssl) from bss_dgram_pair.c.
+        # Such a node has no record behind it, so it contributes nothing but a
+        # spurious `--file` prompt on a name with one real meaning.
+        #
+        # A declared-only type (opaque handle, ~1/3 of the scope) has no
+        # `defined_in` to pair with, so it stays name-keyed and the membership
+        # test accepts either form.
+        in_scope_types = set()
+        for side in ("port", "wrap"):
+            for e in _sj.get(side, {}).get("types") or []:
+                df = e.get("defined_in")
+                in_scope_types.add((e["name"], df) if df else e["name"])
     if codeql_dir is None:
         codeql_dir = Path(analysis_root).parent / "codeql"
     types, syms, talias = _collect(analysis_root, port_syms, port_fields,

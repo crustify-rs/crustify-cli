@@ -85,9 +85,11 @@ really necessary.
   only that scope's fields.
 
 - **`--file` disambiguates, and is required when a name is ambiguous.** A tag
-  can name two unrelated structs (`ring_buf` is one in
-  `include/internal/ring_buf.h` and another in `crypto/bio/bss_dgram_pair.c`);
-  the oracle refuses and prints the `--file` for each candidate.
+  can name two unrelated structs BOTH in this target's scope
+  (`ossl_record_layer_st` is one in `ssl/record/methods/recmethod_local.h` and
+  another in `ssl/quic/quic_tls.c`); the oracle refuses and prints the `--file`
+  for each candidate. A name shared with a type OUTSIDE the scope is not
+  ambiguous and resolves without `--file`.
 
 - **Submit through `--update`, never by editing a file.**
 

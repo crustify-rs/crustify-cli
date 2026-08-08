@@ -18,7 +18,7 @@ from pathlib import Path
 
 #: Bump when a composer's OUTPUT changes for unchanged inputs.
 #:  1 — pair-keyed type nodes; `deps.types` carries `defined_in`.
-_VERSION = 1
+_VERSION = 2
 
 
 def fingerprint(layout, target) -> dict:
