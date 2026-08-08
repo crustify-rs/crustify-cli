@@ -79,8 +79,10 @@ from typing import Any
 
 try:                                  # package import (analyze.py)
     from . import scope as _scope
+    from . import macro_families as _mf
 except ImportError:                   # script execution (python3 deps_dag.py)
     import scope as _scope            # type: ignore
+    import macro_families as _mf      # type: ignore
 
 
 def _canonical_decl(declared_in: Any) -> str | None:
@@ -109,7 +111,7 @@ def _sym_filekey(defined_in: Any, declared_in: Any) -> str | None:
 class TypeNode:
     __slots__ = ("tag", "def_file", "kind", "defined_in", "declared_in",
                  "ctype_refs", "dep_types", "dep_syms",
-                 "cast_to", "cast_from", "nfields")
+                 "cast_to", "cast_from", "nfields", "generated_by")
 
     def __init__(self, tag: str, def_file: str = "") -> None:
         self.tag = tag
@@ -123,6 +125,7 @@ class TypeNode:
         self.cast_to: set[str] = set()      # casted.to tags (this -> T)
         self.cast_from: set[str] = set()    # casted.from tags (T -> this)
         self.nfields: int = 0               # full struct field count (its port LoC)
+        self.generated_by: str | None = None  # the macro that minted it, if any
 
     def cast_degree(self) -> int:
         """Cast-graph centrality: how many distinct types this one is cast
@@ -305,8 +308,8 @@ def _collect(analysis_root: Path,
     types: dict[str, TypeNode] = {}
     syms: dict[SymKey, SymNode] = {}
 
-    tmeta, tedges, tcasts, talias = (collect_types_csv(codeql_dir) if codeql_dir
-                                     else ({}, {}, {}, {}))
+    tmeta, tedges, tcasts, talias, tgen = (collect_types_csv(codeql_dir) if codeql_dir
+                                     else ({}, {}, {}, {}, {}))
     for key, m in tmeta.items():
         tag, df = key
         if tag.startswith("(unnamed"):
@@ -331,6 +334,7 @@ def _collect(analysis_root: Path,
         if _k == "typedef" and (m.get("uak") or "") in _AGGREGATE_UAK:
             _k = m["uak"].split("_")[0]        # struct_anonymous -> struct
         n.kind = n.kind or _k
+        n.generated_by = n.generated_by or tgen.get(key)
         n.defined_in = n.defined_in or (df or None)
         n.declared_in = n.declared_in or _scope.canonical_decl(sorted(m["decls"])) if m["decls"] else n.declared_in
         # A wrap struct only orders work through the fields the port scope
@@ -427,7 +431,9 @@ def collect_types_csv(codeql_dir: Path):
     meta: dict[TypeKey, dict] = {}
     alias: dict[str, str] = {}          # typedef name -> underlying tag
     floating: dict[str, list] = collections.defaultdict(list)
-    for r in _scope.load_csv(t1 / "types.csv"):
+    _fams = _mf.load(codeql_dir)
+    _gen_of = _mf.generated_by(_fams)          # (tag, def_file) -> macro
+    for r in _scope.load_csv(t1 / "types.csv") + _mf.synthetic_type_rows(_fams):
         n, df = r.get("name"), r.get("def_file") or ""
         if not n:
             continue
@@ -476,7 +482,7 @@ def collect_types_csv(codeql_dir: Path):
             continue
         edges[(sn, r.get("struct_def_file") or "")].append(
             (r.get("field_name") or "", tn, r.get("type_def_file") or ""))
-    return meta, dict(edges), dict(casts), alias
+    return meta, dict(edges), dict(casts), alias, _gen_of
 
 
 def _fold_type_row(m: dict, decls, kind: str, uak: str) -> None:
@@ -664,6 +670,19 @@ def _build_edges(types, syms, amap):
         # low-degree instance/derived UP to the high-degree engine/base it
         # depends on — never the reverse — and the strict `>` keeps it acyclic
         # (edges run low-degree → high-degree only, so no cast cycle can form).
+        # Macro-generator ordering edge. Unlike `casted` below, this relation
+        # is DIRECTED at the source: an instance always depends on the macro
+        # that minted it (the generic must exist before its aliases), so there
+        # is no centrality heuristic and no `>` guard to invert when an
+        # instance carries genuine casts of its own. The >= 2 threshold lives
+        # in `macro_families.load`, so a one-off macro mints no node and
+        # produces no edge here.
+        if n.generated_by:
+            g = next((k for k in types if k[0] == n.generated_by), None)
+            if g is not None and g != key:
+                n.dep_types.add(g)
+                wedge[(key, g)] += 1
+
         my_deg = n.cast_degree()
         for t in (amap.get(x) for x in n.cast_to):
             tn = types.get(t) if t else None

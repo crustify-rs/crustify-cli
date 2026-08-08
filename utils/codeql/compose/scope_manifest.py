@@ -30,8 +30,10 @@ from pathlib import Path
 
 try:  # package import (compose.scope_manifest) — the normal path
     from . import scope as _scope
+    from . import macro_families as _mf
 except ImportError:  # script invocation fallback (python scope_manifest.py)
     import scope as _scope  # type: ignore
+    import macro_families as _mf  # type: ignore
 
 _SOURCE_EXTS = {".c", ".cc", ".cpp"}
 _HEADER_EXTS = {".h", ".hpp"}
@@ -152,6 +154,12 @@ def _port_entities(t1_dir: Path, candidate_files: set[str]) -> dict[str, list[di
     globs = _scope.load_csv(t1_dir / "globals.csv")
     macros = _scope.load_csv(t1_dir / "macros.csv")
     types_rows = _scope.load_csv(t1_dir / "types.csv")
+    # A macro-minted family's synthetic generator is a first-class type here:
+    # scope membership is what makes it SCHEDULABLE, and a tag absent from
+    # scope.json is in neither section -- exactly the state that made the
+    # gate-missed callbacks unwrappable. Its scope is the macro's own file, so
+    # a libgit2 generator lands in port scope and a PCRE2 / OpenSSL one in wrap.
+    types_rows = types_rows + _mf.synthetic_type_rows(_mf.load(t1_dir.parent))
     by_name = _scope.build_types_index(types_rows)
 
     def _cls(r: dict) -> bool:

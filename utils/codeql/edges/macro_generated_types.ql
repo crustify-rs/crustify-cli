@@ -45,18 +45,6 @@ import cpp
 import identity
 
 /**
- * The outermost invocation of `mi`'s expansion chain: the macro actually
- * written at the source site. `GIT_HASHMAP_STR_STRUCT` expands to
- * `GIT_HASHMAP_STRUCT` expands to `GIT_HASHMAP_STRUCT_MEMBERS`; all three
- * report the same line, and only the first is the family's name.
- */
-MacroInvocation outermostOf(MacroInvocation mi) {
-  if exists(mi.getParentInvocation())
-  then result = outermostOf(mi.getParentInvocation())
-  else result = mi
-}
-
-/**
  * `t`'s whole definition came out of this invocation.
  *
  * NOT `mi.getAnExpandedElement()`: the extractor records no macro provenance
@@ -74,23 +62,45 @@ MacroInvocation outermostOf(MacroInvocation mi) {
  * instance.
  */
 predicate mintedBy(UserType t, MacroInvocation mi) {
-  exists(TypeDeclarationEntry tde, Location d, Location m |
-    tde = t.getDefinition() and d = tde.getLocation() and m = mi.getLocation() and
-    d.getFile() = m.getFile() and
-    (d.getStartLine() > m.getStartLine()
-     or (d.getStartLine() = m.getStartLine() and d.getStartColumn() >= m.getStartColumn())) and
-    (d.getEndLine() < m.getEndLine()
-     or (d.getEndLine() = m.getEndLine() and d.getEndColumn() <= m.getEndColumn()))
+  exists(TypeDeclarationEntry tde |
+    tde = t.getDefinition() and
+    tde.getLocation().getFile() = mi.getLocation().getFile() and
+    tde.getLocation().getStartLine() = mi.getLocation().getStartLine()
   )
 }
 
-from UserType t, MacroInvocation outer, string name
+// Line equality, not span containment. The two were measured byte-identical
+// here (51 rows, same set) once `declaresAggregate` does the disambiguation,
+// so the containment arithmetic bought nothing and this is the simpler form.
+
+/**
+ * `m`'s body declares an aggregate — it contains a `struct`/`union`/`enum`
+ * followed by a brace. This is read off the macro's own DEFINITION, not its
+ * name: it asks "does this macro emit a type?", which is exactly what makes a
+ * macro a generator.
+ *
+ * It is what separates the minting invocation from the rest of its chain when
+ * location cannot. At a `_SETUP` site the chain BRANCHES —
+ * `_SETUP -> {_STRUCT -> _STRUCT_MEMBERS, _FUNCTIONS -> GIT_ASSERT, NULL, …}` —
+ * and every node shares one source span, so a purely locational innermost walk
+ * descends into both branches and makes `NULL` and `bool` generators. Of that
+ * whole chain only `GIT_HASHMAP_STRUCT` carries `typedef struct {`:
+ * `_STRUCT_MEMBERS` is a bare member list, `_SETUP` and `_FUNCTIONS` delegate.
+ *
+ * Bare `struct { … }` counts too, so `git_array_t(type)` — an anonymous
+ * aggregate with no typedef — is recognised alongside the typedef'd families.
+ */
+predicate declaresAggregate(Macro m) {
+  m.getBody().regexpMatch("(?s).*\\b(struct|union|enum)\\b[^;{]*\\{.*")
+}
+
+from UserType t, MacroInvocation mi, string name
 where
-  mintedBy(t, outer) and
-  not exists(outer.getParentInvocation()) and
+  mintedBy(t, mi) and
+  declaresAggregate(mi.getMacro()) and
   name = canonicalTypeName(t) and
   not isAnonNamed(name)
 select name as type_name,
        defFileOf(t) as type_def_file,
-       outer.getMacro().getName() as generator_macro,
-       pathOf(outer.getMacro().getLocation().getFile()) as generator_def_file
+       mi.getMacro().getName() as generator_macro,
+       pathOf(mi.getMacro().getLocation().getFile()) as generator_def_file
