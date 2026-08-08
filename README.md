@@ -100,7 +100,7 @@ Supported billing: subscription-based and API (BYOK)
 Crustify ships the following CLI suite that can be driven by LLM agents and humans alike.
 We recommend using the orchestrator shipped by Crustify for full automation.
 
-- `crustify-oracle` answers questions about the codebase with the following commands:
+- `crustify-oracle` answers static questions about the codebase with the following commands:
   - `extract-ql`
   - `query` with the following subcommands:
     - `types`
