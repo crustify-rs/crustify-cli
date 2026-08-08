@@ -605,6 +605,26 @@ def compose_wrap(
         _df = _fam["def_file"]
         if not _df or (_macro, _df) in sym_items:
             continue
+        # Relevance, not a member COUNT: admit a generator only when this target
+        # actually reaches one of its instances. A count threshold is a function
+        # of the extracted build (`entry_short` mints two types in source, one
+        # here, because the SHA256 pair is behind an #ifdef), whereas "does the
+        # closure contain a member" is a fact about this target. Without it,
+        # dropping the count let PCRE2_STRUCTURE_LIST and DEFINE_LHASH_OF_INTERNAL
+        # in with zero reachable members.
+        # Relevance spans BOTH scopes: `type_items` is the wrap closure's own
+        # set, and every khash instance is port-scope, so testing against it
+        # alone rejected all 25. A member counts as reached when it is a known
+        # type defined inside this target's port files, or already in the wrap
+        # closure. `classify` is NOT the test -- it would call any system header
+        # "wrap" whether or not this target reaches it, readmitting PCRE2 and
+        # LHASH with zero reachable members.
+        _reached = any(
+            (tag, df) in type_items
+            or df in port_paths
+            for tag, df in _fam["members"])
+        if not _reached:
+            continue
         for port_path in port_paths:
             if _df in closure(port_path):
                 rec = sym_items.setdefault((_macro, _df), {

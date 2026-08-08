@@ -357,6 +357,12 @@ def _materialize(layout, entries: list[dict],
                  scope_map: dict[str, str] | None = None,
                  field_map: dict[str, list[str]] | None = None) -> str:
     scope_map = scope_map or {}
+    # Template generators: the one macro kind that carries an anchor.
+    try:
+        from compose import macro_families as _mf
+        generators = set(_mf.load(layout.codeql))
+    except Exception:
+        generators = set()
     field_map = field_map or {}
     created = updated = preserved = links = 0
     for e in entries:
@@ -365,9 +371,9 @@ def _materialize(layout, entries: list[dict],
         rs_path = crate_dir / rs
         if not rs_path.exists():
             rs_path.parent.mkdir(parents=True, exist_ok=True)
-            rs_path.write_text(_stub(e, scope_map, field_map))
+            rs_path.write_text(_stub(e, scope_map, field_map, generators))
             created += 1
-        elif _merge_anchors(rs_path, e, scope_map, field_map):
+        elif _merge_anchors(rs_path, e, scope_map, field_map, generators):
             # File already there but newly-homed members lack an anchor —
             # `--create` is additive/idempotent (the
             # docstring contract), so add the missing ones rather than leaving
@@ -482,10 +488,11 @@ def _ensure_workspace_lints(ws_toml: Path) -> None:
 
 def _merge_anchors(rs_path: Path, e: dict,
                    scope_map: dict[str, str] | None = None,
-                   field_map: dict[str, list[str]] | None = None) -> int:
+                   field_map: dict[str, list[str]] | None = None,
+                   generators: set[str] | None = None) -> int:
     """Add anchors missing from the existing managed `.rs`: for each member, its
     item anchor by scope (`// Wraps:` wrap / `// Replaces:` port) + todo (macros
-    are never anchored), plus a type's `// Field:` accessor anchors. Idempotent
+    are anchored only when they are template generators), plus a type's `// Field:` accessor anchors. Idempotent
     (skips anchors already present, filled `///` or not). Returns the number of
     anchors added."""
     scope_map = scope_map or {}
@@ -493,8 +500,11 @@ def _merge_anchors(rs_path: Path, e: dict,
     text = rs_path.read_text()
     added = 0
     new: list[str] = []
-    for kind in ("types", "functions", "callbacks", "globals"):
+    for kind in ("types", "functions", "callbacks", "globals", "macros"):
         for nm in e["members"].get(kind) or []:
+            # Only a template generator among macros — see `_stub`.
+            if kind == "macros" and nm not in (generators or set()):
+                continue
             # Verb-agnostic match (won't duplicate a fresh-composed anchor of
             # either verb).
             if not re.search(
@@ -559,13 +569,18 @@ def _has_field_anchor(text: str, tag: str, fld: str) -> bool:
 
 
 def _stub(e: dict, scope_map: dict[str, str] | None = None,
-          field_map: dict[str, list[str]] | None = None) -> str:
+          field_map: dict[str, list[str]] | None = None,
+          generators: set[str] | None = None) -> str:
     # Each member is laid as an item anchor whose verb is its scope — `// Wraps:`
     # for a wrap-scope item, `// Replaces:` for a port-scope one (a native Rust
     # item: type / function / global) — followed by a `crustify:todo` placeholder.
     # Macros are NOT anchored: bindgen owns their `ffi::` bindings /
     # `crustify_<NAME>` shims and the C `#define` stays, so the port/wrap stages
-    # never fill a macro. A type additionally gets one `// Field: <name>` accessor
+    # never fill a macro -- with one exception. A TEMPLATE GENERATOR expands to a
+    # whole aggregate, and the generic its instances alias is Rust this stage
+    # writes, so it gets an anchor like any other item. `generators` is the set
+    # `compose.macro_families` recognises; the same carve-out exists in
+    # `wrap._is_macro` and in the wrap closure's admission gate. A type additionally gets one `// Field: <name>` accessor
     # anchor per field, laid right after the item anchor so it binds to it as
     # the owner. The wrap/port AGENT locates each by its anchor,
     # fills it, and promotes `//` -> `///` while dropping the todo. This is the
@@ -574,6 +589,7 @@ def _stub(e: dict, scope_map: dict[str, str] | None = None,
     # scheduler.
     scope_map = scope_map or {}
     field_map = field_map or {}
+    generators = generators or set()
     src = e.get("tu") or (
         "(no TU — placed by headers: "
         + ", ".join(e.get("headers") or ["?"]) + ")")
@@ -584,8 +600,10 @@ def _stub(e: dict, scope_map: dict[str, str] | None = None,
              ""]
     m = e["members"]
     any_member = False
-    for kind in ("types", "functions", "callbacks", "globals"):
+    for kind in ("types", "functions", "callbacks", "globals", "macros"):
         for nm in m.get(kind) or []:
+            if kind == "macros" and nm not in generators:
+                continue
             verb = "Wraps" if scope_map.get(nm) == "wrap" else "Replaces"
             lines += [f"// {verb}: {nm}", _TODO, ""]
             if kind == "types":
