@@ -15,28 +15,36 @@
 //! prints the metrics as JSON in `after_analysis`. See `run.sh`.
 #![feature(rustc_private)]
 
+extern crate rustc_abi;
 extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_span;
 
+use rustc_abi::ExternAbi;
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
 use rustc_hir::intravisit::{self, Visitor};
+use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::ty::{self, Ty, TyCtxt, TypeckResults};
 use rustc_span::def_id::DefId;
 use rustc_span::hygiene::{ExpnKind, MacroKind};
 use rustc_span::Span;
 use std::collections::{HashMap, HashSet};
 
-/// FFI-seam conversion routines (audit `_SEAM_FN_NAMES`): raw pointers in
-/// these signatures are the expected boundary, not a smell.
+/// FFI-seam conversion routines: raw pointers in these signatures are the
+/// expected boundary, not a smell. Mirrors `crustify-prim`'s seam surface
+/// (`c_type.rs`, `CCell` + the owning handles) plus the names the ported trees
+/// add for callback wrappers.
 const SEAM_FNS: &[&str] = &[
-    "as_ptr", "as_mut_ptr", "as_c_ptr", "as_raw", "as_buf_ptr",
-    "from_ptr", "from_ptr_mut", "from_raw",
-    "to_ptr", "to_raw", "into_raw",
+    // crustify-prim
+    "as_ptr", "as_mut_ptr", "as_void_ptr",
+    "from_ptr", "from_raw", "from_raw_parts", "from_raw_uninit",
+    "into_raw", "into_raw_parts", "into_raw_uninit",
+    // ported trees: safe callback wrapper -> raw C fn pointer
+    "to_raw",
 ];
 
 fn is_seam_fn(tcx: TyCtxt<'_>, did: DefId) -> bool {
@@ -163,18 +171,49 @@ fn impl_self_def(tcx: TyCtxt<'_>, impl_did: DefId) -> Option<DefId> {
     None
 }
 
-/// True if `did` is (transitively) inside a `mod ffi_export { .. }` — the
-/// sanctioned C-ABI re-export region (DISCIPLINE sec 1.4).
+/// True if `did` — or an enclosing item — is exported under a C symbol name:
+/// `#[unsafe(no_mangle)]` or an explicit symbol name (`#[export_name]`).
+///
+/// This is the port stage's re-export seam. A function carrying a C symbol name
+/// IS the C-ABI boundary — C callers reach it by that name — so raw and void
+/// pointers in its signature are sanctioned rather than a discipline smell.
+///
+/// Replaces an earlier `mod ffi_export` region check: that named a module
+/// convention neither ported tree uses, so the sanctioning branch was
+/// unreachable and every void pointer fell through to the smell bucket.
+/// Reading the codegen attrs also covers `#[export_name]`, which renames a
+/// symbol without `no_mangle` (`CodegenFnAttrs::symbol_name`).
 fn in_ffi_export(tcx: TyCtxt<'_>, mut did: DefId) -> bool {
-    while let Some(parent) = tcx.opt_parent(did) {
-        if matches!(tcx.def_kind(parent), DefKind::Mod)
-            && tcx.opt_item_name(parent).is_some_and(|n| n.as_str() == "ffi_export")
-        {
-            return true;
+    loop {
+        if matches!(tcx.def_kind(did), DefKind::Fn | DefKind::AssocFn) {
+            let attrs = tcx.codegen_fn_attrs(did);
+            if attrs.flags.contains(CodegenFnAttrFlags::NO_MANGLE)
+                || attrs.symbol_name.is_some()
+            {
+                return true;
+            }
         }
-        did = parent;
+        match tcx.opt_parent(did) {
+            // Keep walking out of closures / nested bodies into the owning fn;
+            // stop at the module boundary.
+            Some(p) if !matches!(tcx.def_kind(p), DefKind::Mod | DefKind::ForeignMod) => {
+                did = p
+            }
+            _ => return false,
+        }
     }
-    false
+}
+
+/// True if `did` is an `extern "C"` fn — a callback shim or a C export.
+///
+/// Its `*mut c_void` parameters are the C callback ABI (`OPENSSL_sk_freefunc`
+/// and friends take type-erased pointers by contract), so they are sanctioned
+/// rather than counted as a void-pointer smell.
+fn is_extern_c_fn(tcx: TyCtxt<'_>, did: DefId) -> bool {
+    if !matches!(tcx.def_kind(did), DefKind::Fn | DefKind::AssocFn) {
+        return false;
+    }
+    tcx.fn_sig(did).skip_binder().skip_binder().abi() != ExternAbi::Rust
 }
 
 /// True if `did` is (transitively) inside ANY `impl`/`trait` body (an accessor
@@ -704,12 +743,13 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
             if matches!(tcx.def_kind(did), DefKind::Fn | DefKind::AssocFn) {
                 let sig = tcx.fn_sig(did).skip_binder().skip_binder();
                 let seam = is_seam_fn(tcx, did);
+                let extern_c = is_extern_c_fn(tcx, did);
                 let span = tcx.def_span(did);
                 for t in sig.inputs().iter().copied().chain(std::iter::once(sig.output())) {
                     if is_mut_ref_wrapper(tcx, t) {
                         metrics[i].mut_borrow_wrapper += 1;
                     }
-                    if is_void_ptr(tcx, t) && !(seam || in_ffi) {
+                    if is_void_ptr(tcx, t) && !(seam || in_ffi || extern_c) {
                         metrics[i].void_ptr_smell += 1;
                         sites[i].void_ptr.push(span_site(tcx, span));
                     }
@@ -874,13 +914,14 @@ impl Callbacks for MetricsCallbacks {
             if matches!(tcx.def_kind(did), DefKind::Fn | DefKind::AssocFn) {
                 let sig = tcx.fn_sig(did).skip_binder().skip_binder();
                 let seam = is_seam_fn(tcx, did);
+                let extern_c = is_extern_c_fn(tcx, did);
                 // `&mut <wrapper>` and `*c_void` anywhere in the signature.
                 for t in sig.inputs().iter().copied().chain(std::iter::once(sig.output())) {
                     if is_mut_ref_wrapper(tcx, t) {
                         c.mut_borrow_wrapper += 1;
                     }
                     if is_void_ptr(tcx, t) {
-                        if seam || in_ffi {
+                        if seam || in_ffi || extern_c {
                             c.void_ptr_sanctioned += 1;
                         } else {
                             c.void_ptr_smell += 1;
