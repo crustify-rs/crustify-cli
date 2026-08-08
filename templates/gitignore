@@ -34,9 +34,18 @@ codeql
 # crustify-prim. Author one per machine from templates/cli-config.json.
 cli-config.json
 
-# Evaluation artefacts
+# Evaluation artefacts. The TABLES under evaluation/ are tracked (see below).
+# These two are not:
+#
+#   stats.md            regenerated per run from the tree it describes
+#   */manifests/        per-run manifest SNAPSHOTS, kept to diff one arm
+#                       against another. Bulk: 10,585 files / 449 MB on the
+#                       openssl target against 112 KB of tables. And
+#                       `evaluation/` is not in `worktree._SHARED`, so a
+#                       tracked tree is CHECKED OUT into every agent worktree
+#                       — carrying that per agent is the cost that decides it.
 stats.md
-evaluation/
+evaluation/**/manifests/
 
 # ----------------------------------------------------------------------------
 # TRACKED, deliberately — hand-authored or agent-produced, and NOT regenerable.
@@ -48,6 +57,13 @@ evaluation/
 #   analysis/                      the manifests, carrying the agent-submitted
 #                                  judgement fields (ownership / lifetime /
 #                                  locking) that only a paid rerun reproduces
+#   evaluation/*.md                the measured record of the campaign: per-unit
+#                                  cost, wall and LoC against the tree that was
+#                                  actually promoted. A rerun reprices at a
+#                                  different model over a different tree, so
+#                                  nothing recovers a wave that already ran —
+#                                  this is the one artefact whose value is that
+#                                  it CANNOT be regenerated
 #
 # The first three are read-only across a wave, so a worktree holding its own
 # checked-out copy behaves identically. `analysis/` is WRITTEN mid-wave by
