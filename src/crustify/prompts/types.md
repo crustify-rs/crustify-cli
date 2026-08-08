@@ -42,20 +42,20 @@ regarless whether they are wrap- or port- or out-of-scope.
 
 **Analysis oracle.** For each item in your target set use `crustify-oracle` to fetch its analysis record,
 including the pointer analysis of its fields (ownership, mutability, nullability, type,
-cardinality, etc.). If any of your work items lacks the agent-owned analysis, then you must do that first
-before proceeding with the wrappers. Use our established principles and the meaning of
-each agent-owned block.
+cardinality, etc.). If any of your work items lacks the agent-owned analysis, then you must first
+carry the ownership judgement and submit your findings to the oracle before proceeding with the wrappers.
+Use our established principles and the meaning of each agent-owned block.
 
 **Lifetime primitives.** Fetch the lifetime primitives for the types in your workset, which you will need for
 implementing the wrapper newtypes. If no lifetime records for them exist then you enter
 discovery mode and scout the codebase for them using our recommended heuristics, then
 submit your findings through the oracle.
 
-**Reviewer mode.** If the agent-owned analysis of one of your items exists already, 
-or if its safe wrappers have already been emitted, then you act as a reviewer assessing their
+**LLM-as-a-Judge.** If the agent-owned analysis of one of your items exists already, 
+or if its safe wrappers have already been emitted, then you act as the LLM-as-a-Judge assessing their
 quality and accuracy by verifying its claims against our principles and instructions. If
 you notice any inconsistencies, submit your new findings through the oracle, and fix / extend its
-existing safe wrappers if necessary, justifying why they fix the existing state. 
+existing safe wrappers if necessary, justifying why they fix the existing state.  
 
 ### Locate your files
 

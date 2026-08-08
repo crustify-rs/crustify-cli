@@ -32,10 +32,11 @@
 ## Build target
 
 - hand-author `build.json`
-    - prefer multi-threaded build commands (prefer using performance cores only, 
-    leave efficiency cores out)
+    - prefer multi-threaded build commands, and an efficient distribution over
+    performance and efficiency cores
     - prefer a configure command that disables deprecated features
-    - enable sanitizers
+    - enable sanitizers so agents can catch memory safety violations when
+    testing their Rust code
 
 - build the target
 
@@ -43,7 +44,7 @@
 
 - generate the CodeQL database
 
-- emit the T1/T2 tables with `analyze extract-ql`
+- emit the T1/T2 tables using `crustify-oracle extract-ql`
 
 ---
 
@@ -55,18 +56,6 @@ that are implemented by the code in the `<target>` tree and add them in `scope-c
 Distinguish implementors from consumers / referencers and only add a header in port-scope if its
 implementors are port-scope. Prefer using directory paths in `scope-config.json` when all files are port-scope
 instead of listing every file.
-
----
-
-## Generate manifests for the analysis oracle
-
-### Scope boundaries
-
-Run the analysis oracle to generate `scope.json`.
-
-### Symbol/type analysis
-
-Run the oracle to emit the on-disk analysis schemas `types.json`/`syms.json` for all code items.
 
 ---
 
