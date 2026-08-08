@@ -70,6 +70,30 @@ def _lifetime_by_sym(layout: "Layout") -> dict:
             if r.get("lifetime")}
 
 
+def _wrap_bound_ops(scope_json, entry_pair) -> dict:
+    """``op name -> the WRAP-scope type whose wrapper already binds it``.
+
+    A wrap-scope type's droppers / disposers / cloners are emitted BY that
+    type's wrapper, as the strategy a `CBox` / `CVec` selects its `CDropped` /
+    `CCloned` on. Scheduling one separately would emit a second, unrelated
+    surface for one C routine — different anchor, possibly different file, and
+    nothing downstream looks for the duplicate.
+
+    A PORT-scope type binds nothing: its ops are ordinary symbols that no other
+    stage will take, so they stay schedulable. That asymmetry is the whole rule
+    — it is about who already emits the routine, not about which scope it is in.
+    """
+    from crustify.dag import load_type_meta
+    wrap_tags = {e["name"]
+                 for e in ((scope_json.get("wrap") or {}).get("types") or [])}
+    out: dict[str, str] = {}
+    for tag, (_fields, lifecycle) in load_type_meta(entry_pair).items():
+        if tag in wrap_tags:
+            for op in lifecycle:
+                out.setdefault(op, tag)
+    return out
+
+
 def _check_bindgen(layout: "Layout", target: Path, linked: set[str]) -> None:
     """Ensure each library a job binds has a scaffolded ``<lib>-sys`` crate.
 
@@ -402,6 +426,12 @@ def wrap_types(
         scope_json, wrap_only=wrap_only, port_only=port_only,
         files=set(files or []))
 
+    entry_pair = (_manifests.entries(layout, target, "types", stage="wrap"),
+                  _manifests.entries(layout, target, "symbols", stage="wrap"))
+    # Ops a wrap-scope type's own wrapper already emits — never scheduled
+    # separately. See :func:`_wrap_bound_ops`.
+    bound_ops = _wrap_bound_ops(scope_json, entry_pair)
+
     sel_names = list(names or [])
     if dag_layer is not None:
         # e2e driver mode: EVERY in-scope unit at dag layer N — types (any
@@ -427,7 +457,8 @@ def wrap_types(
             n.id for n in by_key.values()
             if n.layer == dag_layer and base_in_scope(n)
             and not (n.node_kind == "symbol"
-                     and (n.subkind or "").startswith("macro"))})
+                     and ((n.subkind or "").startswith("macro")
+                          or n.id in bound_ops))})
     if transitive:
         _before = len(sel_names)
         sel_names = _closure_names(sel_names, by_key, by_name, base_in_scope)
@@ -497,6 +528,19 @@ def wrap_types(
              for n in (by_key[k] for k in (by_name.get(nm) or []))
              if not _is_macro(n)}
     bad_oos = sorted(i for i, n in loose.items() if not in_scope(n))
+    named_bound = sorted({i for i in loose if i in bound_ops})
+    if named_bound:
+        listing = "\n".join(f"  - {i}  (bound by `{bound_ops[i]}`)"
+                            for i in named_bound)
+        raise SystemExit(
+            f"translate: {len(named_bound)} selected symbol"
+            f"{'' if len(named_bound) == 1 else 's'} "
+            f"{'is' if len(named_bound) == 1 else 'are'} a lifecycle op of a "
+            f"WRAP-scope type — its wrapper emits it as the CDropped/CCloned "
+            f"strategy, so wrapping it here would be a second surface for one "
+            f"C routine:\n{listing}\n"
+            f"  Wrap the owning type instead. A PORT-scope type's ops carry no "
+            f"such binding and schedule normally.")
     if bad_oos:
         listing = "\n".join(f"  - {i}" for i in bad_oos)
         raise SystemExit(
@@ -530,8 +574,7 @@ def wrap_types(
     )
     failures = S.schedule(
         dag=dag,
-        entry_pair=(_manifests.entries(layout, target, "types", stage="wrap"),
-                    _manifests.entries(layout, target, "symbols", stage="wrap")),
+        entry_pair=entry_pair,
         names=sel_names, stage=stage, parallelize=parallel,
         chain_policy=chain_policy, parallel_max=parallel_max, dry_run=dry_run,
     )
