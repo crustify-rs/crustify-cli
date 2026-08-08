@@ -144,7 +144,8 @@ class TypeNode:
 class SymNode:
     __slots__ = ("name", "file", "kind", "defined_in", "declared_in",
                  "has_dep", "dep_on_types", "dep_on_syms",
-                 "sig_type_refs", "subkind", "dep_types", "dep_syms", "loc")
+                 "sig_type_refs", "subkind", "dep_types", "dep_syms", "loc",
+                 "generates")
 
     def __init__(self, name: str, file: str | None) -> None:
         self.name = name
@@ -163,6 +164,7 @@ class SymNode:
         self.dep_on_syms: set[SymKey] = set()     # (name, file) dep keys
         self.sig_type_refs: set[str] = set()      # raw C type strings (ptr_args/ret)
         self.subkind: str = "symbol"              # symbol|external|builtin
+        self.generates: list[str] = []            # types this macro mints, if any
         self.dep_types: set[str] = set()
         self.dep_syms: set[SymKey] = set()        # resolved (name, file) keys
         self.loc: int = 0                         # body line span (port LoC budget)
@@ -433,7 +435,7 @@ def collect_types_csv(codeql_dir: Path):
     floating: dict[str, list] = collections.defaultdict(list)
     _fams = _mf.load(codeql_dir)
     _gen_of = _mf.generated_by(_fams)          # (tag, def_file) -> macro
-    for r in _scope.load_csv(t1 / "types.csv") + _mf.synthetic_type_rows(_fams):
+    for r in _scope.load_csv(t1 / "types.csv"):
         n, df = r.get("name"), r.get("def_file") or ""
         if not n:
             continue
@@ -670,18 +672,21 @@ def _build_edges(types, syms, amap):
         # low-degree instance/derived UP to the high-degree engine/base it
         # depends on — never the reverse — and the strict `>` keeps it acyclic
         # (edges run low-degree → high-degree only, so no cast cycle can form).
-        # Macro-generator ordering edge. Unlike `casted` below, this relation
-        # is DIRECTED at the source: an instance always depends on the macro
-        # that minted it (the generic must exist before its aliases), so there
-        # is no centrality heuristic and no `>` guard to invert when an
-        # instance carries genuine casts of its own. The >= 2 threshold lives
-        # in `macro_families.load`, so a one-off macro mints no node and
-        # produces no edge here.
+        # Macro-generator ordering edge. The generator is the MACRO itself --
+        # already a symbol node -- so this is a type -> symbol dep, and there is
+        # no synthetic type to mint (which would collide with the macro's own
+        # node on `(name, file)`).
+        #
+        # Unlike `casted` below, the relation is DIRECTED at the source: an
+        # instance always depends on the macro that minted it, since the generic
+        # must exist before its aliases. No centrality heuristic, no `>` guard to
+        # invert when an instance carries genuine casts of its own. The >= 2
+        # threshold lives in `macro_families.load`, so a one-off macro is not a
+        # generator and produces no edge.
         if n.generated_by:
-            g = next((k for k in types if k[0] == n.generated_by), None)
-            if g is not None and g != key:
-                n.dep_types.add(g)
-                wedge[(key, g)] += 1
+            g = next((k for k in syms if k[0] == n.generated_by), None)
+            if g is not None:
+                n.dep_syms.add(g)
 
         my_deg = n.cast_degree()
         for t in (amap.get(x) for x in n.cast_to):
@@ -762,6 +767,7 @@ def _build_graph(types, syms, ext_syms, ext_types):
             continue
         add(_sid(key), {
             "id": n.name, "node_kind": "symbol", "subkind": n.kind or "symbol",
+            **({"generates": n.generates} if n.generates else {}),
             "defined_in": n.origin(), "loc": n.loc,
             "_dt": n.dep_types, "_ds": n.dep_syms,
         })
@@ -917,10 +923,16 @@ def _emit_node(nodes, comp):
                 out["loc"] = rec["loc"]
         elif rec.get("loc"):
             out["loc"] = rec["loc"]
+        # A template generator's family. Carried on the node because the wrap
+        # scheduler reads it off `dag.Node` to make its one macro exception.
+        if rec.get("generates"):
+            out["generates"] = rec["generates"]
         return out  # deps filled by caller
     def member(m):
         d = {"id": m["id"], "node_kind": m["node_kind"], "subkind": str(m["subkind"]),
              "defined_in": m.get("defined_in")}
+        if m.get("generates"):
+            d["generates"] = m["generates"]
         if m["node_kind"] == "type":
             if m.get("loc"):
                 d["loc"] = m["loc"]
@@ -1024,6 +1036,14 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
                                    codeql_dir=codeql_dir,
                                    in_scope_types=in_scope_types)
     _populate_nfields(codeql_dir, types)
+    # A generator macro is already a symbol node; hang its family off it rather
+    # than minting a synthetic type, which would collide with this very node on
+    # `(name, file)`. `generates` is also what lets the wrap scheduler make its
+    # one exception to "macros are bindgen's" -- see `wrap._is_macro`.
+    for _m, _f in (_mf.load(codeql_dir).items() if codeql_dir else ()):
+        for _k in (k for k in syms if k[0] == _m):
+            syms[_k].generates = sorted({tag for tag, _df in _f["members"]})
+
     amap = _alias_map(analysis_root, types, talias)
     ext_syms, ext_types, wedge = _build_edges(types, syms, amap)
     nodes, adj = _build_graph(types, syms, ext_syms, ext_types)

@@ -513,8 +513,17 @@ def wrap_types(
     # facades them. Exclude macro_* symbols from selection, and drop any --name
     # that resolves ONLY to macros so it neither schedules a wrap job nor
     # reports as "unknown".
+    # ...with ONE exception: a macro that MINTS TYPES. `bindgen owns the shim`
+    # is true of a constant or a function-like macro -- there is nothing to
+    # facade. A generator is different: its expansion is a whole aggregate, so
+    # the family wants one generic Rust type that its instances alias, and that
+    # generic is code this stage has to write. `generates` is non-empty only for
+    # a macro with >= 2 minted types (`compose.macro_families`), so a one-off
+    # definition stays excluded.
     def _is_macro(n) -> bool:
-        return n.node_kind == "symbol" and (n.subkind or "").startswith("macro")
+        return (n.node_kind == "symbol"
+                and (n.subkind or "").startswith("macro")
+                and not getattr(n, "generates", None))
     in_scope = lambda n: base_in_scope(n) and not _is_macro(n)
     skipped, kept = [], []
     for nm in sel_names:

@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import scope
+from . import macro_families as _mf
 
 
 # --------------------------------------------------------------- include graph
@@ -210,10 +211,20 @@ def build_index(
            port_globals,
            lambda r: r["linkage"] not in sm._WRAP_DISALLOWED_GLOBAL_KINDS
            and reach.is_global_port_reachable(r["name"], r["def_file"]))
+    # A TEMPLATE GENERATOR is admitted regardless of call-site reachability.
+    # The ordinary gate asks "does port code expand this macro", which a
+    # generator never satisfies: it expands once at file scope in a header to
+    # mint a type, and is never invoked from a function body. But its family IS
+    # reached -- through the instances -- and the generic Rust type that the
+    # instances alias has to be emitted by somebody. Without this the macro is
+    # in neither scope section and therefore unschedulable, the same dead end
+    # the gate-missed callbacks sit in.
+    _generators = set(_mf.load(csv_dir_t1.parent))
     ingest(macros, lambda r: "macro",
            lambda r: [r["def_file"]] if r.get("def_file") else [],
            port_macros,
-           lambda r: reach.is_macro_port_reachable(r["name"], r["def_file"]))
+           lambda r: (r["name"] in _generators
+                      or reach.is_macro_port_reachable(r["name"], r["def_file"])))
     idx.reach = reach
     return idx
 
@@ -581,6 +592,25 @@ def compose_wrap(
                     "name": tag, "defined_in": df, "declared_in": set()})
                 rec["declared_in"].update(via)
                 files.update(via)
+                break
+
+    # Template-generator macros. `ingest` admits them to the closure index, but
+    # the emit above only reaches a symbol through some port entity's
+    # `depends_on` -- and a generator is never a callee: it expands once at file
+    # scope to mint a type. Its family IS reached, through the instances, and the
+    # generic those instances alias has to be emitted by somebody, so emit the
+    # macro itself. Same shape as the callback path above: narrow `declared_in`
+    # to the header a port TU actually includes.
+    for _macro, _fam in _mf.load(csv_dir_t1.parent).items():
+        _df = _fam["def_file"]
+        if not _df or (_macro, _df) in sym_items:
+            continue
+        for port_path in port_paths:
+            if _df in closure(port_path):
+                rec = sym_items.setdefault((_macro, _df), {
+                    "name": _macro, "defined_in": _df, "declared_in": set()})
+                rec["declared_in"].add(_df)
+                files.add(_df)
                 break
 
     # Canonicalize a null-def `extern` item onto its real definition. A port

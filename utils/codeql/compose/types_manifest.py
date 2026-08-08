@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from . import scope
+from . import macro_families
 from .filter_spec import FilterSpec, is_seed
 from .manifest_merge import type_key
 from .path_partition import manifest_dir_for
@@ -782,6 +783,19 @@ def compose(
                 e["casted"] = {"to": reach.casts_to(_tag),
                                "from": reach.casts_from(_tag)}
         entries.sort(key=lambda e: scope.entry_tag(e) or "")
+
+    # Template-by-macro families: `generated_by` names the macro that minted
+    # this type. The inverse `generates` lives on the MACRO's own symbol record
+    # -- the macro is already an entity, so there is no synthetic type to mint
+    # and no `(name, file)` collision with the macro's own node. Unlike `casted`
+    # the relation is DIRECTED: an instance always depends on its generator, so
+    # nothing downstream has to infer which side comes first.
+    _fams = macro_families.load(csv_dir_t1.parent)
+    _gen_of = macro_families.generated_by(_fams)
+    for entries in entries_by_dir.values():
+        for e in entries:
+            key = (scope.entry_tag(e), e.get("defined_in") or "")
+            e["generated_by"] = _gen_of.get(key)
     return entries_by_dir, dir_scope, focus_by_key
 
 
