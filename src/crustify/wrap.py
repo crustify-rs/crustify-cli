@@ -139,19 +139,21 @@ def _check_bindgen(layout: "Layout", target: Path, linked: set[str]) -> None:
 # ---------------------------------------------------------------------------
 
 def _wrap_eligible_pred(scope_json):
-    """Predicate: is this node something `wrap` may take? Wrap takes **wrap-scope**
-    entities (types + symbols) and **any in-scope type** (port- *or* wrap-scope
-    — every type is wrapped, never ported). A port-scope *symbol* belongs to the
-    port stage, and an out-of-scope entity isn't wrappable — both are rejected by
-    the gate in :func:`wrap_types`."""
+    """Predicate: is this node something `translate` may take? **Anything in
+    scope** — port or wrap, type or symbol. Only an out-of-scope entity is
+    rejected, by the gate in :func:`wrap_types`.
+
+    Scope no longer routes: a port-scope symbol used to be refused as the port
+    stage's, but that stage is retired, so refusing it left the entity with no
+    stage at all. Both halves now reach the same type and symbol agents; scope
+    remains a *filter* the caller opts into (`--port-only` / `--wrap-only`),
+    not a gate the stage imposes."""
     from compose import scope
     is_wrap = scope.in_scope_pred(scope_json, "wrap")
     is_port = scope.in_scope_pred(scope_json, "port")
 
     def pred(n) -> bool:
-        if is_wrap(n):
-            return True
-        return n.node_kind == "type" and is_port(n)
+        return is_wrap(n) or is_port(n)
     return pred
 
 
@@ -542,29 +544,14 @@ def wrap_types(
             "wrap: nothing to wrap — selection resolved only to macros "
             "(bindgen owns their -sys shims).")
 
-    # Scope gate (parallels the port stage). Reject a named entity wrap cannot
-    # take, with guidance: a port-scope SYMBOL belongs to `port` (wrap would
-    # silently emit a stray FFI shim instead of the safe view); an out-of-scope
-    # name isn't wrappable. Types (port- or wrap-scope) are eligible — they
-    # pass `in_scope` above. Resolve scope-blind so we can
+    # Scope gate. Out of scope is the ONLY refusal: both halves route to the
+    # same agents, so scope no longer decides which stage takes an entity —
+    # only whether this target owns it at all. Resolve scope-blind so we can
     # *see* the rejected ones instead of dropping them as "unknown".
-    _is_port = scope.in_scope_pred(scope_json, "port")
     loose = {n.id: n for nm in sel_names
              for n in (by_key[k] for k in (by_name.get(nm) or []))
              if not _is_macro(n)}
-    bad_port = sorted(i for i, n in loose.items()
-                      if not in_scope(n) and n.node_kind == "symbol" and _is_port(n))
-    bad_oos = sorted(i for i, n in loose.items()
-                     if not in_scope(n) and not (n.node_kind == "symbol" and _is_port(n)))
-    if bad_port:
-        listing = "\n".join(f"  - {i}" for i in bad_port)
-        raise SystemExit(
-            f"wrap: {len(bad_port)} selected "
-            f"{'entity is a' if len(bad_port)==1 else 'entities are'} port-scope "
-            f"symbol — their bodies are translated, not faceted, so translate "
-            f"would emit a stray FFI shim instead of the safe view:"
-            f"\n{listing}\n"
-            f"  No stage takes them yet: the port half is not implemented.")
+    bad_oos = sorted(i for i, n in loose.items() if not in_scope(n))
     if bad_oos:
         listing = "\n".join(f"  - {i}" for i in bad_oos)
         raise SystemExit(

@@ -153,9 +153,10 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument(
         "--dag-layer", type=int, default=None, metavar="N", dest="dag_layer",
-        help="Select EVERY in-scope unit at dag layer N (types + wrap-scope "
-             "syms; lifecycle ops that fold into a type are excluded — they "
-             "ride with `wrap types`). Combines with --name; e2e driver mode.",
+        help="Select EVERY in-scope unit at dag layer N — types AND symbols, "
+             "port- or wrap-scope alike; narrow with --wrap-only/--port-only. "
+             "Lifecycle ops that fold into a type are excluded (they ride with "
+             "the type). Combines with --name; e2e driver mode.",
     )
     p.add_argument(
         "--skip", nargs="+", action="extend", default=None, metavar="NAME",
@@ -424,8 +425,9 @@ def main() -> None:
     wrap_p = sub.add_parser(
         "translate",
         help=(
-            "Translate stage: emit Rust wrappers for the selected wrap-scope "
-            "units (types AND free symbols) in dependency-layer order. "
+            "Translate stage: emit Rust wrappers for the selected in-scope "
+            "units (types AND free symbols, port- or wrap-scope) in "
+            "dependency-layer order. "
             "Select with --name. One unified scheduler dispatches each unit "
             "to its wrapper (type / symbol); no subject split. Requires the "
             "scaffold + bindgen stages to have run for each library being "
