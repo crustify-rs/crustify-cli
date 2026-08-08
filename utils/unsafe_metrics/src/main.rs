@@ -686,19 +686,40 @@ impl<'a, 'tcx> Visitor<'tcx> for CallCollector<'a, 'tcx> {
     }
 }
 
+/// If `did` is a `type A = B;` alias, the ADT it names.
+///
+/// A HIR path resolves to whatever the source literally wrote, so
+/// `*mut ffi::ENGINE` resolves to the ALIAS `ENGINE`, never to `engine_st`.
+/// Typeck normalizes, so the naked COUNT sees through it — without this the
+/// SITES would not, and a count would land with nowhere to look. bindgen
+/// re-emits OpenSSL's typedefs (`pub type ENGINE = engine_st;`), so this is the
+/// common spelling rather than a corner case.
+fn alias_target(tcx: TyCtxt<'_>, did: DefId) -> Option<DefId> {
+    if !matches!(tcx.def_kind(did), DefKind::TyAlias) {
+        return None;
+    }
+    match tcx.type_of(did).skip_binder().kind() {
+        ty::TyKind::Adt(def, _) => Some(def.did()),
+        _ => None,
+    }
+}
+
 /// Collect spans of HIR type-references that resolve to `target` (a seed's
-/// wrapped C type), for type-seed `naked_sites`. The naked COUNT stays
-/// typeck-based (`count_ty_did`, alias-proof); these spans are the syntactic
-/// occurrences the agent actually edits.
-struct NakedTyVisitor<'a> {
+/// wrapped C type), for type-seed `naked_sites`. The naked COUNT is
+/// typeck-based (`count_ty_did`); these spans are the syntactic occurrences the
+/// agent actually edits, matched directly or through one typedef hop.
+struct NakedTyVisitor<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
     target: DefId,
     out: &'a mut Vec<Span>,
 }
-impl<'a, 'v> Visitor<'v> for NakedTyVisitor<'a> {
-    fn visit_ty(&mut self, t: &'v hir::Ty<'v, hir::AmbigArg>) {
+impl<'a, 'tcx> Visitor<'tcx> for NakedTyVisitor<'a, 'tcx> {
+    fn visit_ty(&mut self, t: &'tcx hir::Ty<'tcx, hir::AmbigArg>) {
         if let hir::TyKind::Path(hir::QPath::Resolved(_, path)) = t.kind {
             if let hir::def::Res::Def(_, did) = path.res {
-                if did == self.target {
+                if did == self.target
+                    || alias_target(self.tcx, did) == Some(self.target)
+                {
                     self.out.push(t.span);
                 }
             }
@@ -789,7 +810,7 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
                     }
                     if let Some(decl) = decl {
                         let mut spans: Vec<Span> = Vec::new();
-                        let mut v = NakedTyVisitor { target: c, out: &mut spans };
+                        let mut v = NakedTyVisitor { tcx, target: c, out: &mut spans };
                         for t in decl.inputs {
                             if let Some(at) = t.try_as_ambig_ty() {
                                 v.visit_ty(at);
