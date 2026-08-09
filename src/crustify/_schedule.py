@@ -100,7 +100,7 @@ def is_generator(n) -> bool:
     """``n`` is a type-minting macro — a macro whose expansion is a whole
     aggregate, so it stands for a FAMILY of same-shaped types.
 
-    The one predicate two stages share: :mod:`crustify.wrap` uses it to exempt
+    The one predicate two stages share: :mod:`crustify.translate` uses it to exempt
     generators from "macros are bindgen's", and :func:`form_units` to route them
     to the type wrapper. Keeping one definition is the point — the two were
     written apart and are the same question ("does this macro owe Rust a type?"),

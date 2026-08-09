@@ -25,8 +25,8 @@ dirs never collide and clobber each other's ``<stage>.log``.
 # ---------------------------------------------------------------------------
 # Wrap stage — per-type-wrapper effort budget
 # ---------------------------------------------------------------------------
-# Used by the wrap orchestrator (``crustify.wrap``) to cap the workload handed
-# to a single ``CrustifyWrap`` type-wrapper agent. The orchestrator slices each
+# Used by the wrap orchestrator (``crustify.translate``) to cap the workload handed
+# to a single ``TranslateAgent`` type-wrapper agent. The orchestrator slices each
 # selected surface deterministically and passes the agent a *fixed* worklist.
 # A TYPE is never split — it is one batch with all its ops and accessors. Only
 # the free-symbol pool is budgeted.

@@ -240,7 +240,17 @@ def parse_usage(path, prices):
 
 
 def kind(fn):
-    for p, k in (("port_", "port"), ("wrap_", "wrap"), ("merge", "merge"),
+    for p, k in (# `translate` tags each agent <objective>-<unit>_<key>, so the
+                 # bucket is the pair — which is the point: it prices wrap-type
+                 # against port-type directly, the calibration question a first
+                 # port wave exists to answer. Longest prefixes first.
+                 ("wrap-type", "wrap-type"), ("wrap-symbol", "wrap-symbol"),
+                 ("port-type", "port-type"), ("port-symbol", "port-symbol"),
+                 ("review-type", "review-type"),
+                 ("review-symbol", "review-symbol"),
+                 # pre-`translate` logs (one merged wrap agent, retired port
+                 # stage) — kept so the campaign's measured history still buckets:
+                 ("port_", "port"), ("wrap_", "wrap"), ("merge", "merge"),
                  ("scaffolder", "scaffold"),
                  # retired agents, kept so historical logs still bucket:
                  ("type_analyzer", "analyze"),

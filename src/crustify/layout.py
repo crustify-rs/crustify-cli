@@ -114,15 +114,6 @@ class Layout:
         target-tier, are indistinguishable in a diff, a log line or a prompt."""
         return self.root / "cli-config.json"
 
-    @property
-    def port_features(self) -> Path:
-        """The CUMULATIVE `CRUSTIFY_<FILE>` flag manifest, in the **git-tracked**
-        `rust/` tree (NOT under the symlinked `targets/`), so each isolated
-        worktree forks its committed baseline via `git worktree add` and appends
-        only its own chain's files — a per-worktree-coherent flag set that the
-        agents' rebase-then-merge unions as each lands. Read at C-build time by `src/libgit2/CMakeLists.txt`."""
-        return self.rust / "port-features.json"
-
     # ------------------------------------------------- target-tier (per-target)
     def rel_target(self, target: Path) -> str:
         t = Path(target).resolve()

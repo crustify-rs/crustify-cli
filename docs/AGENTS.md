@@ -3,6 +3,8 @@
 The non-negotiable core every porting/wrapping agent must hold in context at all
 times.
 
+---
+
 ## Skills
 
 Reusable how-to guides for recurring decisions, loaded alongside these
@@ -12,6 +14,8 @@ signal; the body is the procedure.
 
 <!-- SKILLS_INDEX -->
 
+---
+
 ## Core translation philosophy
 
 Based on interior mutability: types stay layout-compatible with C, wrapped in
@@ -20,6 +24,8 @@ FFI functions and callbacks are also wrapped in safe function wrappers with
 signatures that use the safe type wrappers. Unsafe footprint reduced to a
 minimal, auditable surface inside type implementations for accessing raw fields
 and safe FFI function wrappers for making FFI calls.
+
+---
 
 ## Types
 
@@ -46,6 +52,8 @@ and safe FFI function wrappers for making FFI calls.
    A field may have multiple accessor variants, depending on its type resolution,
    ownership semantics, cardinality, etc.
 
+---
+
 ## Functions, callbacks, and inline function pointers
 
  **Wrap-scope** functions, callbacks, and inline function pointers get one or more safe
@@ -54,6 +62,8 @@ and safe FFI function wrappers for making FFI calls.
  
  **Port-scope** ones are translated to native Rust and call the safe API when
  needing FFI dependencies.
+
+---
 
 ## Macros
 
@@ -74,12 +84,37 @@ to our conventions.
 
 - **Constant macro**: use the `ffi::` binding directly.
 
+---
+
 ## Pointers
 
 To leverage idiomatic Rust features, we express each pointer argument,
-return, field, and variable based on the ownership facets provided by the
+return, field, and variable based on ownership facets submitted through the
 `crustify-oracle` skill via the smart pointers and traits from the
 `crustify-prim` skill.
+
+### Ownership analyis
+
+For struct fields, pointer args and return (both functions and function pointers)
+analysis is codebase-wide, unscoped, to catch the complete usage footprint of the
+anlyzed item. For ptr args, walk down the call graph of the target function and
+identify paths that free the arg.
+
+### Decision support
+
+Three independent signals; use whichever is decisive:
+
+  1. **Documentation / API contract.** Headers and reference docs often
+     spell out ownership, lifetime, and buffer contracts directly.
+  2. **Body + callers + name patterns.** What the body does to each
+     pointer (frees, stores in a field, just reads); what representative
+     callers do after the call. Name patterns are hints, never
+     authoritative.
+  3. **CodeQL** against the given db for dataflow / pointer-provenance
+     on non-obvious cases. If you find a reusable gap, save the query
+     under `utils/codeql/` and flag it.
+
+---
 
 ## Safety discipline
 
@@ -135,6 +170,8 @@ pointer. The constructs that synthesise a borrow are forbidden.
 | `addr_of_mut!((*ptr).field).write(v)` | **No** — pointer to place + byte-copy store | ✅ **mandatory write form** |
 | `addr_of!((*ptr).field)` / `addr_of_mut!((*ptr).field)` | **No** | ✅ for taking inner references |
 
+---
+
 ## File contract (file-grained - load-bearing)
 
 The `.rs` module for each target and dependency (types/symbols) is found via the
@@ -160,23 +197,37 @@ The per-anchor fill contract:
   `/// <Anchor>: <C_ITEM>{.<field>}` doc comment on the emitted item, and its
   `// crustify:todo` is deleted (a surviving todo marks still-pending work).
 
-## Ownership analyis
+## Re-export ported symbols
 
-For struct fields, pointer args and return (both functions and function pointers).
-Analysis is codebase-wide, unscoped, to catch the complete usage footprint of the
-anlyzed item. For ptr args, walk down the call graph of the target function and
-identify paths that free the arg.
+**`#[unsafe(no_mangle)]` re-export**: we write one for each ported symbol into **that
+file's `mod ffi_export { use super::*; ... }`** submodule (the **raw C-ABI
+gateway**; create it once per file); the export carries the C signature (from
+the record's entries + the C source), **reconstructs the wrappers from the raw
+params, and delegates to the idiomatic `pub(crate) fn`** (its `super::`
+sibling). The re-export uses the following guideline for naming:
+  - `function_exported` / `global_extern` / `function_inline_header` -> export under
+    the **bare name**;
+  - `function_static` / `function_inline_tu` / `global_static` -> export under the
+    unique **`crustify_<file>__<name>`** symbol (the TU-local collision-safe form).
 
-### Decision support
+## C/Rust build switch
 
-Three independent signals; use whichever is decisive:
+We wire the build switch (per-file feature flags). The variant is selected **per C
+file** at compile time, via the `CRUSTIFY_<FILE>` guard macro (path-sanitised
+`defined_in`):
 
-  1. **Documentation / API contract.** Headers and reference docs often
-     spell out ownership, lifetime, and buffer contracts directly.
-  2. **Body + callers + name patterns.** What the body does to each
-     pointer (frees, stores in a field, just reads); what representative
-     callers do after the call. Name patterns are hints, never
-     authoritative.
-  3. **CodeQL** against the given db for dataflow / pointer-provenance
-     on non-obvious cases. If you find a reusable gap, save the query
-     under `utils/codeql/` and flag it.
+a. **C side** - we fence each ported body with `#ifndef CRUSTIFY_<FILE>` by
+   **reading the C source** to find each ported symbol's extents. We use **tight
+   blocks** around adjacent ported functions - never a single
+   file-level wrap. In the `#else` branch, emit each ported symbol's re-export:
+   an `extern` declaration for every kind, plus a `#define <name>
+   crustify_<file>__<name>` redirect for the TU-local kinds.
+
+b. **Build wiring** - we make `CRUSTIFY_<FILE>` definable from the build. Emit
+  (if it's not emitted already) a build config and wire it into the
+   project's build (the `build.json` `build_commands` / configure / link
+   pipeline), so defining the file's flag (i) compiles the owning library's Rust
+   port-crate staticlib (the one carrying the re-exports - the crate the file's
+   module lives under), (ii) adds that crate's archive to
+   the C link line, and (iii) injects `-DCRUSTIFY_<FILE>`.
+   Link pipelines differ per build system - inspect the actual scripts.

@@ -1,4 +1,4 @@
-"""CrustifyWrap — the merged wrap-stage codegen agent (agent half).
+"""TranslateAgent — the merged wrap-stage codegen agent (agent half).
 
 One agent for every wrap unit the ``--name`` scheduler produces:
 
@@ -48,10 +48,10 @@ _PROMPT_BY_KIND: dict[str, str] = {
 _NOT_YET: tuple[str, ...] = ()
 
 
-class CrustifyWrap(CrustifyAgent):
+class TranslateAgent(CrustifyAgent):
     """Emit safe Rust wrapper(s) for one scheduled wrap batch (type or syms)."""
 
-    name = "CrustifyWrap"
+    name = "TranslateAgent"
     model = "anthropic/claude-opus-5"
     output = None  # scheduler gates via the per-item todo; agent runs when called.
 
@@ -82,10 +82,18 @@ class CrustifyWrap(CrustifyAgent):
         # the prompt has one input to read, exactly as the retired analyzer's rode in
         # `manifests`.
         lifetime_for: str | None = None,
+        # What the agent is being asked to DO with this batch, handed straight
+        # to the prompt as `{objective}`: "wrap" | "port" | "review". The
+        # scheduler always supplies one, so the prompt never branches on an
+        # empty slot -- and the agent no longer has to INFER review mode from
+        # finding a filled anchor on disk, which was indistinguishable from
+        # being asked to nativize one.
+        objective: str = "wrap",
         repo_root: Path | None = None,         # worktree root in an isolated wave
     ) -> None:
         super().__init__(target, repo_root=repo_root)
         self._batch_kind = batch_kind
+        self._objective = objective
         self._deps = list(deps or [])
         self._tags = list(tags or [])
         self._kinds = list(kinds or [])
@@ -106,13 +114,25 @@ class CrustifyWrap(CrustifyAgent):
 
     @property
     def stage(self) -> str:  # type: ignore[override]
+        """The per-agent log stem: ``<objective>-<kind>_<key>``, e.g.
+        ``port-type_git_delta_index`` / ``wrap-symbol_access``.
+
+        Both halves are known HERE and only here: the objective is the wave's,
+        but the kind is this batch's, and one invocation can carry both (a
+        `--dag-layer` selects types and symbols alike). So the wave-level
+        identity (`Stage.verb` -> session branch, worktree dirs) tags with the
+        objective alone, and the full pair lands on the agent's own files —
+        which is where it pays, since `utils/log_cost.py` buckets by this
+        prefix and can now price `wrap-type` against `port-type` directly."""
         if self._batch_kind == "type":
             key = self._tags[0] if self._tags else "batch"
         elif self._lifetime_for:
             key = f"lifetime_for__{self._lifetime_for}"
         else:
             key = self._syms[0]["name"] if self._syms else "syms"
-        return f"wrap_{re.sub(r'[^A-Za-z0-9_]+', '_', key or 'batch')}"
+        unit = "type" if self._batch_kind == "type" else "symbol"
+        return (f"{self._objective}-{unit}_"
+                f"{re.sub(r'[^A-Za-z0-9_]+', '_', key or 'batch')}")
 
     @property
     def _kind(self) -> str:
@@ -124,12 +144,12 @@ class CrustifyWrap(CrustifyAgent):
             return (_PKG_ROOT / "prompts" / "symbols.md").read_text()
         if self._kind in _NOT_YET:
             raise NotImplementedError(
-                f"CrustifyWrap: kind {self._kind!r} ({self._tags}) — "
+                f"TranslateAgent: kind {self._kind!r} ({self._tags}) — "
                 f"wrapper codegen not implemented for this kind yet.")
         prompt_file = _PROMPT_BY_KIND.get(self._kind)
         if prompt_file is None:
             raise ValueError(
-                f"CrustifyWrap: unsupported manifest kind {self._kind!r} for "
+                f"TranslateAgent: unsupported manifest kind {self._kind!r} for "
                 f"{self._tags!r}. Expected one of {sorted(_PROMPT_BY_KIND)}.")
         return (_PKG_ROOT / "prompts" / prompt_file).read_text()
 
@@ -140,6 +160,7 @@ class CrustifyWrap(CrustifyAgent):
             # every key the base adds — a template naming one dies with KeyError
             # before the agent issues a request.
             **super()._arguments(),
+            "objective":      self._objective,
             "workspace_root": str(self.layout.rust),
             "build_json":     str(self.layout.build_json),
             # Always-on principles preamble (AGENTS.md), with the role-scoped

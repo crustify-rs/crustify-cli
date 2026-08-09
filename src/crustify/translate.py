@@ -10,14 +10,18 @@ what they read to choose it); a confirmation prompt lists first-layer deps.
 This module owns only the stage-specific pieces — the selection predicate
 (:func:`_selection_pred`), the wrap-bound-op index (:func:`_wrap_bound_ops`),
 the bindgen gate, and the emit seam to
-:class:`crustify.agents.wrap.CrustifyWrap`. Scope (wrap/port) is applied
+:class:`crustify.agents.translate.TranslateAgent`. Scope (wrap/port) is applied
 **here**, never in the DAG, via the same ``compose.scope`` classifier the
 manifests use — as a filter the caller opts into, not a routing decision.
 
-The scheduler schedules blindly — it emits every selected unit (budget-bounded),
-checking only that each home ``.rs`` exists; it does not skip already-filled
-anchors. The scaffolder still lays ``// Replaces:`` / ``// crustify:todo`` markers
-for the agent to fill, but per-item idempotency is the agent's concern.
+Selection is filtered by ``--objective``, which is also what the prompt is told
+to DO with the batch. Under the default ``wrap`` an item whose
+``// crustify:todo`` placeholder is gone is dropped as already done — that
+filter is what makes ``--transitive`` usable, since a closure otherwise re-runs
+everything. ``review`` and ``port`` both act ON emitted work, so both keep the
+filled items: the first re-examines them, the second nativizes one whose C-side
+readers are gone. Beyond that the scheduler emits every selected unit
+(budget-bounded), checking only that each home ``.rs`` exists.
 """
 from __future__ import annotations
 
@@ -115,10 +119,10 @@ def _check_bindgen(layout: "Layout", target: Path, linked: set[str]) -> None:
 # Manifest indexers + budget (shared with the port stage)
 # ---------------------------------------------------------------------------
 
-def _wrap_eligible_pred(scope_json):
+def _translate_eligible_pred(scope_json):
     """Predicate: is this node something `translate` may take? **Anything in
     scope** — port or wrap, type or symbol. Only an out-of-scope entity is
-    rejected, by the gate in :func:`wrap_types`.
+    rejected, by the gate in :func:`translate_types`.
 
     Scope no longer routes: a port-scope symbol used to be refused as the port
     stage's, but that stage is retired, so refusing it left the entity with no
@@ -134,36 +138,34 @@ def _wrap_eligible_pred(scope_json):
     return pred
 
 
-def _selection_pred(scope_json, *, wrap_only: bool,
-                    port_only: bool, files: set[str]):
-    """Selection predicate over a :class:`_schedule.Node`. The base is
-    :func:`_wrap_eligible_pred` (wrap-scope ∪ in-scope types);
-    `--wrap-only`/`--port-only` further *narrow* by scope.json membership, and
-    `--file` restricts to a defining file (disambiguating a `--name` collision)."""
-    from compose import scope
-    eligible = _wrap_eligible_pred(scope_json)
-    narrow = (scope.in_scope_pred(scope_json, "wrap") if wrap_only
-              else scope.in_scope_pred(scope_json, "port") if port_only
-              else None)
+def _selection_pred(scope_json, *, files: set[str]):
+    """Selection predicate over a :class:`_schedule.Node`: in-scope (port or
+    wrap), optionally restricted to a defining file (which disambiguates a
+    `--name` collision).
+
+    Scope does NOT narrow here any more. It stopped being a selector when the
+    two halves merged into one stage: what an agent DOES is the objective, and
+    an item's scope is something the agent reads from the oracle to decide how
+    to satisfy that objective. A caller who wants to see a layer split by scope
+    asks the oracle (`query dag --layer N --port-only`) and passes the names."""
+    eligible = _translate_eligible_pred(scope_json)
 
     def pred(n) -> bool:  # n: _schedule.Node
         if files and (n.defined_in or "") not in files:
-            return False
-        if narrow and not narrow(n):
             return False
         return eligible(n)
     return pred
 
 
 
-def _wrap_emit(
-    target: Path, layout, *, max_syms: int,
+def _translate_emit(
+    target: Path, layout, *, max_syms: int, objective: str = "wrap",
 ):
-    """Production emit: one :class:`CrustifyWrap` per scheduled batch. A type
+    """Production emit: one :class:`TranslateAgent` per scheduled batch. A type
     batch carries the type + this batch's op slice; a syms batch carries the
     pooled free symbols. The agent resolves each module's path itself via
     `scaffold --name` (query mode); nothing is pre-resolved here."""
-    from crustify.agents.wrap import CrustifyWrap
+    from crustify.agents.translate import TranslateAgent
 
     def emit(batch) -> None:  # batch: _schedule.Batch
         type_units = [u for u in batch.units if u.kind == "type"]
@@ -172,18 +174,19 @@ def _wrap_emit(
             # agent pulls lifecycle and the cast graph from each record itself.
             # A batch may carry several types now that a type no longer absorbs
             # its ops (`_schedule.pack`); `types.md` is written for a target SET.
-            CrustifyWrap(
+            TranslateAgent(
                 target, batch_kind="type",
                 tags=[u.node.id for u in type_units],
                 kinds=[u.node.subkind for u in type_units],
+                objective=objective,
                 repo_root=layout.repo_root,
             ).run()
             return
         # syms-pull: hand the batch's pooled symbol names; the agent pulls each
         # one's record/deps/.rs via `crustify-cli query sym`/`query dag`.
         syms = [{"name": m.id, "defined_in": m.defined_in} for m in batch.members]
-        CrustifyWrap(target, batch_kind="syms", syms=syms,
-                     repo_root=layout.repo_root).run()
+        TranslateAgent(target, batch_kind="syms", syms=syms,
+                       objective=objective, repo_root=layout.repo_root).run()
 
     return emit
 
@@ -198,8 +201,9 @@ def _wrap_emit(
 LIFETIME_TIERS = ("void", "string")
 
 
-def wrap_lifetime_for(
-    target: Path, spec: str, *, dry_run: bool = False,
+def translate_lifetime_for(
+    target: Path, spec: str, *, objective: str = "wrap",
+    dry_run: bool = False,
 ) -> None:
     """Untyped-tier mode: hand ONE **symbol** wrapper the job of wrapping
     ``spec``'s lifecycle primitives.
@@ -238,32 +242,32 @@ def wrap_lifetime_for(
             f"(wrap --name {spec})."
         )
     import crustify._schedule as S
-    from crustify.agents.wrap import CrustifyWrap
+    from crustify.agents.translate import TranslateAgent
     from crustify.layout import Layout
 
     layout = Layout.discover(target)
     if dry_run:
-        print(f"[wrap dry-run] --lifetime-for {spec}: one agent, "
+        print(f"[translate dry-run] --lifetime-for {spec}: one agent, "
               f"no composed worklist (the agent discovers the primitives).")
         return
 
     def emit_factory(t_, l_):
         def emit(_batch) -> None:
-            CrustifyWrap(t_, batch_kind="syms", lifetime_for=spec,
-                         repo_root=l_.repo_root).run()
+            TranslateAgent(t_, batch_kind="syms", lifetime_for=spec,
+                           objective=objective, repo_root=l_.repo_root).run()
         return emit
 
     batch = S.Batch(file=f"lifetime-for-{spec}", units=[], members=[],
                     fields=[], op_range=None, field_range=None)
     stage = S.Stage(
-        verb="wrap", in_scope=lambda n: True, emit_fn=lambda b: None,
+        verb=objective, in_scope=lambda n: True, emit_fn=lambda b: None,
         max_syms=1, emit_factory=emit_factory, target=target, layout=layout,
     )
     failures = S._isolated_wave({batch.file: [batch]}, stage, False, 1)
     if failures:
         raise SystemExit(
             f"wrap --lifetime-for {spec}: agent failed: {failures[0][1]}")
-    print("[crustify-cli wrap] done.")
+    print("[crustify-cli translate] done.")
 
 
 #: `// Wraps: <name>` / `// Replaces: <name>`, at any comment depth and with an
@@ -376,17 +380,15 @@ def _pending_names(names: list[str], layout, target: Path) -> tuple[list[str], l
     return pending, done
 
 
-def wrap_types(
+def translate_types(
     target: Path,
     *,
     names: list[str] | None = None,
     files: list[str] | None = None,
-    wrap_only: bool = False,
-    port_only: bool = False,
     dag_layer: int | None = None,
     skip: list[str] | None = None,
     transitive: bool = False,
-    review: bool = False,
+    objective: str = "wrap",
     parallel: bool = False,
     chain_policy: str = "per-agent",
     parallel_max: int = 8,
@@ -417,7 +419,7 @@ def wrap_types(
     scope_json = _preflight(target, layout)
     from crustify import dag as _dag
     dag = _dag.build(layout, target, stage="wrap")
-    print(f"[crustify-cli wrap] deps DAG: {dag.get('stats')}")
+    print(f"[crustify-cli translate] deps DAG: {dag.get('stats')}")
 
     by_key, by_name = S.load_nodes(dag)
 
@@ -426,9 +428,7 @@ def wrap_types(
     _dag.require_unambiguous(names or [], by_key, by_name, set(files or []),
                              stage="wrap")
 
-    base_in_scope = _selection_pred(
-        scope_json, wrap_only=wrap_only, port_only=port_only,
-        files=set(files or []))
+    base_in_scope = _selection_pred(scope_json, files=set(files or []))
 
     entry_pair = (_manifests.entries(layout, target, "types", stage="wrap"),
                   _manifests.entries(layout, target, "symbols", stage="wrap"))
@@ -452,11 +452,7 @@ def wrap_types(
         # method surface and the fold never held it).
         #
         # `base_in_scope`, not the bare eligibility predicate: it carries the
-        # `--wrap-only` / `--port-only` / `--file` narrowing. Selecting on
-        # eligibility alone picked up port-scope TYPES (eligible, since every
-        # type is wrapped) that the scope gate below then refused under
-        # `--wrap-only` — 60 of them at ssl layer 1 — so the flag turned a
-        # slice into a hard error instead of narrowing it.
+        # `--file` narrowing.
         sel_names += sorted({
             n.id for n in by_key.values()
             if n.layer == dag_layer and base_in_scope(n)
@@ -466,30 +462,34 @@ def wrap_types(
     if transitive:
         _before = len(sel_names)
         sel_names = _closure_names(sel_names, by_key, by_name, base_in_scope)
-        print(f"[crustify-cli wrap] --transitive: {_before} seed(s) → "
+        print(f"[crustify-cli translate] --transitive: {_before} seed(s) → "
               f"{len(sel_names)} unit(s) in the closure.")
     if skip:
         _sk = set(skip)
         sel_names = [s for s in sel_names if s not in _sk]
-    # Already-wrapped items are dropped unless --review asks for them. The
-    # wrapper prompts define what a second visit IS: with agent-owned state on
-    # disk the agent "acts as a reviewer assessing its quality and accuracy",
-    # correcting through the oracle rather than re-emitting. So --review is the
-    # mode, not a force: it schedules filled items precisely to have them
-    # re-examined. Without it a closure selection would re-run everything
-    # already done, which is what makes --transitive usable at all.
-    if not review:
+    # Already-wrapped items are dropped unless the objective asks for them.
+    # The prompts define what a second visit IS: `review` has the agent assess
+    # quality and accuracy against the principles and correct through the
+    # oracle rather than re-emit; `port` has it nativize an item whose C-side
+    # readers are gone. Dropping the already-done by default is what makes
+    # --transitive usable at all -- else a closure selection re-runs everything.
+    # `port` and `review` both act ON already-emitted work, so both bypass the
+    # gate: `review` re-examines it, `port` escalates a wrapped item whose
+    # C-side readers are now gone. Only the default `wrap` objective filters
+    # to items whose `// crustify:todo` placeholder still survives.
+    if objective == "wrap":
         sel_names, _done = _pending_names(sel_names, layout, target)
         if _done:
-            print(f"[crustify-cli wrap] skipping {len(_done)} already-wrapped "
-                  f"item(s); --review to re-examine them: "
+            print(f"[crustify-cli translate] skipping {len(_done)} already-wrapped "
+                  f"item(s); --objective review|port to act on them: "
                   f"{', '.join(sorted(_done)[:8])}"
                   + (" …" if len(_done) > 8 else ""))
     if not sel_names:
         raise SystemExit(
             "wrap: nothing selected — pass --name / --dag-layer N "
             "(a --skip blocklist, or every item being wrapped already, may "
-            "have emptied the selection; --review re-examines filled items).")
+            "have emptied the selection; --objective review|port acts on "
+            "filled items).")
 
     # Macros are header-defined: bindgen owns their <lib>-sys shims, so no stage
     # facades them. Exclude macro_* symbols from selection, and drop any --name
@@ -516,7 +516,7 @@ def wrap_types(
         hits = [by_key[k] for k in (by_name.get(nm) or []) if base_in_scope(by_key[k])]
         (skipped if (hits and all(_is_macro(n) for n in hits)) else kept).append(nm)
     if skipped:
-        print(f"[crustify-cli wrap] skipping {len(skipped)} macro(s) — bindgen owns "
+        print(f"[crustify-cli translate] skipping {len(skipped)} macro(s) — bindgen owns "
               f"their -sys shims: {', '.join(sorted(skipped))}")
     sel_names = kept
     if not sel_names:
@@ -569,10 +569,12 @@ def wrap_types(
     # Worktree isolation engages whenever the production emit is in play (a
     # caller-supplied emit_fn, e.g. a test double, opts out).
     emit_factory = None if emit_fn else (
-        lambda t, l: _wrap_emit(t, l, max_syms=max_syms))
+        lambda t, l: _translate_emit(t, l, max_syms=max_syms,
+                                     objective=objective))
     stage = S.Stage(
-        verb="wrap", in_scope=in_scope,
-        emit_fn=emit_fn or _wrap_emit(target, layout, max_syms=max_syms),
+        verb=objective, in_scope=in_scope,
+        emit_fn=emit_fn or _translate_emit(target, layout, max_syms=max_syms,
+                                           objective=objective),
         max_syms=max_syms, max_loc=max_loc,
         emit_factory=emit_factory, target=target, layout=layout,
     )
@@ -599,4 +601,4 @@ def wrap_types(
             f"crustify/targets/<rel>/logs/<session>/; one that never started "
             f"does not, and the line above is all there is.")
     if not dry_run:
-        print("[crustify-cli wrap] done.")
+        print("[crustify-cli translate] done.")

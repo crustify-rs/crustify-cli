@@ -43,74 +43,6 @@ def _lifetime_tier(s: str) -> str:
     return s
 
 
-def _add_subject_scope_flags(
-    p: argparse.ArgumentParser,
-    *,
-    include_names: bool = True,
-    include_files: bool = True,
-    include_scope: bool = True,
-    include_libraries: bool = True,
-) -> None:
-    """Attach the unified subject + scope filter flag set to a subparser.
-
-    Subject filter group (mutually exclusive; defaults to ``--all``
-    semantics when none is set):
-
-      ``--all``     — all matching entries
-      ``--names``   — entries by name
-      ``--files``   — entries defined/declared in specific files
-
-    Scope filter group (mutually exclusive; defaults to both scopes):
-
-      ``--port``    — narrow to port-scope manifest
-      ``--wrap``    — narrow to wrap-scope manifest
-
-    Optional refinement:
-
-      ``--libraries L [L ...]`` — narrow to entries tagged with these
-      libraries. Requires ``--wrap`` (or implicit wrap context, as in
-      the ``wrap`` verb's subjects).
-
-    Per-subcommand availability is controlled by the include_* flags —
-    e.g. ``analyze scope`` doesn't take ``--names`` or scope filters;
-    ``wrap types`` has no scope group (wrap-scope is implicit) but does
-    take ``--libraries``.
-    """
-    subject = p.add_mutually_exclusive_group()
-    subject.add_argument(
-        "--all", action="store_true",
-        help="Match all entries in the chosen scope (default).",
-    )
-    if include_names:
-        subject.add_argument(
-            "--names", nargs="+", metavar="NAME",
-            help="Match entries by name (struct tag / symbol name / typedef alias).",
-        )
-    if include_files:
-        subject.add_argument(
-            "--files", nargs="+", metavar="FILE",
-            help="Match entries defined or declared in these files.",
-        )
-
-    if include_scope:
-        scope = p.add_mutually_exclusive_group()
-        scope.add_argument(
-            "--port", action="store_true",
-            help="Narrow to port-scope manifest.",
-        )
-        scope.add_argument(
-            "--wrap", action="store_true",
-            help="Narrow to wrap-scope manifest.",
-        )
-
-    if include_libraries:
-        p.add_argument(
-            "--libraries", nargs="+", metavar="LIB", default=None,
-            help="Narrow to entries tagged with these libraries "
-                 "(requires --wrap or implicit wrap context).",
-        )
-
-
 def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
     """Selection flags for the unified `translate` command (types + free symbols,
     no subject split). Wrap is **scope-blind by default**
@@ -136,15 +68,6 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
         help="Restrict the selection to entities defined in these files "
              "(disambiguates a --name collision).",
     )
-    _wrap_scope = p.add_mutually_exclusive_group()
-    _wrap_scope.add_argument(
-        "--wrap-only", action="store_true", dest="wrap_only",
-        help="Narrow the selection to wrap-scope entities.",
-    )
-    _wrap_scope.add_argument(
-        "--port-only", action="store_true", dest="port_only",
-        help="Narrow the selection to port-scope entities.",
-    )
     p.add_argument(
         "--max-syms", type=int, default=None, metavar="N", dest="max_syms",
         help="Per-batch symbol budget for wrap: a type's op-chunk size "
@@ -160,7 +83,10 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--dag-layer", type=int, default=None, metavar="N", dest="dag_layer",
         help="Select EVERY in-scope unit at dag layer N — types AND symbols, "
-             "port- or wrap-scope alike; narrow with --wrap-only/--port-only. "
+             "port- or wrap-scope alike. Scope is no longer a selector here: "
+             "the OBJECTIVE says what to do and the agent reads an item's scope "
+             "from the oracle. Use `crustify-oracle query dag --layer N "
+             "--port-only` to inspect a slice by scope. "
              "Lifecycle ops that fold into a type are excluded (they ride with "
              "the type). Combines with --name; e2e driver mode.",
     )
@@ -176,18 +102,22 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
              "units wrap can take. Expansion crosses symbols, so a type "
              "reachable only through a function comes along -- which a "
              "hand-written name list reliably misses. Combines with --skip "
-             "(policy blocklist) and --review; already-wrapped items drop out "
-             "unless --review is set. Check the plan with --dry-run first: a "
+             "(policy blocklist); already-wrapped items drop out unless "
+             "--objective review|port is set. Check the plan with --dry-run first: a "
              "high-layer seed can pull in a large closure.",
     )
     p.add_argument(
-        "--review", action="store_true", dest="review",
-        help="Also schedule items that are ALREADY wrapped (default: only "
-             "those whose `// crustify:todo` placeholder survives). The "
-             "wrapper prompts make a second visit a REVIEW: with agent-owned "
-             "state on disk the agent assesses its quality and accuracy and "
-             "corrects it through the oracle. Use to re-examine a subtree, "
-             "typically with --transitive.",
+        "--objective", dest="objective", default=None,
+        choices=("wrap", "port", "review"),
+        help="What the agent is being asked to DO with the selection; handed "
+             "to the prompt as `{objective}`. `wrap` (default) emits safe "
+             "wrappers. `port` nativizes an item whose C-side readers are "
+             "gone — for a type, its layout and possibly its storage. "
+             "`review` re-examines emitted work as LLM-as-a-Judge. `port` "
+             "and `review` both also BYPASS the already-done gate, since "
+             "both act on items whose anchors are already filled. NOTE: this "
+             "is the objective, NOT the scope filter — to narrow the "
+             "selection to port-scope entities use --port-only.",
     )
     p.add_argument(
         "--dry-run", action="store_true", dest="dry_run",
@@ -547,21 +477,21 @@ def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
     if spec:
         # `--lifetime-for SPEC` IS the selection: no --name, no DAG layer, no
         # batching. The SPEC is the whole selection.
-        from crustify.wrap import wrap_lifetime_for
-        wrap_lifetime_for(target, spec,
-                          dry_run=bool(getattr(args, "dry_run", False)))
+        from crustify.translate import translate_lifetime_for
+        translate_lifetime_for(
+            target, spec,
+            objective=getattr(args, "objective", None) or "wrap",
+            dry_run=bool(getattr(args, "dry_run", False)))
         return
-    from crustify.wrap import wrap_types
-    wrap_types(
+    from crustify.translate import translate_types
+    translate_types(
         target,
         names=getattr(args, "name", None),
         files=getattr(args, "files", None),
-        wrap_only=bool(getattr(args, "wrap_only", False)),
-        port_only=bool(getattr(args, "port_only", False)),
         dag_layer=getattr(args, "dag_layer", None),
         skip=getattr(args, "skip", None),
         transitive=bool(getattr(args, "transitive", False)),
-        review=bool(getattr(args, "review", False)),
+        objective=getattr(args, "objective", None) or "wrap",
         parallel=bool(getattr(args, "parallel", False)),
         chain_policy=getattr(args, "parallel_policy", "per-agent"),
         parallel_max=int(getattr(args, "parallel_max", 8)),
