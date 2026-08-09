@@ -249,6 +249,7 @@ def pack(
     max_syms: int,
     max_loc: int | None = None,
     syms_by_file: bool = False,
+    scope_of: "Callable[[Node], str] | None" = None,
 ) -> list[Batch]:
     """Budget-bounded batches. A type-unit gets a batch to itself, bounded by
     neither cap — see the comment below.
@@ -258,7 +259,15 @@ def pack(
     first (a lone symbol heavier than ``max_loc`` still gets its own batch — a
     function is never split).
 
-    ``syms_by_file`` decides whether that pool is partitioned by DEFINING FILE.
+    ``scope_of`` partitions the pool by SCOPE, and unlike ``syms_by_file`` it is
+    not a policy choice. A symbol's objective is derived from its scope -- a
+    wrap-scope symbol gets a safe FFI view, a port-scope one gets translated --
+    and an agent is handed ONE objective for its whole batch, so a batch mixing
+    the two cannot be given a correct one. The default pool is GLOBAL per layer
+    (`None` key), which makes the mixing routine rather than rare: on the libgit2
+    `src` target, layer 0 carries 250 port-scope symbols beside 101 wrap-scope,
+    and layer 1 carries 321 beside 148. Passing ``scope_of`` splits them; leaving
+    it unset keeps the old single-objective behaviour.
     Default ``False``: symbols pool by budget alone, so one agent may carry
     symbols from several sources. The defining file is not a write boundary —
     the scaffolder homes symbols by ``crates.json``, several sources routinely
@@ -297,7 +306,12 @@ def pack(
         else:
             # `None` key = one global pool for the layer (the default): the
             # defining file is not a write boundary, so it must not bound a batch.
-            pool.setdefault(u.file if syms_by_file else None, []).append(u.node)
+            # Key is (file?, scope?) — file only under `per-file`, scope
+            # whenever a classifier is supplied. Both default to None, i.e. one
+            # pool per layer, which is what the plain budget policy wants.
+            pool.setdefault((u.file if syms_by_file else None,
+                             scope_of(u.node) if scope_of else None),
+                            []).append(u.node)
 
     # pool atomic syms into batches bounded by count (<= max_syms) and,
     # when set, lines-of-code (Σ loc <= max_loc) — whichever cap is hit first
@@ -308,7 +322,7 @@ def pack(
         b.members = list(chunk)
         batches.append(b)
 
-    for fpath, syms in pool.items():
+    for (fpath, _scope), syms in pool.items():
         chunk: list[Node] = []
         loc_sum = 0
         for s in syms:
@@ -404,6 +418,10 @@ class Stage:
     # Lines-of-code budget, binding with `max_syms` on the free-symbol pool
     # (None = no LoC cap).
     max_loc: int | None = None
+    # `Node -> "wrap" | "port"`. Partitions the free-symbol pool so a batch is
+    # homogeneous in scope, which is what lets the emit seam derive one correct
+    # objective for it. Unset = no scope partition (single-objective callers).
+    scope_of: Callable[[Node], str] | None = None
     shared_artifact_fn: Callable[[], None] | None = None  # serialized post-step
     # Worktree-isolation seam. When wired, EVERY agent runs in its own worktree,
     # serial or parallel alike: isolation is what makes an agent's scoped
@@ -704,7 +722,8 @@ def schedule(
     all_batches = [b for li in layers
                    for b in pack(by_layer[li], max_syms=stage.max_syms,
                                  max_loc=stage.max_loc,
-                                 syms_by_file=syms_by_file)]
+                                 syms_by_file=syms_by_file,
+                                 scope_of=stage.scope_of)]
 
     # Plan-time placement check: every batch member must have its home `.rs`
     # materialized on disk, or emit would fail mid-run — after parallel siblings
@@ -751,7 +770,7 @@ def schedule(
             doc = _crates.load(stage.layout)
         for li in layers:
             lb = pack(by_layer[li], syms_by_file=syms_by_file, max_syms=stage.max_syms,
-                      max_loc=stage.max_loc)
+                      max_loc=stage.max_loc, scope_of=stage.scope_of)
             n_chain = (len(_chains_by_home(lb, doc, stage.layout))
                        if doc is not None else len(lb))
             extra = (f" → {n_chain} chain(s)" if n_chain != len(lb) else "")
@@ -781,7 +800,7 @@ def schedule(
                   f"parallel={parallelize} max={parallel_max}")
         for li in layers:
             lb = pack(by_layer[li], syms_by_file=syms_by_file, max_syms=stage.max_syms,
-                      max_loc=stage.max_loc)
+                      max_loc=stage.max_loc, scope_of=stage.scope_of)
             if not lb:
                 continue
             if len(layers) > 1:

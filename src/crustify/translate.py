@@ -160,6 +160,7 @@ def _selection_pred(scope_json, *, files: set[str]):
 
 def _translate_emit(
     target: Path, layout, *, max_syms: int, objective: str = "wrap",
+    scope_of=None,
 ):
     """Production emit: one :class:`TranslateAgent` per scheduled batch. A type
     batch carries the type + this batch's op slice; a syms batch carries the
@@ -167,7 +168,32 @@ def _translate_emit(
     `scaffold --name` (query mode); nothing is pre-resolved here."""
     from crustify.agents.translate import TranslateAgent
 
+    def _objective_for(batch) -> str:
+        """One objective per batch, because the prompt has one `{objective}`.
+
+        A TYPE takes the caller's: a port-scope type is legitimately either
+        wrapped (layout-compatible while C still reads it) or nativized, and
+        which one depends on the opacification burn-down -- live state only the
+        orchestrator tracks.
+
+        A SYMBOL takes its SCOPE's, and the caller does not get a say: AGENTS.md
+        settles it -- wrap-scope symbols get a safe view over the FFI surface,
+        port-scope ones are translated to native Rust. A wrap-scope symbol can
+        never be ported (it is foreign code) and a port-scope one has no reason
+        to stay wrapped for good, so exposing the choice would only be a way to
+        get it wrong. `_schedule.pack` keys the free-symbol pool by scope so the
+        question has a single answer here.
+
+        `review` crosses both: it is a second visit to emitted work, whatever
+        that work was, so scope has nothing to say about it."""
+        if objective == "review" or not scope_of:
+            return objective
+        if any(u.kind == "type" for u in batch.units):
+            return objective
+        return scope_of(batch.members[0]) if batch.members else objective
+
     def emit(batch) -> None:  # batch: _schedule.Batch
+        obj = _objective_for(batch)
         type_units = [u for u in batch.units if u.kind == "type"]
         if type_units:
             # type-pull: the batch's tags plus their field-accessor sets; the
@@ -178,7 +204,7 @@ def _translate_emit(
                 target, batch_kind="type",
                 tags=[u.node.id for u in type_units],
                 kinds=[u.node.subkind for u in type_units],
-                objective=objective,
+                objective=obj,
                 repo_root=layout.repo_root,
             ).run()
             return
@@ -186,7 +212,7 @@ def _translate_emit(
         # one's record/deps/.rs via `crustify-cli query sym`/`query dag`.
         syms = [{"name": m.id, "defined_in": m.defined_in} for m in batch.members]
         TranslateAgent(target, batch_kind="syms", syms=syms,
-                       objective=objective, repo_root=layout.repo_root).run()
+                       objective=obj, repo_root=layout.repo_root).run()
 
     return emit
 
@@ -566,16 +592,26 @@ def translate_types(
     _check_bindgen(layout, target,
                    {lib for n in sel_nodes if (lib := _lib_of(n))})
 
+    # `Node -> "wrap" | "port"`, for the free-symbol pool key and the emit
+    # seam's objective. Wrap wins a tie: the one entity in this target that is
+    # in BOTH closures (`git_transport_cb`, a wrap-closure callback declared in
+    # the port header include/git2/transport.h) is reached through a
+    # function-pointer field, which is wrap work.
+    _is_wrap = scope.in_scope_pred(scope_json, "wrap")
+    def scope_of(n) -> str:
+        return "wrap" if _is_wrap(n) else "port"
+
     # Worktree isolation engages whenever the production emit is in play (a
     # caller-supplied emit_fn, e.g. a test double, opts out).
     emit_factory = None if emit_fn else (
         lambda t, l: _translate_emit(t, l, max_syms=max_syms,
-                                     objective=objective))
+                                     objective=objective, scope_of=scope_of))
     stage = S.Stage(
         verb=objective, in_scope=in_scope,
         emit_fn=emit_fn or _translate_emit(target, layout, max_syms=max_syms,
-                                           objective=objective),
-        max_syms=max_syms, max_loc=max_loc,
+                                           objective=objective,
+                                           scope_of=scope_of),
+        max_syms=max_syms, max_loc=max_loc, scope_of=scope_of,
         emit_factory=emit_factory, target=target, layout=layout,
     )
     failures = S.schedule(
