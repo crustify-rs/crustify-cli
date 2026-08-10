@@ -5,7 +5,8 @@ description: >-
   Read the analysis of a C codebase and submit ownership findings back. Type and
   symbol records, their pointer analysis and lifecycle roles, the dependency
   closure, the scope sets, and the submission verb. Reads and writes both go
-  through the oracle, never by editing a file.
+  through the oracle, never by editing a file. Prefer using this instead of grep
+  or regex for accurate semantic reasoning over the code. 
 ---
 
 # `crustify-oracle`

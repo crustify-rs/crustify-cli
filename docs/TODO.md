@@ -474,7 +474,15 @@ lower priority than it looks.
 
 ---
 
-## `orchestrator.md` names config files that do not exist (2026-08-04)
+## ~~`orchestrator.md` names config files that do not exist~~ (2026-08-04, FIXED)
+
+**Fixed by retiring the file.** `prompts/orchestrator.md` was never loaded by
+any stage — `agents/base.py:_prompt()` resolves `prompts/<stage>.md`, and only
+`types` and `symbols` are stages — so it was an orphan shipping inside the
+installed package. It is now `skills/crustify-orchestrator/SKILL.md`, which uses
+`cli-config.json`, `scope-config.json` and `docs/schemas/crates.md` throughout.
+The `templates/scope-config.json` back-reference was repointed at the same time.
+The original report follows.
 
 `prompts/orchestrator.md` refers to both tiers of config by the wrong filename,
 so an orchestrator following it verbatim authors files nothing reads:

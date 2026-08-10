@@ -10,7 +10,8 @@ Leverage the skills below to drive orchestration.
 
 Setup first, through the first commit of the
 scaffolded Rust tree; then wave planning, running, landing and auditing. Every
-later stage reads what Setup produces.
+later stage reads what Setup produces. Wait for the user's go on both phases.
+Ask the user for the repo root and the port-scope translation target in that repo. 
 
 <!-- PRINCIPLES -->
 
