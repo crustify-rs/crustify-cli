@@ -209,19 +209,13 @@ class CrustifyAgent:
             base / self.prompt_dir / f"{self.stage}.md"
             if self.prompt_dir else base / f"{self.stage}.md"
         )
-        text = prompt_file.read_text()
-        # A stage prompt MAY carry its own copy of the skill index via the same
-        # `<!-- SKILLS_INDEX -->` sentinel principles.md uses — for a stage that
-        # wants it restated next to the task. The system prompt already carries
-        # one, so this is redundancy by choice, not the delivery path.
-        #
-        # Braces in the rendered index are escaped here because a stage prompt
-        # IS run through `prompt_template.format(**arguments)`; principles.md is
-        # not, which is why _render_principles does no such escaping.
-        if "<!-- SKILLS_INDEX -->" in text:
-            idx = self._render_skills().replace("{", "{{").replace("}", "}}")
-            text = text.replace("<!-- SKILLS_INDEX -->", idx)
-        return text
+        # No substitution beyond the caller's `.format(**arguments)`. The
+        # `<!-- PRINCIPLES -->` and `<!-- SKILLS -->` markers a stage prompt
+        # carries are inert: they record where each part of the system preamble
+        # sits relative to the task, and are deliberately NOT sentinels — a
+        # marker that silently expanded would put the text back in the user
+        # turn, which is the compaction path this design exists to leave.
+        return prompt_file.read_text()
 
     def _arguments(self) -> dict:
         # `target` is the repo-RELATIVE id and `repo_root` the full path —
@@ -257,8 +251,8 @@ class CrustifyAgent:
 
     def _render_skills(self) -> str:
         """Render this agent's :attr:`SKILLS` set as a metadata index
-        (name — description + on-disk path), for the ``<!-- SKILLS_INDEX -->``
-        sentinel in principles.md.
+        (name — description + on-disk path), as its own section of the system
+        preamble — a sibling of principles.md, not a section inside it.
 
         Mirrors a skill-aware harness's tier-1 load: the metadata rides in the
         system prompt unconditionally (the routing signal), while the body is
@@ -267,7 +261,9 @@ class CrustifyAgent:
         naming a file the agent opens with the tool it already has.
 
         Descriptions are single-sourced from each SKILL.md's frontmatter, so
-        they never drift from the skill itself."""
+        they never drift from the skill itself. The framing sentence is emitted
+        here rather than kept in principles.md: it is about how to read the
+        index, so it belongs to the index, and principles.md stays principles."""
         bins = self._repo_config().get("bins", {})
         # `crustify` resolves without config in a source checkout; an
         # out-of-tree dep (crustify-prim) has no meaningful fallback and is
@@ -291,7 +287,15 @@ class CrustifyAgent:
             if binpath:
                 block += f"\n  binary: {binpath}"
             blocks.append(block)
-        return "\n".join(blocks) if blocks else "(no skills configured)"
+        body = "\n".join(blocks) if blocks else "(no skills configured)"
+        return (
+            "## Skills\n\n"
+            "Reusable how-to guides for recurring decisions. If a skill's "
+            "`description` below matches what you're doing, **read that skill's "
+            "file in full** before proceeding - the description is the routing "
+            "signal; the body is the procedure.\n\n"
+            f"{body}"
+        )
 
     def _principles_md(self) -> Path:
         """The always-on principles doc, packaged next to the stage prompts.
@@ -304,12 +308,13 @@ class CrustifyAgent:
         return _PKG_ROOT / "prompts" / "principles.md"
 
     def _render_principles(self) -> str:
-        """principles.md with its ``<!-- SKILLS_INDEX -->`` sentinel replaced by
-        this agent's skill index. Empty string if the doc is absent."""
+        """principles.md verbatim. Empty string if the doc is absent.
+
+        No substitution: the skill index used to be spliced into a sentinel in
+        here, which made a principles doc that was partly not principles. The
+        two are concatenated in :meth:`system_preamble` instead."""
         p = self._principles_md()
-        if not p.exists():
-            return ""
-        return p.read_text().replace("<!-- SKILLS_INDEX -->", self._render_skills())
+        return p.read_text() if p.exists() else ""
 
     def system_preamble(self) -> str:
         """What the backend puts in its system slot, above the stage prompt.
@@ -326,5 +331,13 @@ class CrustifyAgent:
         one shared cacheable prefix rather than N. (Cache entries only become
         readable once the first response starts streaming, so a wave launched
         at full concurrency still pays N writes; staggering the first agent is
-        what collects the reads.)"""
-        return self._render_principles()
+        what collects the reads.)
+
+        Two independent documents, concatenated: principles.md is the same for
+        every agent, the skill index varies with :attr:`SKILLS`. The
+        `<!-- PRINCIPLES -->` and `<!-- SKILLS -->` markers in the stage prompts
+        record where each one lands relative to the task; neither is a
+        substitution point."""
+        return "\n\n---\n\n".join(
+            part for part in (self._render_principles().rstrip(),
+                              self._render_skills()) if part)

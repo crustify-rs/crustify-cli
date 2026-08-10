@@ -6,17 +6,6 @@ prompt — so a long run cannot compact it down to a paraphrase.
 
 ---
 
-## Skills
-
-Reusable how-to guides for recurring decisions, loaded alongside these
-principles. If a skill's `description` below matches what you're doing, **read
-that skill's file in full** before proceeding - the description is the routing
-signal; the body is the procedure.
-
-<!-- SKILLS_INDEX -->
-
----
-
 ## Core translation philosophy
 
 Based on interior mutability: types stay layout-compatible with C, wrapped in
