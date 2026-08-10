@@ -20,3 +20,6 @@ build/
 
 # Temp
 tmp/
+
+# git worktrees
+.worktrees/

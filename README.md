@@ -1,224 +1,241 @@
 # Crustify
 
-Crustify is an end-to-end harness that leverages LLMs to automate the 
-migration of production C/C++ codebases to Rust, at scale. 
+Crustify leverages LLM agents to automate the migration of production C/C++ codebases to safe,
+idiomatic Rust, incrementally, efficiently, and with little human involvement.
 
-Given a codebase, Crustify maps its
-build system and test suites, generates an accurate dependency graph of
-types and symbols, identifying those that cross the FFI boundary, 
-and translates them incrementally to safe, idiomatic, tested Rust. Additionally,
-Crustify's pipeline achieves all these in a cost- and time-efficient manner, with
-little human involvement.
+Just point it at a repository and it will map its build system and test suite,
+extract an exact dependency graph of its types and symbols, and translate them in dependency order,
+focusing on maximizing safety without sacrificing correctness. 
 
-Crustify's latest major focus has been on automating the generation of safe wrappers over
-types, symbols, and pointers that cross the FFI boundary (i.e. from C to Rust or vice-versa)--a historically
- manual-heavy task--allowing them to be integrated in Rust-native code **without** using raw 
- pointers, unsafe blocks, and FFI calls, thus re-enabling the Rust compiler's static checks 
- (lifetime, ownership) on otherwise unsafe items. (More on this below.)
+## Value Proposition
 
-## Case studies
+LLM agents have become extremeley powerful at all software engineering tasks.
+However, they need the right guidance, the right amount of work, and the right
+tools to prevent them from hallucinating, reward hacking, and burning
+unnecessary tokens. Additionally, there's a myriad of ways to express a software idiom across
+programming languages (e.g. representing a C/C++ struct in Rust) - as software engineers, we need
+tools (in this case LLMs) that emit reproducible, deterministic outputs, which are on par with the original specification /
+behavior of the original software. We share more more about these pitfalls from real world experiments below.
 
-### OpenSSL
+Crustify provides all these in the form of (a) porperly enegineered prompts that ensure LLMs
+don't derail from the task, (b) a deterministic dependency graph of types and symbols to guide
+them through an incremental, bottom-up translation that enables safety-first coding, (c) a
+balanced workload to keep them focused and enable them to work in parallel,
+and coding conventions to make their output more deterministic. Moreover, Crustify points LLMs at the
+right Rust primitives to generate code that uses the language's memory- and type-safety features.  
 
-We started porting `libssl` (an `openssl` library) to Rust via Crustify. `libssl` depends heavily on
-`libcrypto` (also in `openssl`) and some `libc`, so the first step
-towards migration is to generate safe wrappers over its dependencies. 
+## Quick Setup
 
-**The experiment.** We selected 46 structs and 41 functions that `libssl` imports from `libcrypto`. 
+## Agent Harness
 
-**The result**: Crustify processed all 42 structs in under 1 hour for ~$300, emitting
-safe wrappers around the types themselves and their field accessors, amounting to ~20K LoC.
-Similarly, it also processed all 41 functions in just under 1 hour for $30, emitting safe wrappers
-around the function's arguments and return, amounting to 3.8K LoC. All safe wrappers make minimal
-use of raw pointers, and pass both `cargo build` and `cargo test`.
+Crustify uses a simple agent harness consisting of just three LLM agents:
+- a types-translator agent specialized in `structs`, `enums` and `unions` 
+- a symbols-translator agent specialized in `functions`, `function pointers` and `global variables`
+- an orchestrator agent tasked with driving the harness and housekeeping
 
-See more details in /* link to the crustify-openssl repo */
+**Agent Backends.** Crustify leverages state-of-the-art LLM agent frameworks to access frontier
+models (both proprietary and open-source), providing context management, long-horizong execution,
+fine-tuning for coding tasks. It simply installs the CLI from the model provider and runs it in
+Python subprocesses, without shiping a custom backend that invokes the API, which would require
+laborious maintanance.
 
-### libgit2
+Crustify currently supports the following agent backends:
+- [Claude Code CLI](https://code.claude.com/docs/en/quickstart) for Anthropic models
+- [OpenAI Codex CLI](https://github.com/openai/codex) for OpenAI-compatible models
 
-TODO
+**Translator Agents.** Each translator agent is tasked
 
-### ffmpeg
+**Orchestrator Agent.**
+
+## Semantic Oracle
+
+When asked to reason about code (e.g. find all touchers of a struct field), LLMs are naturally trained to use `grep`
+and pattern matching, which however is an inaccurate static analyis method. Crustify counters that by shipping an accurate
+_semantic oracle_ that leverages CodeQL to statically analyze the target repository and extract semantic properties of its elements.
+
 
 ## Translation Workflow
 
-### Setup
-- discover the build system, feature flags, and build artefacts
-- pick a default configuration, disabling deprecated features (can be adjusted by user)
-- build and run tests to collect baseline
+Crustify currently employs the following translation stages:
+- 
 
-### Oracle
-- generate an accurate dependency graph of types and symbols that acts as an oracle
-for guiding LLMs in incremental translation
-- build the CodeQl DBs and run queries to extract code properties
 
-### Scaffold
-- emit `crates.json` with the codebase's artefacts grouped in crates and modules
-- home every in-scope type and symbol to its proper crate 
+## The two scopes
 
-### Bindings
-- run `bindgen` to generate Rust bindings for FFI symbols and types
+Crustify splits a target into two scopes, and the split drives everything else.
 
-### Translate
-- wraps elements that cross the FFI boundary
-- translates those that are Rust-native
+- **port scope** — code Rust will own. It gets rewritten as native Rust.
+- **wrap scope** — the import closure port code reaches: types, functions and
+  callbacks that stay in C and cross the FFI boundary. It gets **safe wrappers**.
 
-## LLM Agent Harness
-
-Three powerfull LLM agents, maximum concurrency, little engeineering:
-
-### 1. Orchestrator
-
-Drives the preliminary stages and orchestrates the translation waves via the dependency graph.
-
-### Type-Translator
-
-Emits safe, idiomatic wrappers for structs that cross the FFI boundary, including their fields.
-
-Translates those that are fully owned by Rust to native.
-
-### Symbol-Translator
-
-Emits safe, idiomatic wrappers for symbols, globals, and callbacks that cross the FFI boundary.
-
-Translates those that are fully owned by Rust to native.
-
-Supported agent backends:
-- Claude Code CLI
-- OpenAI Codex
-
-Supported billing: subscription-based and API (BYOK)
-
-## Correctness
-
-- each agent writes unit tests for wrappers with sanitizers enabled
-- `crustify audit` stage for measuring the unsafe-footprint
-- each agent can run in LLM-as-a-Judge mode to assess the quality of prior runs
-
-## CLI
-
-Crustify ships the following CLI suite that can be driven by LLM agents and humans alike.
-We recommend using the orchestrator shipped by Crustify for full automation.
-
-- `crustify-oracle` answers static questions about the codebase with the following commands:
-  - `extract-ql`
-  - `query` with the following subcommands:
-    - `types`
-    - `symbols`
-    - `dag`
-    - `files`
-
-- `crustify-cli` launches the translation stage via the following commands:
-  - `scaffold`
-  - `bindgen`
-  - `translate`
-  - `audit` measures the unsafe surface
-
----
-
-Automated C->Rust translation pipeline based on reasoning LLM agents. Each stage pairs a **deterministic
-composer/scheduler** (all bookkeeping - graphs, scope, placement, batching,
-allowlists) with **LLM agents** confined to judgement work (ownership
-inference, codegen, merge). Artifacts for a repo live under
-`<repo_root>/crustify/`; work is scoped to a repo-relative `target`.
+Wrapping is the hard, historically manual half, and it is Crustify's current
+focus. A wrapper lets a C type be used from Rust with no raw pointers, no
+`unsafe` at the call site and no naked FFI — which puts the borrow checker back
+in charge of ownership and lifetimes for an item the compiler could otherwise
+say nothing about. Field access goes through generated accessors; lifecycle
+(free/clone) becomes `Drop`/`Clone`.
 
 ## Pipeline
 
 ```
-(manual: toolchains, build.json, project build, CodeQL db)
-  -> analyze -> scaffold -> bindgen -> translate -> port
-          query / audit  (read-only, anytime)
+(you: toolchains, build.json, project build, CodeQL db)
+  -> extract-ql -> scaffold -> bindgen -> translate
+        query / audit  (read-only, anytime)
 ```
 
-There is no `build` stage. Toolchains, `build.json`, the project build and the
-CodeQL database are the orchestrator's job (see `skills/crustify-pipeline/`);
-crustify picks up at `analyze extract-ql`.
-
-| stage | deterministic composer / scheduler | LLM agents |
+| stage | deterministic composer | LLM agents |
 |---|---|---|
-| **analyze** | the whole stage: `extract-ql`, `scope`, `types`/`symbols` skeletons + full dependency graph, `dag` | - (the schemas' judgement fields are submitted by the wrap agents) |
-| **scaffold** | `crates.json` -> `.rs` placement (query / create / validate) | - (`crates.json` is authored outside the stage; a lookup miss is a hard error) |
-| **bindgen** | `<lib>-sys` crate skeletons, allowlists, include closure | - (the `fn main`, clang args and shims are completed by hand) |
-| **translate** | DAG-layered scheduler: scope filter, per-file/per-dep batching, budget slicing, per-wave isolation | per-unit wrapper agents (type / string / array / symbol); per-wave merge agent |
-| **port** | not implemented | - |
-| **query / audit** | graph walks, record reads, surface counts | - (fully deterministic) |
+| **extract-ql** | T1/T2 CodeQL batches -> entity + edge tables; type/symbol records and the unified dependency DAG derive from them on demand | — |
+| **scaffold** | `crates.json` -> `.rs` placement (query / create / validate) | — |
+| **bindgen** | `<lib>-sys` crate skeletons, allowlists, include closure | — |
+| **translate** | DAG-layered scheduler: scope filter, per-file/per-dep batching, budget slicing, per-wave worktree isolation | one wrapper agent per unit |
+| **query / audit** | graph walks, record reads, unsafe-surface counts | — |
 
-## Invocation
+The composer never gates a unit on whether its deps are already emitted — the
+C/FFI bridge keeps every intermediate state compiling — so a layer's units are
+mutually independent and run concurrently. A wave costs its **longest** agent,
+not the sum.
+
+An agent's judgement (pointer facets, ownership, lifetime, locking) is written
+back into the records via `query … --update`; the merge unions at field level,
+so re-composing never clobbers it.
+
+## Results
+
+Two experiments, on [libgit2](git@github.com:crustify-rs/crustify-libgit2.git) (target `src`)
+and [OpenSSL](git@github.com:crustify-rs/crustify-openssl.git) (target `ssl`, i.e. `libssl`).
+Both ran `claude-opus-5`, one agent per unit, each in its own git worktree.
+
+### 1. Wrap the FFI closure
+
+Wrap every type and callback in the target's wrap closure, plus the wrap-scope
+symbols the first port layers demand — the prerequisite for porting anything.
+
+**libgit2 `src`** — the full wrap closure, 3 DAG layers.
+
+| layer | units | $ | $/line | wall (longest agent) | lines |
+|---|---|---|---|---|---|
+| 0 | 69 | $459.89 | $0.015 | 1h12m | 30,340 |
+| 1 | 9 | $68.43 | $0.009 | 29m11s | 7,636 |
+| 2 | 1 | $8.95 | $0.007 | 19m22s | 1,365 |
+| **Σ** | **79** | **$537.27** | **$0.014** | **2h01m** | **39,341** |
+
+Layer 0 alone was 68 agents at 25.6x speedup over the serial sum. Only 22 of the
+76 wrap types have a field any port function reads; the other 54 are opaque
+handles, which is what makes the closure affordable.
+
+**OpenSSL `ssl`** — 169 wrap types and 63 callbacks across 4 layers, of which 22
+have a port-touched field. The run covered the 46 types carrying the port
+surface, plus every wrap-scope symbol the first two port layers demand.
+
+| | units | $ | wall | lines |
+|---|---|---|---|---|
+| types | 46 | $341.80 | 1h04m | 20,354 |
+| symbols / callbacks | 58 | $60.62 | 2h01m | 7,359 |
+| **Σ** | **104** | **$402.42** | **3h05m** | **27,713** |
+
+**$1.01 and 123 lines per symbol, against $7.43 and 442 per type.** One symbol
+wave bound 29 symbols in a single agent at $0.92 each — one shared idiom read
+once, applied 29 times.
+
+### 2. Transitively wrap a god object
+
+Pick a port-scope type with a large field surface and wrap its entire transitive
+dependency closure, bottom layer up. This is the shape a real port takes.
+
+**libgit2** — three seeds of ≥25 declared fields: `git_indexer`,
+`git_packbuilder`, `git_repository`.
+
+| | closure | port | wrap | fields |
+|---|---|---|---|---|
+| `git_indexer` | 37 | 32 | 5 | 30 |
+| `git_packbuilder` | 61 | 52 | 9 | 29 |
+| `git_repository` | 45 | 39 | 6 | 29 |
+| **union** | **75** | **66** | **9** | — |
+
+143 members if the three were disjoint, 75 in the union: **the overlap saves 70
+units.** The 66 port types are 10.2% of all 646 port-scope types in the target.
+
+The closure is 8 layers deep. Layers 0–1 landed earlier; the run that closed the
+remaining 28 units, all port-scope:
+
+| layer | units | $ | $/agent | $/line | wall | lines |
+|---|---|---|---|---|---|---|
+| 2 | 12 | $150.21 | $12.52 | $0.013 | 38m31s | 11,585 |
+| 3 | 7 | $91.31 | $13.04 | $0.009 | 31m44s | 10,065 |
+| 4 | 4 | $54.23 | $13.56 | $0.013 | 33m11s | 4,139 |
+| 5 | 2 | $40.27 | $20.14 | $0.006 | 38m06s | 6,286 |
+| 6 | 2 | $34.24 | $17.12 | $0.009 | 40m53s | 3,835 |
+| 7 | 1 | $24.08 | $24.08 | $0.008 | 38m28s | 3,167 |
+| **Σ** | **28** | **$394.34** | **$14.08** | **$0.010** | **3h52m** | **39,077** |
+
+Every declared field of all three seeds is wrapped: `git_indexer` 30/30,
+`git_packbuilder` 29/29, `git_repository` 25/29 — the four without accessors are
+the four no port-scope function reads. All four callbacks reached through
+function-pointer fields are wrapped too, each by the type owning its field.
+
+**Cost per agent rises with depth while cost per line falls.** Layer 4 paid
+$13.56 an agent to wrap 16 fields across four small structs; layer 5 paid $20.14
+to wrap 45. An agent's price is set by the reading its dependency stack demands
+before it writes anything, not by the fields it emits — so once the stack beneath
+it is correct, the marginal field is nearly free. The three deepest layers are
+the three cheapest per line. Depth is the cost driver; field count is not.
+
+**OpenSSL** — the same analysis over `record_layer_st`, `quic_stream_st` and
+`ssl_session_st` (25/35/41 fields) gives a 62-member union closure 12 layers
+deep, 36 port and 26 wrap; 36 port types is 9.0% of all 399. Its wrap-scope
+members are covered by experiment 1; the port-scope tail is not yet translated.
+
+### Unsafe surface
+
+`crustify-cli audit` over the libgit2 tree at the close of experiment 2 — a
+deterministic scan, no LLM:
+
+- **1,606 `unsafe` blocks over 45,661 lines (5.6%)**, of which 1,314 — **81.8%**
+  — sit inside an `impl T` that reaches wrapped state through its own accessors.
+- **950 field projections go through accessors, against 2 that do not**, and
+  both predate the run.
+- **0 mutable borrows of a wrapped type**, the discipline's one flat
+  prohibition.
+
+Every unit lands only after `cargo check`, `cargo clippy` and `cargo test
+--workspace` pass over the whole tree. Wrapper agents write their own unit tests;
+a second visit to an already-wrapped unit runs as LLM-as-a-Judge review against
+the agent-owned state on disk.
+
+## Using it
+
+Two binaries. The oracle is read-only and answers static questions about the C
+codebase; the CLI runs the stages.
 
 ```
-crustify-cli [--no-console] [--no-file-log] [--model NAME] [--parallel] [--parallel-max N] \
-         <repo_root> <target> <command> [subcommand] [flags]
+crustify-oracle <repo_root> <target> {extract-ql | query {types|symbols|files|dag}}
+
+crustify-cli [globals] <repo_root> <target> {scaffold | bindgen | translate | audit}
 ```
 
-| global flag | effect |
+| global | effect |
 |---|---|
-| `--no-console` | suppress live agent console output |
-| `--no-file-log` | disable per-agent logs under `crustify/targets/<target>/logs/<session>/` |
-| `--model NAME` | override every agent's model, named `<provider>/<model>` (`anthropic/claude-opus-4-8`, `openai/gpt-5.6`, ...) |
-| `--parallel` | enable per-command parallelism (wrap / port: concurrent agent chains; the analyze subjects are composer-only and ignore it) |
-| `--parallel-max N` | max concurrent agents (default 8) |
-| `--parallel-policy P` | `per-agent` (default) \| `serialize-per-file` (chain batches sharing a home `.rs`) \| `per-file` (pool free symbols per defining file) |
-| `--billing subscription\|api` | how the provider CLI authenticates (default `subscription`) |
-| `--override-base-prompt` / `--no-` | replace the provider CLI's own base prompt with crustify's (default: **keep** the provider's) |
+| `--model NAME` | override every agent's model, as `<provider>/<model>` |
+| `--parallel` / `--parallel-max N` | concurrent agent chains (default 8) |
+| `--parallel-policy P` | `per-agent` \| `serialize-per-file` \| `per-file` |
+| `--billing subscription\|api` | how the provider CLI authenticates |
+| `--no-console` / `--no-file-log` | quiet the live output / per-agent logs |
 
-## Commands
+**translate** selects units with `--name N...`, `--dag-layer N`, or
+`--transitive` to expand each name through its dependency closure; `--file`
+disambiguates, `--wrap-only`/`--port-only` narrow by scope, `--skip` blocklists,
+`--review` re-schedules already-wrapped units, and `--max-syms`/`--max-loc` cap
+per-agent effort so a god object can't blow one context. Start with `--dry-run`:
+a high-layer seed pulls in a large closure.
 
-**analyze** `[--reset]` `<subject>`
-| subject | flags | does |
-|---|---|---|
-| `extract-ql` | - | run the T1/T2 `.ql` batches against `crustify/codeql/db/` -> `crustify/codeql/{t1,t2}/*.csv` |
-| `scope` | `--port-only` \| `--wrap-only` | port set (config) / wrap import-closure -> `scope.json` |
-| `symbols` | `--all`/`--dir`/`--file`/`--name`; `--scope-only` (default)/`--port-only`/`--wrap-only`/`--unscoped`; `--out-suffix` | syms composer skeletons |
-| `types` | same as `symbols` | types composer skeletons |
-| `dag` | - | unified types+symbols dependency DAG -> `deps-dag.json` (scope-agnostic) |
+**audit** takes one seed selector (`--all`, `--name`, `--crate`, `--mod`,
+`--dir`, `--file`); the search is always tree-wide.
 
-Every subject is composer-only — `analyze` spawns no agent. The schemas'
-judgement fields (pointer facets, ownership, lifetime, locking) are submitted by
-the **wrap** agents via `query …/--update` when the entity is wrapped; the merge
-primitive unions at field level, so re-composing never clobbers them.
-`--unscoped` emits the repo-wide candidate set instead of the port-reachable
-one — optional, and required by no later stage.
+Supported agent backends: Claude Code CLI, OpenAI Codex.
 
-**scaffold** - `crates.json`-driven `.rs` oracle. One selector required.
-`--all` \| `--dir DIR` \| `--file FILE` \| `--name N...` \| `--validate`, plus `--create`
-(write stubs; without it, **query mode** prints the homed `.rs` path — every home
-of a name, since one `(kind, name)` may home once per `tu`).
-`crates.json` is authored outside the stage; an unplaced selection is a hard error.
+## Status
 
-**bindgen** - deterministic `<lib>-sys` FFI-crate composer, no LLM.
-`--libs LIB...` (restrict), `--reset` (recompute the composer-owned allowlists +
-include seed instead of accumulating). Crates come out incomplete: `build.rs` has
-the allowlists but no `fn main`, and `bindgen.h`'s shim block is empty.
-
-**query** - read-only oracle. `<subject>`
-| subject | flags |
-|---|---|
-| `types` / `symbols` (alias `syms`) | enumerate, or `--name` introspect; `--schema`, `--manifest`, `--update FINDINGS`/`--update-help`, `--file`, `--port-only`/`--wrap-only`; types: `--fields`/`--field-touchers`/`--ops`/`--methods`/`--range A:B`; syms: `--fields`, `--array`, `--taking SPEC`/`--calling FN`/`--lifetime-for SPEC` (`--hops N`) |
-| `files` | `--port-only` \| `--wrap-only` (scope file sets) |
-| `dag` | `--name N...` (closure) \| `--layer N` (slice) \| `--name X --scc`; `--file`, `--depth N`, `--loc`, `--port-only`/`--wrap-only` |
-
-**wrap** - emit Rust wrappers for wrap-scope units in dependency-layer order
-(requires `scaffold` + `bindgen` to have run).
-`--name N...` \| `--dag-layer N` \| `--lifetime-for SPEC`; `--file`,
-`--wrap-only`/`--port-only`, `--max-syms N` (free-symbol batch budget),
-`--skip N...`, `--transitive` (expand each `--name` through its dep closure),
-`--review` (also schedule already-wrapped units), `--out-suffix`,
-`--parallel`/`--parallel-max N`, `--dry-run`.
-
-**port** - not implemented. The command and its flags still parse; nothing is
-emitted.
-
-**audit** - deterministic (no LLM) unsafe / raw-pointer / naked-FFI surface scan ->
-`audit.json`. One seed selector: `--all` \| `--name N...` \| `--crate C` \| `--mod M`
-\| `--dir D` \| `--file F` (search is always global; the selector picks the seeds).
-
-## Selection model (wrap / port / query / scaffold)
-
-`--name` takes a space-separated list (the user supplies dependency order);
-`--file` disambiguates same-named entities; `--dag-layer N` (wrap) selects a
-whole DAG layer. `translate` drops a selected unit once its `// crustify:todo`
-placeholders are gone - the `// Wraps:` anchor plus, for a type, its port-scope
-`// Field:` anchors; `--review` keeps them. The scheduler never gates on whether
-a DEP is already emitted - the C/FFI bridge keeps every intermediate state
-compiling - and prints the first-layer deps before running (`--dry-run` to stop
-there).
+The wrapper half is the working half: everything above is emitted by it. The
+port stage — rewriting port-scope code as native Rust behind those wrappers — is
+next; its `// Replaces:` anchors are scaffolded but unfilled.
