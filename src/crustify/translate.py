@@ -176,7 +176,7 @@ def _translate_emit(
         which one depends on the opacification burn-down -- live state only the
         orchestrator tracks.
 
-        A SYMBOL takes its SCOPE's, and the caller does not get a say: AGENTS.md
+        A SYMBOL takes its SCOPE's, and the caller does not get a say: principles.md
         settles it -- wrap-scope symbols get a safe view over the FFI surface,
         port-scope ones are translated to native Rust. A wrap-scope symbol can
         never be ported (it is foreign code) and a port-scope one has no reason
@@ -300,7 +300,7 @@ def translate_lifetime_for(
 #: optional trailing gloss the wrapper may have added.
 _ANCHOR_RE = _re.compile(r"^\s*//+\s*(?:Wraps|Replaces):\s*([A-Za-z_]\w*)")
 #: `// Field: <owner>.<field>` — the per-accessor placeholder, OWNER-QUALIFIED
-#: (`docs/AGENTS.md`). Both halves are captured: the owner disambiguates a
+#: (`prompts/principles.md`). Both halves are captured: the owner disambiguates a
 #: module that homes several types (37 of 75 in the openssl tree) which share
 #: field names, and the field half stays dotted for a flattened anonymous
 #: member (`ssl_session_st` . `ext.hostname`) — a C tag carries no dot, so the

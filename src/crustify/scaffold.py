@@ -552,7 +552,7 @@ def _has_field_anchor(text: str, tag: str, fld: str) -> bool:
     """Is ``<tag>.<fld>`` already anchored in ``text``, filled or not?
 
     One exact match, because the anchor names its own owner
-    (``docs/AGENTS.md``: ``// Field: <C_ITEM>.<field>``). The unqualified form
+    (``prompts/principles.md``: ``// Field: <C_ITEM>.<field>``). The unqualified form
     this replaced could only be attributed by POSITION, which needed a walk that
     tracked the enclosing item anchor and had two failure modes -- a sibling
     type in the same module with the same field name, and a symbol's anchor

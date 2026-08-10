@@ -163,10 +163,9 @@ class TranslateAgent(CrustifyAgent):
             "objective":      self._objective,
             "workspace_root": str(self.layout.rust),
             "build_json":     str(self.layout.build_json),
-            # Always-on principles preamble (AGENTS.md), with the role-scoped
-            # skill index spliced into its `<!-- SKILLS_INDEX -->` sentinel.
-            # Inlined as `{principles}` (types.md; harmless if unused).
-            "principles":     self._render_principles(),
+            # NOTE: no `principles` key. The principles doc and skill index are
+            # no longer a `.format` slot — they go to the backend's system slot
+            # via `system_preamble()`, out of reach of context compaction.
         }
         # All wrap paths are now PULL: the agent discovers its job via `crustify
         # query`/`query dag`/`query sym`. The scheduler hands only identity.

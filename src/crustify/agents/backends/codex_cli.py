@@ -18,6 +18,7 @@ name.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -28,8 +29,11 @@ from pathlib import Path
 
 from crustify.agentlog import AgentLog
 
-# Replaces codex's own ~20k-character base instructions when
-# ``config.OVERRIDE_BASE_PROMPT`` is set (the default).
+# Role framing, prepended to the agent's `system_preamble`. Always replaces
+# codex's own ~20k-character base instructions: `model_instructions_file` is
+# the only system slot codex offers and it has no append mode, so writing the
+# preamble at all means displacing them. `OVERRIDE_BASE_PROMPT` additionally
+# strips the context codex injects around those instructions.
 _BASE_PROMPT = (
     "You are a code-translation agent in the crustify C-to-Rust pipeline. "
     "Work through the shell. Follow the task prompt exactly and stop when "
@@ -186,6 +190,7 @@ class CodexCliBackend:
         model: str,
         prompt_template: str,
         arguments: dict,
+        system_preamble: str,
         work_dir: str,
         log: AgentLog,
     ) -> None:
@@ -268,12 +273,26 @@ class CodexCliBackend:
                 "environment."
             )
 
+        # Same system text as the claude backend, placed the only way codex
+        # allows: `model_instructions_file` is a REPLACE slot, so the preamble
+        # always goes through it and codex's own model instructions give way.
+        # Unconditional, because the preamble carries the principles doc and
+        # skill index that every agent needs beyond compaction's reach.
+        #
+        # The filename is content-addressed. `codex_home` is shared across a
+        # wave's worktrees, so a fixed name would have N concurrent agents
+        # writing one path; hashing means identical preambles collide on
+        # identical bytes (harmless) and differing ones never collide at all.
+        system = f"{_BASE_PROMPT}\n\n{system_preamble}".rstrip()
+        digest = hashlib.sha256(system.encode()).hexdigest()[:12]
+        prompt_file = codex_home / f"crustify-base-prompt-{digest}.md"
+        prompt_file.parent.mkdir(parents=True, exist_ok=True)
+        prompt_file.write_text(system)
+        cmd += ["-c", f'model_instructions_file="{prompt_file}"']
         if cfg.OVERRIDE_BASE_PROMPT:
-            prompt_file = codex_home / "crustify-base-prompt.md"
-            prompt_file.parent.mkdir(parents=True, exist_ok=True)
-            prompt_file.write_text(_BASE_PROMPT)
-            cmd += ["-c", f'model_instructions_file="{prompt_file}"',
-                    "-c", "include_environment_context=false",
+            # Strips codex's OWN injected context on top of the replaced
+            # instructions — the rest of what "override the base prompt" means.
+            cmd += ["-c", "include_environment_context=false",
                     "-c", "include_apps_instructions=false",
                     "-c", "include_collaboration_mode_instructions=false",
                     "-c", "include_permissions_instructions=false"]

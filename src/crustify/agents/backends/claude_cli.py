@@ -104,11 +104,15 @@ def _render(evt: dict) -> list[str]:
                    f"duration: {evt.get('duration_ms')}ms]")
     return out
 
-# Replaces the CLI's own base prompt when ``config.OVERRIDE_BASE_PROMPT``
-# is set (the default). crustify's stage prompt arrives as the user
-# message either way; this governs only what sits underneath it. Kept
-# deliberately thin - the stage prompts carry the actual instructions, and
-# every token here is re-sent on every agent invocation.
+# Role framing, prepended to the agent's `system_preamble` and sent on every
+# run. crustify's stage prompt arrives as the user message either way; this
+# governs only what sits underneath it, and `OVERRIDE_BASE_PROMPT` decides
+# whether the CLI's own prompt is appended to or replaced outright.
+#
+# Kept thin because it is role framing, not instructions - those live in
+# principles.md. Length here is not the cost it once looked like: this text is
+# byte-identical across a wave, so it is a cacheable prefix billed at ~0.1x on
+# every run after the first that writes it.
 _BASE_PROMPT = (
     "You are a code-translation agent in the crustify C-to-Rust pipeline. "
     "You have exactly one tool: Bash. Read files, search, and inspect the "
@@ -184,6 +188,7 @@ class ClaudeCliBackend:
         model: str,
         prompt_template: str,
         arguments: dict,
+        system_preamble: str,
         work_dir: str,
         log: AgentLog,
     ) -> None:
@@ -222,8 +227,14 @@ class ClaudeCliBackend:
             "--permission-mode", "bypassPermissions",
             "--add-dir", str(wd),
         ]
-        if cfg.OVERRIDE_BASE_PROMPT:
-            cmd += ["--system-prompt", _BASE_PROMPT]
+        # The system text is unconditional now: it carries the principles doc
+        # and the skill index, which every agent needs and which must sit where
+        # context compaction cannot reach. `OVERRIDE_BASE_PROMPT` no longer
+        # decides *whether* we write here, only whether the CLI's own prompt
+        # survives underneath — append by default, replace when asked.
+        system = f"{_BASE_PROMPT}\n\n{system_preamble}".rstrip()
+        cmd += (["--system-prompt", system] if cfg.OVERRIDE_BASE_PROMPT
+                else ["--append-system-prompt", system])
         if cfg.BILLING == "api":
             # `--bare` is the only switch that makes the CLI authenticate by
             # API key: exporting ANTHROPIC_API_KEY alone does not - it keeps

@@ -86,6 +86,16 @@ class CrustifyAgent:
     stage: str        # label used in skip messages + log filename
     prompt_dir: str | None = None  # optional subdir under prompts/ (e.g. "wrapper");
                                     # the prompt file is prompts/<prompt_dir>/<stage>.md
+    # The skills this agent is given, as (dep, path-under-dep) pairs resolved
+    # through the repo config's `deps` map. Hardcoded rather than declared in
+    # each SKILL.md or listed in cli-config.json: the set is a property of the
+    # ROLE, and the role is the class. `crustify-orchestrator` is deliberately
+    # absent — wave scheduling is not a worker agent's job, and a skill it can
+    # never act on is context it pays for on every request.
+    SKILLS: tuple[tuple[str, str], ...] = (
+        ("crustify", "skills/crustify-oracle/SKILL.md"),
+        ("crustify-prim", "SKILL.md"),
+    )
     output: str | None = None  # path under .crustify/; when set, artifact existence
                                # is the agent-level done signal (skip on re-run).
                                # When None the agent always runs — the orchestrator
@@ -139,6 +149,7 @@ class CrustifyAgent:
                 model=model,
                 prompt_template=prompt,
                 arguments=self._arguments(),
+                system_preamble=self.system_preamble(),
                 work_dir=str(getattr(self, "_work_dir", None) or self.target),
                 log=log,
             )
@@ -199,11 +210,14 @@ class CrustifyAgent:
             if self.prompt_dir else base / f"{self.stage}.md"
         )
         text = prompt_file.read_text()
-        # A prompt may carry the role-scoped skill index inline via the shared
-        # `<!-- SKILLS_INDEX -->` sentinel (the same convention AGENTS.md uses
-        # through _render_principles) instead of the `{principles}` slot. Braces
-        # in the rendered index are escaped so it survives the backend's
-        # `prompt_template.format(**arguments)`.
+        # A stage prompt MAY carry its own copy of the skill index via the same
+        # `<!-- SKILLS_INDEX -->` sentinel principles.md uses — for a stage that
+        # wants it restated next to the task. The system prompt already carries
+        # one, so this is redundancy by choice, not the delivery path.
+        #
+        # Braces in the rendered index are escaped here because a stage prompt
+        # IS run through `prompt_template.format(**arguments)`; principles.md is
+        # not, which is why _render_principles does no such escaping.
         if "<!-- SKILLS_INDEX -->" in text:
             idx = self._render_skills().replace("{", "{{").replace("}", "}}")
             text = text.replace("<!-- SKILLS_INDEX -->", idx)
@@ -242,17 +256,29 @@ class CrustifyAgent:
         return Path(raw) if raw else fallback
 
     def _render_skills(self) -> str:
-        """Render the configured ``skills`` SKILL.md set as a metadata index
-        (name — description + on-disk path) for a ``{skills}`` prompt slot.
+        """Render this agent's :attr:`SKILLS` set as a metadata index
+        (name — description + on-disk path), for the ``<!-- SKILLS_INDEX -->``
+        sentinel in principles.md.
 
-        Mirrors a skill-aware harness's tier-1 load: the metadata is injected
-        into the prompt unconditionally (the routing signal), while the body is
-        read on demand from the path. Single-sourced from each SKILL.md's
-        frontmatter, so descriptions never drift from the skill itself."""
+        Mirrors a skill-aware harness's tier-1 load: the metadata rides in the
+        system prompt unconditionally (the routing signal), while the body is
+        read on demand from the path. That indirection is what makes this work
+        on codex, which has no skill mechanism of its own — the index is prose
+        naming a file the agent opens with the tool it already has.
+
+        Descriptions are single-sourced from each SKILL.md's frontmatter, so
+        they never drift from the skill itself."""
         bins = self._repo_config().get("bins", {})
+        # `crustify` resolves without config in a source checkout; an
+        # out-of-tree dep (crustify-prim) has no meaningful fallback and is
+        # skipped when unconfigured rather than guessed at.
+        fallback = {"crustify": _PKG_ROOT.parent.parent}
         blocks = []
-        for raw in self._repo_config().get("skills", []):
-            p = Path(raw)
+        for dep, rel in self.SKILLS:
+            root = self._dep(dep, fallback.get(dep))
+            if root is None:
+                continue
+            p = root / rel
             if not p.exists():
                 continue
             name, desc, binname = _skill_meta(p)
@@ -267,19 +293,38 @@ class CrustifyAgent:
             blocks.append(block)
         return "\n".join(blocks) if blocks else "(no skills configured)"
 
-    def _agents_md(self) -> Path:
-        """The always-on principles doc (`AGENTS.md`), resolved from the
-        `crustify` dep root (`docs/AGENTS.md`) with the in-tree layout as
-        fallback."""
-        return self._dep("crustify", _PKG_ROOT.parent.parent) / "docs" / "AGENTS.md"
+    def _principles_md(self) -> Path:
+        """The always-on principles doc, packaged next to the stage prompts.
+
+        In `prompts/` rather than `docs/` because that is what it is: a prompt
+        fragment. Neither provider CLI loads it from a canonical path — claude
+        reads `CLAUDE.md`, codex reads a repo-root `AGENTS.md`, and this file
+        was at neither — so the old name advertised a loading mechanism that
+        never existed."""
+        return _PKG_ROOT / "prompts" / "principles.md"
 
     def _render_principles(self) -> str:
-        """The always-on principles preamble for the `{principles}` prompt slot:
-        AGENTS.md verbatim, with its ``<!-- SKILLS_INDEX -->`` sentinel replaced
-        by the skill index. Substituted as a `.format`
-        *value*, so its (single) braces are inserted literally, never re-parsed.
-        Empty string if AGENTS.md is absent."""
-        p = self._agents_md()
+        """principles.md with its ``<!-- SKILLS_INDEX -->`` sentinel replaced by
+        this agent's skill index. Empty string if the doc is absent."""
+        p = self._principles_md()
         if not p.exists():
             return ""
         return p.read_text().replace("<!-- SKILLS_INDEX -->", self._render_skills())
+
+    def system_preamble(self) -> str:
+        """What the backend puts in its system slot, above the stage prompt.
+
+        The principles doc and the skill index go here rather than into the
+        stage prompt for one reason: the system prompt is not part of
+        ``messages``, so nothing a long agent run does can summarize it away.
+        A 100+ turn agent that has had its file contract compacted into a
+        paraphrase is the failure this prevents, and it is silent when it
+        happens — the agent keeps working, just against a lossy copy of the
+        rules.
+
+        It is also byte-identical across every agent of a wave, which makes it
+        one shared cacheable prefix rather than N. (Cache entries only become
+        readable once the first response starts streaming, so a wave launched
+        at full concurrency still pays N writes; staggering the first agent is
+        what collects the reads.)"""
+        return self._render_principles()

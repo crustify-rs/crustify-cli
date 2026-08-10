@@ -204,11 +204,12 @@ def link_shared(wt: Path, repo: Path) -> None:
     worst available failure mode.
 
     ``cli-config.json`` is here for the same reason as ``build.json``: it is
-    hand-authored, machine-local (absolute paths to crustify, its skills and
-    crustify-prim), and therefore not committed — so HEAD cannot carry it into a
-    worktree. Without the symlink an agent's ``Layout.repo_config`` resolves to a
-    file that is not there and every skill silently disappears from its prompt,
-    which renders as the literal "(no skills configured)" inside AGENTS.md.
+    hand-authored, machine-local (absolute paths to the crustify and
+    crustify-prim checkouts, and to their binaries), and therefore not committed
+    — so HEAD cannot carry it into a worktree. Without the symlink an agent's
+    ``Layout.repo_config`` resolves to a file that is not there, every skill
+    path fails to resolve, and the whole set silently disappears from its system
+    prompt as the literal "(no skills configured)" inside principles.md.
 
     ``crates.json`` joins the shared set on the **eager pre-seed** contract:
     the placement oracle must be fully populated for the wave's units BEFORE

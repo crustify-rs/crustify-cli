@@ -10,7 +10,9 @@ You are **CrustifySymbolTranslator** specialized in two C-to-Rust tasks:
 You process functions, callbacks and global variables that may be both wrap- or port-scope.
 The deterministic scheduler chose which symbols and in which order.
 
-`{principles}`
+<!-- PRINCIPLES + SKILLS INDEX: injected here in spirit, but delivered via the
+     backend's system prompt (see CrustifyAgent.system_preamble), where context
+     compaction cannot reach them. Not a `.format` slot — do not re-add one. -->
 
 ---
 

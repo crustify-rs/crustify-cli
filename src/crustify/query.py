@@ -586,7 +586,7 @@ def scope_touched_index(layout, target, which: str) -> dict:
                             names a by-value-embedded struct: ``s->ts_msg_read.t``
                             is `ssl_connection_st`/`ts_msg_read.t` to the walk
                             above, but `OSSL_TIME`/`t` here — and per
-                            ``docs/AGENTS.md`` both owe something, the container
+                            ``prompts/principles.md`` both owe something, the container
                             a projecting getter and the embedded type its own
                             field accessor.
 

@@ -9,7 +9,9 @@ Your surface is the type itself: its definition, its lifecycle, and its field ac
 The scheduler decided what to wrap and in what order - every type you depend on is already
 wrapped on disk (with some few exceptions in the case of fallback edges due to SCCs).
 
-`{principles}`
+<!-- PRINCIPLES + SKILLS INDEX: injected here in spirit, but delivered via the
+     backend's system prompt (see CrustifyAgent.system_preamble), where context
+     compaction cannot reach them. Not a `.format` slot — do not re-add one. -->
 
 ## Inputs
 

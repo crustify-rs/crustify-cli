@@ -31,15 +31,22 @@ class Backend(Protocol):
         model: str,
         prompt_template: str,
         arguments: dict,
+        system_preamble: str,
         work_dir: str,
         log: AgentLog,
     ) -> None:
         """Drive one agent to completion.
 
-        The prompt is ``prompt_template.format(**arguments)``; ``model`` is the
-        resolved model name (``config.MODEL_OVERRIDE`` or the agent default);
-        the agent's shell tool runs in ``work_dir``. The return value is
-        intentionally unused -- success is judged by on-disk artifacts.
+        The prompt is ``prompt_template.format(**arguments)`` and arrives as the
+        agent's first user message; ``model`` is the resolved model name
+        (``config.MODEL_OVERRIDE`` or the agent default); the agent's shell tool
+        runs in ``work_dir``. The return value is intentionally unused --
+        success is judged by on-disk artifacts.
+
+        ``system_preamble`` goes to the CLI's system-instruction slot instead,
+        beneath the backend's own ``_BASE_PROMPT``. The two CLIs offer different
+        slots -- claude appends, codex can only replace -- so each backend
+        places the same string its own way; the content never diverges.
         """
         ...
 

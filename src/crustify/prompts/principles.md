@@ -1,7 +1,8 @@
-# AGENTS.md — crustify C→Rust port: always-on principles
+# crustify C→Rust port: always-on principles
 
 The non-negotiable core every porting/wrapping agent must hold in context at all
-times.
+times. Delivered as the agent's **system prompt**, not as part of the task
+prompt — so a long run cannot compact it down to a paraphrase.
 
 ---
 
