@@ -45,14 +45,15 @@ def _lifetime_tier(s: str) -> str:
 
 def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
     """Selection flags for the unified `translate` command (types + free symbols,
-    no subject split). Wrap is **scope-blind by default**
-    — a named entity wraps regardless of port/wrap scope (no refusal).
-    `--wrap-only` / `--port-only` are opt-in *narrowing* filters, and `--file`
+    no subject split). Selection is **scope-blind**: a named entity is
+    translated regardless of port/wrap scope, and `--objective` says what to DO
+    with it. There is no scope filter here — `crustify-oracle` carries
+    `--port-only` / `--wrap-only` for inspecting a slice by scope. `--file`
     restricts to a defining file (disambiguating a `--name` collision).
 
-    A per-agent **effort budget** (`--max-fields` / `--max-ops`) caps each
-    type's workload so a "god object" can't blow one agent's context; the
-    orchestrator slices the surface and hands the agent a fixed worklist.
+    A per-agent **effort budget** (`--max-syms` / `--max-loc`) caps each unit's
+    workload so a "god object" can't blow one agent's context; the orchestrator
+    slices the surface and hands the agent a fixed worklist.
     """
     p.add_argument(
         "--name", nargs="+", action="extend", metavar="NAME", default=None,
@@ -116,8 +117,9 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
              "`review` re-examines emitted work as LLM-as-a-Judge. `port` "
              "and `review` both also BYPASS the already-done gate, since "
              "both act on items whose anchors are already filled. NOTE: this "
-             "is the objective, NOT the scope filter — to narrow the "
-             "selection to port-scope entities use --port-only.",
+             "is the objective, NOT a scope filter — `translate` has none; "
+             "use `crustify-oracle query … --port-only` to inspect a slice by "
+             "scope.",
     )
     p.add_argument(
         "--dry-run", action="store_true", dest="dry_run",
@@ -354,10 +356,10 @@ def main() -> None:
              "crustify:allowlist-agent block or the crustify:shims block.",
     )
 
-    # -- wrap ------------------------------------------------------------
-    # The SCOPE keeps its own name: `--wrap-only` / `--port-only` and
-    # wrap-scope / port-scope are the dichotomy in scope.json, orthogonal to
-    # which stage runs. Only the stage is called `translate`.
+    # -- translate ---------------------------------------------------------
+    # The SCOPE keeps its own name: wrap-scope / port-scope is the dichotomy in
+    # scope.json (and crustify-oracle's `--wrap-only` / `--port-only`),
+    # orthogonal to which stage runs. Only the stage is called `translate`.
     wrap_p = sub.add_parser(
         "translate",
         help=(
