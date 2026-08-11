@@ -7,7 +7,7 @@ scheduler handed it, and reports only on that. Cross-wave state, promotion,
 and the regression guard are yours alone.
 
 Leverage the skills below to drive orchestration.
-Read `principles.md` from the `crustify-cli` repo (on disk) and learn the translation playbook
+Read <!-- PRINCIPLES_PATH --> and learn the translation playbook
 and conventions employed by Crustify.
 
 Setup first, through the first commit of the

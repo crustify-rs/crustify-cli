@@ -14,9 +14,12 @@
 #
 # The output inlines the skill index rather than pointing at it. That is only
 # safe because it is DERIVED -- regenerate and the copy is current.
-# Hand-copying the same text would be the drift this avoids. principles.md
-# stays a pointer in the template: the orchestrator reads it from disk, unlike
-# a translate agent, which is handed it.
+# Hand-copying the same text would be the drift this avoids.
+#
+# principles.md stays a pointer, resolved to an absolute path: the orchestrator
+# reads it from disk, unlike a translate agent, which is handed it in its
+# system prompt. The path is this checkout's, so it is openable the moment the
+# prompt is pasted -- before a target repo has been named.
 #
 # WHERE SKILLS COME FROM. Content is read from each skill's SOURCE, never from
 # a deployed copy: this repo's own skills/ for the ones it owns, plus the
@@ -93,10 +96,15 @@ index = (
     + "\n".join(b for _n, b in sorted(blocks))
 )
 
-MARKER = "<!-- SKILLS -->"
-if MARKER not in template:
-    sys.exit(f"orchestrator.md no longer carries {MARKER}")
-template = template.replace(MARKER, index)
+principles = prompts / "principles.md"
+if not principles.is_file():
+    sys.exit(f"no {principles}")
+
+for marker, value in (("<!-- PRINCIPLES_PATH -->", f"`{principles}`"),
+                      ("<!-- SKILLS -->", index)):
+    if marker not in template:
+        sys.exit(f"orchestrator.md no longer carries {marker}")
+    template = template.replace(marker, value)
 
 sys.stdout.write(template.rstrip() + "\n")
 PY
