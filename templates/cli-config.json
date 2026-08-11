@@ -12,11 +12,14 @@
 
   "_comment_deps": [
     "Absolute path per dependency, resolved by `CrustifyAgent._dep`:",
-    "  * `crustify`      - the crustify checkout. `docs/AGENTS.md` is read from",
-    "                      it for the `{principles}` prompt slot; falls back to",
-    "                      the installed package's own tree when absent.",
-    "  * `crustify-prim` - the wrap-primitive crate. The port/wrap prompts pass",
-    "                      its `src/lib.rs` to the agent as `{crustify_prim}`."
+    "  * `crustify`      - the crustify checkout. Its `skills/` supply the",
+    "                      SKILL.md set indexed into every agent's system",
+    "                      prompt; falls back to the installed package's own",
+    "                      tree when absent.",
+    "  * `crustify-prim` - the wrap-primitive crate. Its `SKILL.md` joins that",
+    "                      index, and `scaffold` writes this path into every",
+    "                      generated crate's `Cargo.toml`. Falls back to a",
+    "                      checkout beside the crustify one."
   ],
   "deps": {
     "crustify": "/absolute/path/to/crustify",

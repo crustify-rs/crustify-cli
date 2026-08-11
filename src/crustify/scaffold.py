@@ -386,6 +386,31 @@ def _materialize(layout, entries: list[dict],
             f"{preserved} preserved, {links} module link(s)")
 
 
+def _crustify_prim(layout) -> Path:
+    """Absolute path to the crustify-prim checkout.
+
+    ``deps.crustify-prim`` in ``cli-config.json`` is authoritative — the same
+    entry :meth:`crustify.agents.base.CrustifyAgent._dep` resolves — so one
+    config line places the crate for both the generated manifests and the agent
+    prompts. A checkout beside the crustify one is the fallback, which is the
+    layout a repo without a config gets.
+
+    Absolute either way: the path is written into a ``Cargo.toml`` under
+    ``rust/``, and a relative one is depth-sensitive — it resolves differently
+    inside a git worktree, which sits two levels deeper under
+    ``crustify/.worktrees/<slug>/``.
+    """
+    p = layout.repo_config
+    if p.exists():
+        try:
+            dep = (json.loads(p.read_text()).get("deps") or {}).get("crustify-prim")
+        except (json.JSONDecodeError, OSError):
+            dep = None
+        if dep:
+            return Path(dep)
+    return Path(__file__).resolve().parents[3] / "crustify-prim"
+
+
 def _materialize_manifests(layout, doc: dict) -> str:
     """Write each in-tree wrapper crate's ``Cargo.toml`` + register it as a
     workspace member, idempotently — so the wrap/port output is a real compilable
@@ -396,7 +421,7 @@ def _materialize_manifests(layout, doc: dict) -> str:
     by denying ``clippy::undocumented_unsafe_blocks`` workspace-wide, inherited
     via ``[lints] workspace = true`` (the ``-sys`` crates don't opt in, keeping
     their generated-code ``allow``)."""
-    crustify_prim = Path(__file__).resolve().parents[3] / "crustify-prim"
+    crustify_prim = _crustify_prim(layout)
     crates = doc.get("crates") or {}
     # A wrapper crate becomes "real" once it has a scaffolded lib.rs (members were
     # placed there); skip empty ones (e.g. a foreign lib with no wrappers). NOTE:
@@ -425,10 +450,9 @@ def _crate_manifest(name: str, c: dict, crate_dir: Path, layout,
                     crustify_prim: Path, real: dict) -> str:
     def rel(p: Path) -> str:
         return os.path.relpath(p, crate_dir).replace(os.sep, "/")
-    # `crustify-prim` lives OUTSIDE `rust/` (up at the git root), so a relative
-    # path is depth-sensitive and breaks inside a git worktree (which sits two
-    # levels deeper under `crustify/.worktrees/<slug>/`). Use an absolute path so
-    # it resolves identically from the main checkout and from any worktree.
+    # Absolute, per `_crustify_prim`: the crate lives outside `rust/`, so a
+    # relative path resolves differently from a worktree than from the main
+    # checkout.
     deps = [f'crustify-prim = {{ path = "{crustify_prim}" }}']
     # The crate's -sys FFI dep: explicit `sys_crate`, else the `<name>-sys`
     # convention. Every library with bound entities has one, in-tree or not
