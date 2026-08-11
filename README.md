@@ -15,21 +15,20 @@ correctness.
 LLM agents have become extremely powerful at every software engineering
 task. However, they need the right guidance, the right unit of work, and the
 right tools to prevent them from hallucinating, reward hacking, and burning
-unnecessary tokens. Additionally, the inherent non-deterministic nature of LLMs leads
-them to produce different outputs for the same inputs, which is especially aggravated
+unnecessary tokens. Additionally, LLMs tend to be non-deterministic, producing different outputs
+for the same inputs, which is especially aggravated
 in the world of cross-language transpilation where one idiom can be expressed in multiple different
-ways across languages (e.g. a C/C++ struct in Rust). Thus, it is crucial to
-point LLMs at the right conventions and expose them as much as possible to structured
-specifications so they produce more deterministic and reproducible outputs.
+ways across languages (e.g. a C/C++ struct in Rust). It is thus imperative to
+establish the right conventions and specifications when using LLMs so they produce deterministic
+and reproducible outputs.
 
 Crustify provides all of these: (a) properly engineered prompts that ensure
-LLMs don't derail from the task, (b) a deterministic dependency graph of types
+LLMs don't derail from the task, (b) pointers to the right Rust primitives 
+that lead to code with memory- and type-safety guarantees (c) a deterministic dependency graph of types
 and symbols to guide them through an incremental, bottom-up translation that
-enables safety-first coding, (c) a balanced workload to keep them focused and
-enable parallel agent execution, (d) coding conventions and structured specifications
-to enable more deterministic outputs. Moreover, Crustify points LLMs at the right
-Rust primitives enabling them to emit code that carries memory- and type-safety
-guarantees instead of unsafe blocks and raw pointers.
+enables safety-first coding, (d) a balanced workload and task decomposition to keep them focused and
+enable parallel agent execution, and (e) coding conventions and structured specifications
+to enable deterministic outputs.
 
 
 ## Quick Setup
@@ -69,7 +68,7 @@ utils/build-orchestrator-prompt.sh <crustify-prim-checkout> -o orchestrator.md
 
 It will first ask you to point it at the repo root and the target subsystem(s)
 you want to translate — a subset of files, an entire `src/` directory, or the
-whole repo. Then it will wait for your go before starting work. Adjust to your
+whole repo. Then it will wait for your approval before starting work. Adjust to your
 liking / use case.
 
 
@@ -129,7 +128,7 @@ notoriously inaccurate static analysis method that may miss true sites (false
 negatives) or record false ones (false positives). In our experiments we
 observed LLMs falling into both.
 
-Crustify mitigates this by equipping LLM agents with a _semantic oracle_ that
+Crustify mitigates this by equipping LLM agents with a **_semantic oracle_** that
 leverages [CodeQL](https://codeql.github.com/) queries to statically analyze
 the target repository and extract semantic properties of its types and symbols.
 The queries are tracked in the repo and verified, so agents do not have to
@@ -145,7 +144,7 @@ The semantic oracle has three primary jobs:
    fallback edges.
 
 2. It maintains an **`ownership-store.json`** where agents can submit ownership
-   and borrow properties of C/C++ pointers, as well as lifetime primitives of
+   and borrow judgement of C/C++ pointers, as well as lifetime primitives of
    types — both of which are ambiguous to static and dynamic analysis alike.
 
 3. It ships as a **CLI binary** that translator agents query on demand to learn
@@ -207,14 +206,24 @@ system.
 
 Here's where translation work happens.
 
-**FFI interoperability.** Interoperability across the FFI boundary is the hard, historically
-  manual half, and is Crustify's current focus. A wrapper lets a C type be used from Rust with no raw pointers, no
-  `unsafe` at the call site and no naked FFI — which puts the borrow checker back
-  in charge of ownership and lifetimes for an item the compiler could otherwise
+**Batch scheduling.** Crustify employs a deterministic scheduler that queries the dependency graph
+for a given set of seeds to compose batches and assign them to symbol/type translator agents.
+The batching policy is governed by the DAG layers---each agent gets a batch of items from the
+same layer, lower layers are scheduled before higher ones. The symbol agent takes a batch of
+symbols capped by a configurable max number of symbols and LoC (currently 50 and 1000), while
+the type agent gets a single type. Agents with batches within a layer run concurrently in isolated
+worktrees via a configurable concurrency threshold.
+
+**FFI interop.** Interoperability across the FFI boundary is the hard, historically
+  manual half, and is Crustify's current focus. A wrapper lets a C type be used from
+  Rust with no raw pointers, no `unsafe` at the call site and no naked FFI — which puts
+  the borrow checker back in charge of ownership and lifetimes for an item the compiler could otherwise
   say nothing about. Field access goes through generated accessors; lifecycle
   (free/clone) becomes `Drop`/`Clone`.
 
-**Translation to native Rust.**
+**Nativization.** TODO
+
+**Safety Audit.** TODO
 
 
 ## CLI

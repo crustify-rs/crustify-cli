@@ -40,10 +40,6 @@ are the only complete spec.
 ## Phase 1 — Setup
 
 From an untouched checkout to the first commit of the scaffolded Rust tree.
-There is no build stage and no recovery stage: a wrong `build.json` key or a
-mis-scoped `port_files` does not fail loudly, it produces a plausible dependency
-graph that is wrong, and every agent downstream inherits it. Get this phase
-right before spending anything on translation.
 
 ### 1. Toolchains and checkouts
 
@@ -56,7 +52,7 @@ right before spending anything on translation.
 | `bindgen-cli` | `cargo install bindgen-cli` |
 | CodeQL | the CodeQL CLI bundle, on `PATH` |
 
-Ask the user which agent backends it wants to install, as both may not be necessary.
+Ask the user which agent backends it wants to install, as it may not want you to install both.
 On macOS arm64 the CodeQL bundle needs Rosetta.
 
 **`crustify-prim` must be checked out beside crustify.** It is the
@@ -76,21 +72,6 @@ The layout is load-bearing:
   crustify-prim/     # sibling — NOT configurable
 ```
 
-`scaffold` resolves it as `<crustify checkout>/../crustify-prim`
-(`src/crustify/scaffold.py`) and writes that absolute path into every generated
-crate's `Cargo.toml` as `crustify-prim = { path = … }`. A checkout anywhere else
-scaffolds crates that do not build, and `cli-config.json` cannot fix it — the
-`deps.crustify-prim` entry there feeds the agent prompt's `{crustify_prim}` slot
-and is read by nothing in scaffold.
-
-So crustify-prim is named in three places, all of which must agree:
-
-| where | for |
-|---|---|
-| sibling directory | the `path` dependency in each generated `Cargo.toml` |
-| `cli-config.json` `deps.crustify-prim` | `src/lib.rs`, handed to agents as `{crustify_prim}` |
-| `cli-config.json` `skills[]` | its `SKILL.md`, indexed into every translator's prompt |
-
 ### 2. Bootstrap `crustify/`
 
 ```bash
@@ -107,9 +88,8 @@ Author `<repo>/crustify/cli-config.json` from `templates/cli-config.json`:
 | `bins` | absolute path to `crustify-cli` and `crustify-oracle` |
 | `skills` | absolute paths to the `SKILL.md` files indexed into every agent's prompt |
 
-List at least `crustify/skills/crustify-oracle/SKILL.md` and
-`crustify-prim/SKILL.md` under `skills` — a translator that cannot see the
-primitive router will invent its own ownership representation. Do **not** list
+List `crustify/skills/crustify-oracle/SKILL.md` and
+`crustify-prim/SKILL.md` under `skills`. Do **not** list
 this skill: it is orchestrator-facing, and injecting setup instructions into a
 wrapper agent's context is pure waste.
 
@@ -222,11 +202,6 @@ crustify-cli <repo_root> <target> scaffold --all
 crustify-cli <repo_root> <target> scaffold --validate
 ```
 
-`--validate` checks that every entity is homed in exactly one `.rs` and that
-crate `depends_on` is acyclic. Placement is authored outside the stage, so an
-unplaced selection is a hard error, not a warning — scaffold is deterministic
-and runs no LLM.
-
 ### 8. `bindgen`
 
 ```bash
@@ -246,11 +221,6 @@ them needs a compiler in the loop, so complete them by hand.
 - **Do not shim a macro that has no bindgen binding.** Worker agents generate
   those on demand during translate; a hand-written shim collides with what they
   emit.
-
-`--reset` recomputes the composer-owned state instead of accumulating onto it:
-`build.rs`'s `ALLOWED_*`/`BLOCKLIST_FOREIGN` stop being a cross-target union, and
-`bindgen.h`'s include block is re-seeded, discarding hand ordering. It never
-touches the `crustify:allowlist-agent` or `crustify:shims` blocks.
 
 ### 9. Commit
 
