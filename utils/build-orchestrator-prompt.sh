@@ -7,15 +7,16 @@
 # Writes to stdout unless -o is given. Progress and warnings go to stderr, so
 # the prompt can be piped or redirected without picking them up.
 #
-# WHY A BUILD STEP. types.md and symbols.md carry the same two markers, but
-# crustify fills those at spawn time -- it owns the agent's system prompt, so
-# principles and the skill index are delivered there and the markers in the
-# stage prompt are inert records of that. Nothing spawns an orchestrator, so
-# there is no runtime to hook: this script is that runtime, run once by hand.
+# WHY A BUILD STEP. A translate agent gets its skill index from crustify at
+# spawn time, which owns that agent's system prompt. Nothing spawns an
+# orchestrator, so there is no runtime to hook: this script is that runtime,
+# run once by hand.
 #
-# The output inlines principles.md and the skill index rather than pointing at
-# them. That is only safe because it is DERIVED -- regenerate and the copy is
-# current. Hand-copying the same text would be the drift this avoids.
+# The output inlines the skill index rather than pointing at it. That is only
+# safe because it is DERIVED -- regenerate and the copy is current.
+# Hand-copying the same text would be the drift this avoids. principles.md
+# stays a pointer in the template: the orchestrator reads it from disk, unlike
+# a translate agent, which is handed it.
 #
 # WHERE SKILLS COME FROM. Content is read from each skill's SOURCE, never from
 # a deployed copy: this repo's own skills/ for the ones it owns, plus the
@@ -72,7 +73,6 @@ from crustify.agents.base import _skill_meta
 
 prompts = repo / "src" / "crustify" / "prompts"
 template = (prompts / "orchestrator.md").read_text()
-principles = (prompts / "principles.md").read_text().strip()
 
 sources = sorted((repo / "skills").glob("*/SKILL.md")) + [prim / "SKILL.md"]
 
@@ -93,11 +93,10 @@ index = (
     + "\n".join(b for _n, b in sorted(blocks))
 )
 
-for marker, value in (("<!-- PRINCIPLES -->", principles),
-                      ("<!-- SKILLS -->", index)):
-    if marker not in template:
-        sys.exit(f"orchestrator.md no longer carries {marker}")
-    template = template.replace(marker, value)
+MARKER = "<!-- SKILLS -->"
+if MARKER not in template:
+    sys.exit(f"orchestrator.md no longer carries {MARKER}")
+template = template.replace(MARKER, index)
 
 sys.stdout.write(template.rstrip() + "\n")
 PY
