@@ -1,7 +1,7 @@
 # Crustify
 
 Crustify leverages LLM agents to automate the migration of production C/C++
-codebases to safe, idiomatic Rust, incrementally and efficiently, with little
+codebases to **safe, idiomatic Rust**, incrementally and efficiently, with little
 human involvement.
 
 Point it at a repo and it will map its build system and test suite, extract an
@@ -12,24 +12,24 @@ correctness.
 
 ## Why Crustify
 
-LLM agents have become extremely powerful across every software engineering
+LLM agents have become extremely powerful at every software engineering
 task. However, they need the right guidance, the right unit of work, and the
 right tools to prevent them from hallucinating, reward hacking, and burning
-unnecessary tokens. Additionally, there are several ways to express a software
-idiom across programming languages (e.g. representing a C/C++ struct in Rust) —
-as software engineers, we would like LLM-based tools that emit reproducible,
-deterministic outputs, faithful to the original specification and behavior of
-the software. We will soon share more details on how we encountered these
-pitfalls in real-world experiments.
+unnecessary tokens. Additionally, the inherent non-deterministic nature of LLMs leads
+them to produce different outputs for the same inputs, which is especially aggravated
+in the world of cross-language transpilation where one idiom can be expressed in multiple different
+ways across languages (e.g. a C/C++ struct in Rust). Thus, it is crucial to
+point LLMs at the right conventions and expose them as much as possible to structured
+specificaitons so they produce more deterministic and reproducible outputs.
 
 Crustify provides all of these: (a) properly engineered prompts that ensure
 LLMs don't derail from the task, (b) a deterministic dependency graph of types
 and symbols to guide them through an incremental, bottom-up translation that
 enables safety-first coding, (c) a balanced workload to keep them focused and
-enable parallel agent execution, and (d) coding conventions to make their
-output more deterministic. Moreover, Crustify instructs LLMs to use the right
-Rust primitives, so the emitted code carries memory- and type-safety guarantees
-instead of raw pointers.
+enable parallel agent execution, (d) coding conventions and structured specifications
+to enable more deterministic outputs. Moreover, Crustify points LLMs at the right
+Rust primitives enabling them to emit code that carries memory- and type-safety
+guarantees instead of unsafe blocks and raw pointers.
 
 
 ## Quick Setup
@@ -73,6 +73,28 @@ whole repo. Then it will wait for your go before starting work. Adjust to your
 liking / use case.
 
 
+## What can it do for you
+
+Crustify can help you automate the following C-to-Rust tasks:
+
+**Safe wrappers for C/Rust interop.** Crustify can emit a safe wrapper interface over the public
+  API of a C/C++ library, and re-export it so that Rust-native consumers can integrate it without
+  having to use unsafe or raw pointers. Moreover, if the library is already written in Rust, or is in the process
+  of being migrated to Rust, Crustify can emit safe wrappers for its public API so that C/C++ consumers can
+  integrate it without introducing undefined behavior hazards.
+
+**Incremental migration to Rust.** Crustify can also help you automate
+  the migration of production C/C++ codebases to memory-safe, idiomatic Rust. It first decomposes
+  the target in smaller units, i.e. symbols and types, and then translates them in dependency order, bottom-up.
+  As each lower-layer items become migrated to Rust, some may still needs to stay interoperable with the higher
+  C/C++ layers---Crustify reuses the same principle of temporarily wrapping FFI items
+  with safe Rust abstractions until they do not cross the FFI boundary anymore and can be nativized.
+
+**Partial migration to Rust.** Using the above principles, Crustify can also narrow its scope to
+  migrate to Rust only a subset of the subsystems, files, or types, keeping them interoperable with
+  what stays in C/C++.  
+
+
 ## Agent Harness
 
 Crustify uses a simple agent harness consisting of **three LLM agents**:
@@ -102,7 +124,7 @@ Billing modes: subscription-based (Claude Max, Codex Pro) or via API key (BYOK).
 ## The Semantic Oracle
 
 When asked to analyze code (e.g. to find all touchers of a `struct` field),
-LLMs default to `grep` and regex matching over source text. This is, however, a
+LLMs default to `grep` and regex-matching over source text. This is, however, a
 notoriously inaccurate static analysis method that may miss true sites (false
 negatives) or record false ones (false positives). In our experiments we
 observed LLMs falling into both.
@@ -130,13 +152,14 @@ The semantic oracle has three primary jobs:
    these facets about the type or symbol they are processing.
 
 
-## Pipeline
+## How it works
 
 Crustify is a pipeline consisting of two phases, each with its own stages and
-I/O artifacts, where work is split between deterministic composers for
-mechanical tasks and LLMs for semantic reasoning and codegen. The composers are
+structured I/O artifacts, where work is split between **deterministic composers** for
+mechanical tasks and **LLMs** for semantic reasoning and codegen. The composers are
 implemented in Python and packaged as two CLI binaries that can be driven by
-LLMs or humans alike.
+LLMs and humans alike. A human is free to verify and modify the artifacts produced by the LLM
+between stages, which can help find ptifalls and fine tune the outputs of the downstream stages.
 
 ### 1. Setup
 
@@ -147,44 +170,45 @@ by the **orchestrator agent**.
 **Target discovery.** The orchestrator first configures and builds the target codebase, and
 runs the test suite to collect a baseline. It then authors **`build.json`** where it lists
 the build artifacts of the target (executables, shared libraries), their TU and header sources,
-the build-time flags that enable/disable features, and the configure/build/clean/test commands.
+feature flags that enable/disable features at build-time, and the configure/build/clean/test commands.
 `build.json` will then drive the organization of the Rust tree in crates, and it will act as a
-source of truth for downstream agents for configuring/building/testing the system.
+source of truth for downstream agents for obtaining the commands configuring/building/testing the
+system.
 
 **CodeQL extraction.** The orchestrator builds the CodeQL database and runs the `.ql` extraction
-  queries to generate CSV that store static information about code items: argument/return/variable
-  types, field accesses, typedef aliasing, and more. The CSVs are then consumed by the oracle to
-  build the DAG.
+  queries to generate `CSV` tables that store static information about code items: argument/return/variable
+  types, field accesses, typedef aliasing, and more. The tables are then consumed by the oracle to
+  build the dependency graph.
 
 **Scope specification.** The orchestrator authors **`scope-config.json`** where it lists all the
-  TUs and headers that make up the port targets selected when bootstrapping the orchestrator agent.
+  TUs and headers that form the port target selected when bootstrapping the orchestrator agent.
   Crustify splits a target into two scopes, and the split drives everything else:
-  - **port scope** — code Rust will own. It gets rewritten as native Rust.
-  - **wrap scope** — the import closure port code reaches: types, functions and
-    callbacks that stay in C and cross the FFI boundary. It gets **safe
-    wrappers**.
+  - **port scope** - code that Rust will own. It gets rewritten as native Rust.
+  - **wrap scope** - the import closure port code reaches: types, functions and
+    callbacks that stay in C and cross the FFI boundary. It gets **safe wrappers**.
 
-**Crates specification.** The orchestrator authors **`crates.json`** where it designs a hierarchy of
-  Rust crates, modules, and `.rs` source files that will guide the organization of the Rust tree. It
-  then fetches all port- and wrap-scope
-  items from the oracle, and assigns them to a single `.rs` source. The orchestrator looks at the build
-  artifacts identified in `build.json` to specify the top-level crates and at the directory structure
-  of the original tree to sketch Rust modules and `.rs` sources. The orchestrator then runs a deterministic
-  composer to scaffold a skeleton Rust tree on disk based on the `crates.json` specification.
-  Every target crate has a companion `-sys` crate which will host the bindings generated via `bindgen` in
-  the next stage.
+**Crates specification.** The orchestrator authors **`crates.json`** where it sketches a hierarchy of
+  Rust crates, modules, and `.rs` source files that govern how the Rust tree will be organized. It
+  then fetches each port- and wrap-scope item using the oracle, and homes it in a `.rs` source.
+  The organization is faithful to the build artefact structure listed in `build.json` for the top-level
+  crates while modules and `.rs` files mirror the directory structure of the original tree to the extend
+  possible (e.g. Rust does not have `.h` headers, just TUs). The orchestrator then runs the deterministic
+  composer to scaffold a skeleton Rust tree on disk based on the `crates.json` specification. Every crate
+  has a companion `-sys` which will host the bindings generated via `bindgen` in the next stage. Users may
+  adjust `crates.json` to their liking for a custom Rust-tree organization.
 
-**Bindings generation.** The orchestrator first runs a mechanic composer that
-  emits an incomplete `build.rs` in every `-sys` crate with allowlists that will be processed by bindgen.
-  These are computed mechanically based on the dependency relations maintained by the oracle. The orchestrator is
-  then tasked to complete the bindgen `build.rs` driver, build it, and ensure all bindings are properly emitted.
+**FFI bindings.** The orchestrator emits FFI bindings via `bindgen` by first running a mechanic composer that
+  emits an incomplete `build.rs` for every `-sys` crate, allowlisting the C/C++ items that need a Rust binding.
+  The allowlists are composed mechanically based on the dependency relations fetched from the oracle. The
+  orchestrator is then tasked to complete each `build.rs` driver, build it, and ensure all required bindings
+  are properly emitted.
 
 ### 2. Translation
 
-Here's where the translation work happens.
+Here's where translation work happens.
 
 **FFI interoperability.** Interoperability across the FFI boundary is the hard, historically
-  manual half, and it is Crustify's current focus. A wrapper lets a C type be used from Rust with no raw pointers, no
+  manual half, and is Crustify's current focus. A wrapper lets a C type be used from Rust with no raw pointers, no
   `unsafe` at the call site and no naked FFI — which puts the borrow checker back
   in charge of ownership and lifetimes for an item the compiler could otherwise
   say nothing about. Field access goes through generated accessors; lifecycle
