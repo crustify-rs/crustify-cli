@@ -20,7 +20,7 @@ them to produce different outputs for the same inputs, which is especially aggra
 in the world of cross-language transpilation where one idiom can be expressed in multiple different
 ways across languages (e.g. a C/C++ struct in Rust). Thus, it is crucial to
 point LLMs at the right conventions and expose them as much as possible to structured
-specificaitons so they produce more deterministic and reproducible outputs.
+specifications so they produce more deterministic and reproducible outputs.
 
 Crustify provides all of these: (a) properly engineered prompts that ensure
 LLMs don't derail from the task, (b) a deterministic dependency graph of types
@@ -86,13 +86,13 @@ Crustify can help you automate the following C-to-Rust tasks:
 **Incremental migration to Rust.** Crustify can also help you automate
   the migration of production C/C++ codebases to memory-safe, idiomatic Rust. It first decomposes
   the target in smaller units, i.e. symbols and types, and then translates them in dependency order, bottom-up.
-  As each lower-layer items become migrated to Rust, some may still needs to stay interoperable with the higher
-  C/C++ layers---Crustify reuses the same principle of temporarily wrapping FFI items
-  with safe Rust abstractions until they do not cross the FFI boundary anymore and can be nativized.
+  As each lower-layer item is migrated to Rust, some still need to stay interoperable with the higher
+  C/C++ layers — Crustify reuses the same principle of temporarily wrapping FFI items
+  with safe Rust abstractions until they no longer cross the FFI boundary and can be nativized.
 
 **Partial migration to Rust.** Using the above principles, Crustify can also narrow its scope to
   migrate to Rust only a subset of the subsystems, files, or types, keeping them interoperable with
-  what stays in C/C++.  
+  what stays in C/C++.
 
 
 ## Agent Harness
@@ -159,7 +159,7 @@ structured I/O artifacts, where work is split between **deterministic composers*
 mechanical tasks and **LLMs** for semantic reasoning and codegen. The composers are
 implemented in Python and packaged as two CLI binaries that can be driven by
 LLMs and humans alike. A human is free to verify and modify the artifacts produced by the LLM
-between stages, which can help find ptifalls and fine tune the outputs of the downstream stages.
+between stages, which can help find pitfalls and fine tune the outputs of the downstream stages.
 
 ### 1. Setup
 
