@@ -206,8 +206,11 @@ def _translate_emit(
         if type_units:
             # type-pull: the batch's tags plus their field-accessor sets; the
             # agent pulls lifecycle and the cast graph from each record itself.
-            # A batch may carry several types now that a type no longer absorbs
-            # its ops (`_schedule.pack`); `types.md` is written for a target SET.
+            # `_schedule.pack` gives a type-unit a batch to ITSELF, bounded by
+            # neither cap, so this list holds one tag in practice. It stays a
+            # list — and `types.md` stays written for a target SET — because
+            # nothing here depends on the count, so a packing change that pooled
+            # types would not need a second edit at this seam.
             TranslateAgent(
                 target, batch_kind="type",
                 tags=[u.node.id for u in type_units],
