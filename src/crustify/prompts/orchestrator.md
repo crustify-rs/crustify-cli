@@ -65,19 +65,10 @@ From an untouched checkout to the first commit of the scaffolded Rust tree.
 | Rust | rustup: `cargo`, `clippy`, nightly toolchain |
 | `bindgen-cli` | `cargo install bindgen-cli` |
 | CodeQL | the CodeQL CLI bundle, on `PATH` |
+| `crustify-prim` | `git clone https://github.com/crustify-rs/crustify-prim.git` — the smart pointers and lifetime traits every emitted wrapper is built from; clone it anywhere and name the path in `deps.crustify-prim` (step 2), which scaffold requires |
 
 Ask the user which agent backends it wants to install, as it may not want you to install both.
 On macOS arm64 the CodeQL bundle needs Rosetta.
-
-**`crustify-prim` must be checked out.** It is the wrap-primitive crate — the
-`C*` smart pointers and lifetime traits every emitted wrapper is built from —
-and a hard dependency of the scaffold stage, not an optional extra. Clone it
-anywhere and name that path in `deps.crustify-prim` (step 2); scaffold fails
-without it.
-
-```bash
-git clone https://github.com/crustify-rs/crustify-prim.git
-```
 
 #### 2. Bootstrap `crustify/`
 
@@ -91,14 +82,8 @@ Author `<repo>/crustify/cli-config.json` from `templates/cli-config.json`:
 
 | block | holds |
 |---|---|
-| `deps` | absolute path to the crustify checkout and to `crustify-prim` (the wrap-primitive crate, passed to agents as `{crustify_prim}`) |
+| `deps` | absolute path to the crustify checkout and to `crustify-prim`|
 | `bins` | absolute path to `crustify-cli` and `crustify-oracle` |
-
-Those two blocks are the whole file. The skill set is not configured here: it is
-the `CrustifyAgent.SKILLS` tuple, resolved through `deps` — `crustify` supplies
-`prompts/skill-oracle.md`, `crustify-prim` supplies its own `SKILL.md`. A skill
-declaring a `bin:` also advertises that tool's absolute path from `bins`, so the
-agent invokes it directly instead of trusting `PATH`.
 
 **Absolute paths only.** An agent runs inside a git worktree, so nothing
 relative to a cwd resolves the same way twice. The file is machine-local and
