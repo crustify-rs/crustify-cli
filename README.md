@@ -225,8 +225,26 @@ can be nativized, but its storage (i.e. heap allocation) is still owned by C; (b
 cross the FFI boundary anymore, then its storage can also be nativized. The orchestrator agent must
 decide when a type is ready to be nativized.
 
-**Safety Audit.** TODO
+**Safety Audit.** Crustify ships a deterministic pass over the compiled Rust's `HIR` and `typeck`
+that counts the number of unsafe lines/statements/blocks and the number of raw pointers, flagging
+FFI types/symbols that already have a safe wrapper or Rust-native shape, as well as the number of
+`&mut` mutable borrows and field projections outside `impl` blocks. The translator agents are
+instructed to use the audit pass to collect unsafe and potentially-UB sites, and to fix them unless
+justified.
 
+**LLM-as-a-Judge.** Each translator agent can act as a reviewer for an existing Rust translation or
+for an ownership judgement submitted to `ownership-store.json`. Agents are instructed to enter this
+mode via a simple paragraph in their prompt, and they are told to fix any mistakes if they find. The
+orchestrator agent can run reviewer agents by running `crustify-cli translate --objective review`.
+
+**Idempotency.** The scaffolder emits placeholder anchors (`// crustify:todo`) for every port/wrap
+item that is in scope, and translator agents are asked to promote them for done work. This helps the
+orchestrator with accounting and idempotency upon resuming an interrupted campaign.
+
+**Regression and Equivalence Testing.** Translator agents are asked to surround the ported C/C++
+items in their original source files with `#ifdef CRUSTIFY_*` macros and to modify the build/config
+system to enable/disable them. Then each translator agent is asked to test the original build and
+test suites with both the Rust code on and off, which catches regressions and ensures equivalence.
 
 
 ## CLI
