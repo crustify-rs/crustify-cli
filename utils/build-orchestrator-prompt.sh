@@ -16,10 +16,12 @@
 # safe because it is DERIVED -- regenerate and the copy is current.
 # Hand-copying the same text would be the drift this avoids.
 #
-# principles.md stays a pointer, resolved to an absolute path: the orchestrator
-# reads it from disk, unlike a translate agent, which is handed it in its
-# system prompt. The path is this checkout's, so it is openable the moment the
-# prompt is pasted -- before a target repo has been named.
+# docs/principles.md and docs/playbook.md stay POINTERS, each resolved to an
+# absolute path: the orchestrator reads them from disk, unlike a translate
+# agent, which is handed principles in its system prompt. The paths are this
+# checkout's, so both are openable the moment the prompt is pasted -- before a
+# target repo has been named. Inlining the playbook instead would put ~280
+# lines of setup procedure in front of every wave-planning turn.
 #
 # WHERE SKILLS COME FROM. Content is read from each skill's SOURCE, never from
 # a deployed copy: prompts/skill-oracle.md here, plus the crustify-prim
@@ -82,7 +84,11 @@ template = (prompts / "orchestrator.md").read_text()
 # Mirrors `CrustifyAgent.SKILLS`. The oracle entry is metadata only, so it
 # lives under prompts/ as plain markdown; crustify-prim keeps frontmatter and a
 # real body.
+# `CrustifyAgent.SKILLS` plus the playbook, which is orchestrator-facing and
+# deliberately absent from that tuple: a translate agent never authors config
+# or plans a wave.
 sources = [repo / "src" / "crustify" / "prompts" / "skill-oracle.md",
+           repo / "src" / "crustify" / "prompts" / "skill-playbook.md",
            prim / "SKILL.md"]
 
 blocks = []
@@ -106,14 +112,21 @@ index = (
     + "\n".join(b for _n, b in sorted(blocks))
 )
 
-principles = prompts / "principles.md"
-if not principles.is_file():
-    sys.exit(f"no {principles}")
+docs = repo / "docs"
+for doc in ("principles.md", "playbook.md"):
+    if not (docs / doc).is_file():
+        sys.exit(f"no {docs / doc}")
 
-for marker, value in (("<!-- PRINCIPLES_PATH -->", f"`{principles}`"),
-                      ("<!-- SKILLS -->", index)):
-    if marker not in template:
+# Order matters: SKILLS lands the playbook's description into the text, and
+# PLAYBOOK_PATH then resolves the marker that arrived with it.
+for marker, value, required_in_template in (
+        ("<!-- PRINCIPLES_PATH -->", f"`{docs / 'principles.md'}`", True),
+        ("<!-- SKILLS -->", index, True),
+        ("<!-- PLAYBOOK_PATH -->", f"`{docs / 'playbook.md'}`", False)):
+    if required_in_template and marker not in template:
         sys.exit(f"orchestrator.md no longer carries {marker}")
+    if marker not in template:
+        sys.exit(f"skill-playbook.md no longer carries {marker}")
     template = template.replace(marker, value)
 
 sys.stdout.write(template.rstrip() + "\n")

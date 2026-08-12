@@ -333,14 +333,16 @@ class CrustifyAgent:
         )
 
     def _principles_md(self) -> Path:
-        """The always-on principles doc, packaged next to the stage prompts.
+        """The always-on principles doc, at the checkout's ``docs/``.
 
-        In `prompts/` rather than `docs/` because that is what it is: a prompt
-        fragment. Neither provider CLI loads it from a canonical path — claude
-        reads `CLAUDE.md`, codex reads a repo-root `AGENTS.md`, and this file
-        was at neither — so the old name advertised a loading mechanism that
-        never existed."""
-        return _PKG_ROOT / "prompts" / "principles.md"
+        Human-readable in its own right and read by anyone working on crustify,
+        not only spliced into a prompt — which is what puts it beside
+        ``docs/playbook.md`` rather than under ``prompts/``. What lives in
+        ``prompts/`` is what the pipeline RENDERS: the stage templates and the
+        skill descriptions. Neither provider CLI loads this from a canonical
+        path — claude reads ``CLAUDE.md``, codex a repo-root ``AGENTS.md``, and
+        it is at neither — so it reaches an agent only by being read here."""
+        return _PKG_ROOT.parent.parent / "docs" / "principles.md"
 
     def _render_principles(self) -> str:
         """principles.md verbatim. Empty string if the doc is absent.
