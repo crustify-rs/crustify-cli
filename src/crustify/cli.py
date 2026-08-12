@@ -226,13 +226,18 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
 
+    # Each stage binds ONE blurb and passes it to both `help=` (which renders in
+    # the parent's subcommand listing) and `description=` (which renders on the
+    # stage's own --help). Without the second, `crustify-cli … <stage> --help`
+    # prints a usage line and a flag list and never says what the stage does.
+    _audit_blurb = (
+        "Deterministic audit (no LLM): entity-seeded global scan of the "
+        "ported Rust tree, printed as JSON to stdout (nothing written to "
+        "disk). Per seed: its own unsafe / raw-pointer / naked-ffi surface; "
+        "plus a tree-wide `global` section (outside-impl raw ptrs, the "
+        "ffi:: type-surface partition, and a c_void filter) and `totals`.")
     audit_p = sub.add_parser(
-        "audit",
-        help="Deterministic audit (no LLM): entity-seeded global scan of the "
-             "ported Rust tree, printed as JSON to stdout (nothing written to "
-             "disk). Per seed: its own unsafe / raw-pointer / naked-ffi surface; "
-             "plus a tree-wide `global` section (outside-impl raw ptrs, the "
-             "ffi:: type-surface partition, and a c_void filter) and `totals`.",
+        "audit", help=_audit_blurb, description=_audit_blurb,
     )
     # Seed selectors (entity-seeded, global search) — mirror wrap/port. The
     # search is always global; the selector only picks the seed types/symbols.
@@ -267,15 +272,14 @@ def main() -> None:
     )
 
     # -- scaffold (crates.json-driven .rs oracle) ------------------------
+    _scaffold_blurb = (
+        "Resolve C symbols/types to their Rust .rs via crates.json. "
+        "Deterministic, no LLM: the placement oracle is authored outside "
+        "this stage, and an unplaced selection is a hard error. `--all` "
+        "materializes the whole target; `--validate` runs the consistency "
+        "gate.")
     scaffold_p = sub.add_parser(
-        "scaffold",
-        help=(
-            "Resolve C symbols/types to their Rust .rs via crates.json. "
-            "Deterministic, no LLM: the placement oracle is authored outside "
-            "this stage, and an unplaced selection is a hard error. `--all` "
-            "materializes the whole target; `--validate` runs the consistency "
-            "gate."
-        ),
+        "scaffold", help=_scaffold_blurb, description=_scaffold_blurb,
     )
     # Selection is required and explicit — there is no default.
     # Not `required=True`: `--file` alone is a valid selection but lives outside
@@ -330,16 +334,15 @@ def main() -> None:
     )
 
     # -- bindgen (deterministic -sys FFI-crate composer) -----------------
+    _bindgen_blurb = (
+        "Scaffold the <lib>-sys FFI crates from the analysis tree "
+        "(deterministic; no LLM). Partitions the wrap-scope surface by "
+        "owning crate (crates.json) into <target>/rust/crates/<lib>-sys/. "
+        "Crates come out incomplete: build.rs carries the per-kind "
+        "allowlists but no fn main, and bindgen.h's shim block is "
+        "empty — finishing them needs a compiler in the loop.")
     bindgen_p = sub.add_parser(
-        "bindgen",
-        help=(
-            "Scaffold the <lib>-sys FFI crates from the analysis tree "
-            "(deterministic; no LLM). Partitions the wrap-scope surface by "
-            "owning crate (crates.json) into <target>/rust/crates/<lib>-sys/. "
-            "Crates come out incomplete: build.rs carries the per-kind "
-            "allowlists but no fn main, and bindgen.h's shim block is "
-            "empty — finishing them needs a compiler in the loop."
-        ),
+        "bindgen", help=_bindgen_blurb, description=_bindgen_blurb,
     )
     bindgen_p.add_argument(
         "--libs", nargs="+", default=None, metavar="LIB",
@@ -360,17 +363,19 @@ def main() -> None:
     # The SCOPE keeps its own name: wrap-scope / port-scope is the dichotomy in
     # scope.json (and crustify-oracle's `--wrap-only` / `--port-only`),
     # orthogonal to which stage runs. Only the stage is called `translate`.
+    _translate_blurb = (
+        "Translate stage: emit Rust wrappers for the selected in-scope "
+        "units (types AND free symbols, port- or wrap-scope) in "
+        "dependency-layer order. "
+        "Select with --name. One unified scheduler dispatches each unit "
+        "to its wrapper (type / symbol); no subject split. Requires the "
+        "scaffold + bindgen stages to have run for each library being "
+        "wrapped. What an agent DOES with a selection is --objective; for a "
+        "SYMBOL batch the scheduler overrides it with the unit's scope, so a "
+        "port-scope symbol is ported even under the default `wrap` -- "
+        "--dry-run prints the split.")
     wrap_p = sub.add_parser(
-        "translate",
-        help=(
-            "Translate stage: emit Rust wrappers for the selected in-scope "
-            "units (types AND free symbols, port- or wrap-scope) in "
-            "dependency-layer order. "
-            "Select with --name. One unified scheduler dispatches each unit "
-            "to its wrapper (type / symbol); no subject split. Requires the "
-            "scaffold + bindgen stages to have run for each library being "
-            "wrapped."
-        ),
+        "translate", help=_translate_blurb, description=_translate_blurb,
     )
     _add_wrap_filter_flags(wrap_p)
     wrap_p.add_argument(
