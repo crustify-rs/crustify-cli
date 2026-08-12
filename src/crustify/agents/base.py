@@ -13,31 +13,38 @@ _PKG_ROOT = Path(__file__).parent.parent
 
 
 #: Plain-markdown skill fields — `- Skill name:` / `- Bin path:` /
-#: `- Description:`, each continued by its indented wrap lines. The shape a
-#: skill takes when its whole content IS those three fields, so there is no
-#: body left to warrant frontmatter.
+#: `- Doc path:` / `- Description:`, each continued by its indented wrap lines.
+#: The shape a skill takes when its whole content IS its metadata, so there is
+#: no body left to warrant frontmatter. `Doc path` is where the procedure DID
+#: end up: relative to the skill file's own directory, so it survives whatever
+#: absolute path the checkout sits at.
 _MD_FIELD_RE = _re.compile(
-    r"^-\s*(Skill name|Bin path|Description)\s*:\s*(.*)$", _re.IGNORECASE)
+    r"^-\s*(Skill name|Bin path|Doc path|Description)\s*:\s*(.*)$",
+    _re.IGNORECASE)
 
 
-def _skill_meta(path: Path) -> tuple[str, str, str | None]:
-    """Parse ``name`` + ``description`` + optional ``bin`` from a skill file.
+def _skill_meta(path: Path) -> tuple[str, str, str | None, Path | None]:
+    """Parse ``name`` + ``description`` + optional ``bin`` + optional ``doc``
+    from a skill file.
 
     Two shapes, because crustify has two kinds of skill. One carries a real
-    procedure in its body and declares its metadata in YAML frontmatter
-    (``crustify-prim``). The other IS its metadata — the whole content is the
-    three fields, written as a plain markdown list (``prompts/skill-oracle.md``)
-    because there is no body to route to.
+    procedure in its body and declares its metadata in YAML frontmatter. The
+    other IS its metadata, written as a plain markdown list
+    (``prompts/skill-oracle.md``) — either because the procedure lives in a
+    tool's ``--help``, or because it lives in a document the skill points at
+    with ``Doc path``.
 
     Deliberately minimal — no YAML dependency. Frontmatter: scalar ``name:``, a
     folded/indented ``description:`` (block scalar ``>-``/``>`` or inline), and
     a scalar ``bin:``. Plain markdown: ``- Skill name:`` / ``- Bin path:`` /
-    ``- Description:``. Either way the description's wrapped continuation lines
-    are collapsed to one line, and ``bin`` is the LOGICAL tool name, resolved to
-    an absolute path by the caller via the repo config's ``bins`` map."""
+    ``- Doc path:`` / ``- Description:``. Either way the description's wrapped
+    continuation lines are collapsed to one line, ``bin`` is the LOGICAL tool
+    name (resolved to an absolute path by the caller via the repo config's
+    ``bins`` map), and ``doc`` is resolved here against the skill file's own
+    directory."""
     text = path.read_text()
     if not text.startswith("---"):
-        name, desc, binname, cur = path.stem, [], None, None
+        name, desc, binname, doc, cur = path.stem, [], None, None, None
         for line in text.splitlines():
             m = _MD_FIELD_RE.match(line)
             if m:
@@ -47,6 +54,8 @@ def _skill_meta(path: Path) -> tuple[str, str, str | None]:
                     name = val
                 elif key == "bin path":
                     binname = val or None
+                elif key == "doc path":
+                    doc = (path.parent / val).resolve() if val else None
                 else:
                     desc.append(val)
                 continue
@@ -55,7 +64,7 @@ def _skill_meta(path: Path) -> tuple[str, str, str | None]:
                 desc.append(line.strip())
             elif line.strip():
                 cur = None
-        return name, " ".join(" ".join(desc).split()), binname
+        return name, " ".join(" ".join(desc).split()), binname, doc
     fm = text.split("---", 2)[1]
     name, desc, in_desc, binname = path.stem, [], False, None
     for line in fm.splitlines():
@@ -75,7 +84,7 @@ def _skill_meta(path: Path) -> tuple[str, str, str | None]:
             if rest:
                 desc.append(rest)
             in_desc = True
-    return name, " ".join(" ".join(desc).split()), binname
+    return name, " ".join(" ".join(desc).split()), binname, None
 
 def _resolve_repo_root(target: Path) -> Path:
     """The repo root for ``target``: the one pinned by the CLI
@@ -307,13 +316,16 @@ class CrustifyAgent:
             p = root / rel
             if not p.exists():
                 continue
-            name, desc, binname = _skill_meta(p)
+            name, desc, binname, doc = _skill_meta(p)
             block = f"- {name} — {desc}"
-            # Only a skill with a BODY gets a path: the plain-markdown shape is
-            # metadata only, already inlined above, so pointing at it would
-            # spend a tool call to re-read what the agent has just been handed.
-            if p.read_text().startswith("---"):
-                block += f"\n  read in full: {p}"
+            # What to open, if anything. A frontmatter skill carries its own
+            # procedure, so the path is the skill file. A metadata-only one
+            # points at wherever the procedure actually lives (`Doc path`), and
+            # when it names nothing there is nothing to open — pointing back at
+            # the file would spend a tool call re-reading what was just inlined.
+            body = p if p.read_text().startswith("---") else doc
+            if body:
+                block += f"\n  read in full: {body}"
             # A skill that declares a `bin:` also advertises that tool's
             # absolute path (from the repo config's `bins` map) — so the agent
             # invokes it directly rather than relying on PATH, and discovers its

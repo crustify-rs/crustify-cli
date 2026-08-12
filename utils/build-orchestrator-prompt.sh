@@ -93,12 +93,16 @@ sources = [repo / "src" / "crustify" / "prompts" / "skill-oracle.md",
 
 blocks = []
 for skill in sources:
-    name, desc, _bin = _skill_meta(skill)
+    name, desc, _bin, doc = _skill_meta(skill)
     block = f"- {name} — {desc}"
-    # Same rule as `CrustifyAgent._render_skills`: only a skill with a BODY is
-    # worth a path. A plain-markdown one is metadata only and is already inlined.
+    # Same rule as `CrustifyAgent._render_skills`: point at whatever carries the
+    # procedure. A frontmatter skill carries its own, and is read from where it
+    # is DEPLOYED in the target. A metadata-only one names its doc (`Doc path`),
+    # which lives in the crustify or crustify-prim checkout, so it is absolute.
     if skill.read_text().startswith("---"):
         block += f"\n  read in full: .claude/skills/{name}/SKILL.md"
+    elif doc:
+        block += f"\n  read in full: {doc}"
     blocks.append((name, block))
 if not blocks:
     sys.exit("no skill sources resolved")
