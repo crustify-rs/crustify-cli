@@ -104,10 +104,13 @@ class Layout:
 
     @property
     def repo_config(self) -> Path:
-        """Repo-wide crustify config (``cli-config.json``) — absolute dep paths
-        (crustify-prim, crustify itself), the ``crustify-cli`` binary, and the
-        SKILL.md set indexed into prompts. Lives at the ``crustify/`` root so it
-        is shared across targets.
+        """Repo-wide crustify config (``cli-config.json``) — two blocks:
+        ``deps``, the absolute paths to the crustify and crustify-prim
+        checkouts, and ``bins``, the absolute path to each tool a skill declares
+        via its ``bin:`` key. Lives at the ``crustify/`` root so it is shared
+        across targets. The skill set itself is not configured here: it is
+        :attr:`crustify.agents.base.CrustifyAgent.SKILLS`, resolved through
+        ``deps``.
 
         Named apart from the per-target :meth:`config` (``scope-config.json``)
         on purpose: two files both called ``config.json``, one repo-tier and one

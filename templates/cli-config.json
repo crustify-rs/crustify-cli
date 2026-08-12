@@ -12,10 +12,10 @@
 
   "_comment_deps": [
     "Absolute path per dependency, resolved by `CrustifyAgent._dep`:",
-    "  * `crustify`      - the crustify checkout. Its `skills/` supply the",
-    "                      SKILL.md set indexed into every agent's system",
-    "                      prompt; falls back to the installed package's own",
-    "                      tree when absent.",
+    "  * `crustify`      - the crustify checkout. Supplies",
+    "                      src/crustify/prompts/skill-oracle.md to the skill",
+    "                      index in every agent's system prompt; falls back to",
+    "                      the installed package's own tree when absent.",
     "  * `crustify-prim` - the wrap-primitive crate. Its `SKILL.md` joins that",
     "                      index, and `scaffold` writes this path into every",
     "                      generated crate's `Cargo.toml`. Falls back to a",
@@ -37,13 +37,13 @@
     "crustify-oracle": "/absolute/path/to/venv/bin/crustify-oracle"
   },
 
-  "_comment_skills": [
-    "SKILL.md files indexed into the `{skills}` prompt slot as a metadata index",
-    "(name, description, on-disk path); the agent reads a body on demand.",
-    "Every listed skill is rendered into every agent's prompt."
-  ],
-  "skills": [
-    "/absolute/path/to/crustify/skills/crustify-oracle/SKILL.md",
-    "/absolute/path/to/crustify-prim/SKILL.md"
+  "_comment_no_skills_block": [
+    "`deps` and `bins` are the whole file. The skill set is the",
+    "`CrustifyAgent.SKILLS` tuple, resolved through `deps`: `crustify` supplies",
+    "src/crustify/prompts/skill-oracle.md, `crustify-prim` supplies its own",
+    "SKILL.md. Each is rendered into every agent's system prompt as a metadata",
+    "index (name, description, and - for a skill with a body - its on-disk",
+    "path); a body is read on demand. Point `deps` at the right checkouts and",
+    "the index follows."
   ]
 }

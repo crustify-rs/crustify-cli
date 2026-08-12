@@ -30,8 +30,8 @@ tmp
 # Derived analysis — regenerable from the C by `analyze`
 codeql
 
-# Machine-local: absolute paths to the crustify checkout, its skills and
-# crustify-prim. Author one per machine from templates/cli-config.json.
+# Machine-local: absolute paths to the crustify and crustify-prim checkouts,
+# and to each tool binary. Author one per machine from templates/cli-config.json.
 cli-config.json
 
 # Evaluation artefacts. The TABLES under evaluation/ are tracked (see below).

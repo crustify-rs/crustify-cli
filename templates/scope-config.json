@@ -34,7 +34,7 @@
     "`<repo_root>/<target>/` (modulo `out_of_scope.paths`) is in port scope.",
     "Headers outside `target` are NOT discovered automatically: a header",
     "whose implementors are port-scope must be listed in `port_files`",
-    "below (see skills/crustify-orchestrator/SKILL.md, 'Scope a target'), which then",
+    "below (see the orchestrator prompt, 'Scope a target'), which then",
     "REPLACES this implicit scope. Use `\".\"` to target the whole repo.",
     "Must exist as a directory relative to repo_root. When the port scope is a",
     "logical SUBSET of `target` rather than a whole subdirectory, enumerate it",
