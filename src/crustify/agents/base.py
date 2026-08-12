@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re as _re
 from pathlib import Path
 
 from crustify.agentlog import AgentLog, open_agent_log
@@ -11,21 +12,50 @@ from crustify.layout import Layout
 _PKG_ROOT = Path(__file__).parent.parent
 
 
-def _skill_meta(path: Path) -> tuple[str, str, str | None]:
-    """Parse ``name`` + ``description`` + optional ``bin`` from a SKILL.md YAML
-    frontmatter block.
+#: Plain-markdown skill fields — `- Skill name:` / `- Bin path:` /
+#: `- Description:`, each continued by its indented wrap lines. The shape a
+#: skill takes when its whole content IS those three fields, so there is no
+#: body left to warrant frontmatter.
+_MD_FIELD_RE = _re.compile(
+    r"^-\s*(Skill name|Bin path|Description)\s*:\s*(.*)$", _re.IGNORECASE)
 
-    Deliberately minimal — handles the fields crustify's SKILL.md format uses
-    (scalar ``name:``, a folded/indented ``description:``, block scalar
-    ``>-``/``>`` or inline, and a scalar ``bin:``) without taking a YAML
-    dependency. The description's wrapped/indented continuation lines are
-    collapsed to one line. ``bin`` is the logical name of the skill's CLI tool,
-    resolved to an absolute path by the caller via the repo config's ``bins``
-    map. Falls back to the file stem and an empty description when there is no
-    frontmatter."""
+
+def _skill_meta(path: Path) -> tuple[str, str, str | None]:
+    """Parse ``name`` + ``description`` + optional ``bin`` from a skill file.
+
+    Two shapes, because crustify has two kinds of skill. One carries a real
+    procedure in its body and declares its metadata in YAML frontmatter
+    (``crustify-prim``). The other IS its metadata — the whole content is the
+    three fields, written as a plain markdown list (``prompts/skill-oracle.md``)
+    because there is no body to route to.
+
+    Deliberately minimal — no YAML dependency. Frontmatter: scalar ``name:``, a
+    folded/indented ``description:`` (block scalar ``>-``/``>`` or inline), and
+    a scalar ``bin:``. Plain markdown: ``- Skill name:`` / ``- Bin path:`` /
+    ``- Description:``. Either way the description's wrapped continuation lines
+    are collapsed to one line, and ``bin`` is the LOGICAL tool name, resolved to
+    an absolute path by the caller via the repo config's ``bins`` map."""
     text = path.read_text()
     if not text.startswith("---"):
-        return path.stem, "", None
+        name, desc, binname, cur = path.stem, [], None, None
+        for line in text.splitlines():
+            m = _MD_FIELD_RE.match(line)
+            if m:
+                key, val = m.group(1).lower(), m.group(2).strip()
+                cur = key
+                if key == "skill name":
+                    name = val
+                elif key == "bin path":
+                    binname = val or None
+                else:
+                    desc.append(val)
+                continue
+            # An indented line continues the field above; anything else ends it.
+            if cur == "description" and line[:1] in (" ", "\t") and line.strip():
+                desc.append(line.strip())
+            elif line.strip():
+                cur = None
+        return name, " ".join(" ".join(desc).split()), binname
     fm = text.split("---", 2)[1]
     name, desc, in_desc, binname = path.stem, [], False, None
     for line in fm.splitlines():
@@ -93,7 +123,7 @@ class CrustifyAgent:
     # absent — wave scheduling is not a worker agent's job, and a skill it can
     # never act on is context it pays for on every request.
     SKILLS: tuple[tuple[str, str], ...] = (
-        ("crustify", "skills/crustify-oracle/SKILL.md"),
+        ("crustify", "src/crustify/prompts/skill-oracle.md"),
         ("crustify-prim", "SKILL.md"),
     )
     output: str | None = None  # path under .crustify/; when set, artifact existence
@@ -278,7 +308,12 @@ class CrustifyAgent:
             if not p.exists():
                 continue
             name, desc, binname = _skill_meta(p)
-            block = f"- {name} — {desc}\n  read in full: {p}"
+            block = f"- {name} — {desc}"
+            # Only a skill with a BODY gets a path: the plain-markdown shape is
+            # metadata only, already inlined above, so pointing at it would
+            # spend a tool call to re-read what the agent has just been handed.
+            if p.read_text().startswith("---"):
+                block += f"\n  read in full: {p}"
             # A skill that declares a `bin:` also advertises that tool's
             # absolute path (from the repo config's `bins` map) — so the agent
             # invokes it directly rather than relying on PATH, and discovers its

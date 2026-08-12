@@ -77,13 +77,22 @@ from crustify.agents.base import _skill_meta
 prompts = repo / "src" / "crustify" / "prompts"
 template = (prompts / "orchestrator.md").read_text()
 
-sources = sorted((repo / "skills").glob("*/SKILL.md")) + [prim / "SKILL.md"]
+# Mirrors `CrustifyAgent.SKILLS` plus this repo's own procedure skills. The
+# oracle entry lives under prompts/ rather than skills/: its whole content is
+# the three metadata fields, so there is no body to route an agent to.
+sources = (sorted((repo / "skills").glob("*/SKILL.md"))
+           + [repo / "src" / "crustify" / "prompts" / "skill-oracle.md",
+              prim / "SKILL.md"])
 
 blocks = []
 for skill in sources:
     name, desc, _bin = _skill_meta(skill)
-    blocks.append((name, f"- {name} — {desc}\n  read in full: "
-                         f".claude/skills/{name}/SKILL.md"))
+    block = f"- {name} — {desc}"
+    # Same rule as `CrustifyAgent._render_skills`: only a skill with a BODY is
+    # worth a path. A plain-markdown one is metadata only and is already inlined.
+    if skill.read_text().startswith("---"):
+        block += f"\n  read in full: .claude/skills/{name}/SKILL.md"
+    blocks.append((name, block))
 if not blocks:
     sys.exit(f"no SKILL.md found under {repo / 'skills'}")
 
