@@ -51,7 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
              "created here — build the project under `codeql database create` "
              "yourself first. The one oracle command with side effects, and "
              "the only one that must be run explicitly: everything else "
-             "derives from these tables on demand.",
+             "derives from these tables on demand. Takes minutes — run it only "
+             "when the extraction is genuinely stale.",
     )
     _add_query_command(sub)
     return p
@@ -177,14 +178,42 @@ def _add_query_command(sub) -> None:
         ),
     )
     query_sub = query_p.add_subparsers(dest="subject", required=True)
+    # The semantics below are NOT derivable from the flag list, and each one is
+    # a mistake an agent otherwise makes: reading `lifetime: null` as "no role",
+    # guessing at an ambiguous tag, and assuming scope narrows a lookup or an
+    # emitted record's edges. Stated here so `--help` is the single authority.
+    _SEMANTICS = (
+        " SEMANTICS. `_analysis` on every record: `submitted` says whether the "
+        "ownership store holds anything for this entity — `lifetime: null` "
+        "alone cannot distinguish 'nobody looked' from 'an agent found no "
+        "lifecycle role'; `pending` lists the pointer slots with no ownership "
+        "block, counted per scope under --port-only/--wrap-only. "
+        "A type carries no lifecycle of its own: dropped_by / "
+        "fields_disposed_by / cloned_by are reverse-derived from the acting "
+        "symbols' `lifetime` blocks. "
+        "--file disambiguates and is REQUIRED when a name is ambiguous — a tag "
+        "naming two unrelated structs both in this target's scope is refused, "
+        "with the --file for each candidate printed; a name shared with a type "
+        "OUTSIDE the scope is not ambiguous and resolves without it. "
+        "Scope gates enumeration, not lookup: a listing is this target's "
+        "inventory, but --name reaches every entity the extraction saw, so a "
+        "type's destructor in another scope is readable, submittable through "
+        "--update, and comes back from --lifetime-for. Scope gates emission, "
+        "not content: an emitted record's depends_on / used_by are "
+        "codebase-wide whatever its scope, so a wrap-scope node's "
+        "depends_on.syms is populated and safe to walk. Submit through "
+        "--update, never by editing a file."
+    )
     _add_query_flags(
         query_sub.add_parser(
-            "types", help="Types: enumerate, or introspect one (--name)."),
+            "types", help="Types: enumerate, or introspect one (--name).",
+            description=_add_query_flags.__doc__ + _SEMANTICS),
         facets=True)
     _add_query_flags(
         query_sub.add_parser(
             "symbols",
-            help="Symbols: enumerate, or introspect one (--name)."),
+            help="Symbols: enumerate, or introspect one (--name).",
+            description=_add_query_flags.__doc__ + _SEMANTICS),
         facets=False)
 
     files_q = query_sub.add_parser(
@@ -207,6 +236,17 @@ def _add_query_command(sub) -> None:
         help="Structural dag views: transitive deps of --name T/S (closure), "
              "all nodes at --layer N (slice), or --name X --scc hi-deps/lo-deps "
              "(flattened-cycle twins X may use naked / that used X naked).",
+        description=(
+            "Structural dag views: transitive deps of --name T/S (closure), all "
+            "nodes at --layer N (slice), or --name X --scc hi-deps/lo-deps "
+            "(flattened-cycle twins X may use naked / that used X naked). "
+            "OUTPUT: JSON grouped by kind — types / callbacks / functions / "
+            "globals / macros, each {id, layer, defined_in} plus depth in "
+            "closure mode; empty groups are omitted. The groups route the work: "
+            "types to the type wrapper, callbacks and functions to the symbol "
+            "wrapper, macros to nobody (bindgen owns their -sys shims). `layer` "
+            "and `depth` exist only here — no other subject reports them."
+        ),
     )
     dag_q.add_argument(
         "--name", nargs="+", action="extend", default=None, metavar="NAME",
