@@ -366,15 +366,26 @@ def _scope_label(key: SymKey, by_key, in_scope) -> str:
 
 def show_plan(
     units: list[Unit], batches: list[Batch], by_key, in_scope, verb: str,
+    verb_of: dict[tuple[str, str | None], str] | None = None,
 ) -> None:
     """Show what's about to run + its first-layer deps (informational only —
     the scheduler runs in dependency-layer order, so the deps are a heads-up,
     not a gate). **Type** deps are listed in full (the "wrap/port these first"
     signal); the long tail of symbol deps (libc, macros, sibling calls) is
-    summarised by scope so the listing stays legible."""
-    print(f"\nAbout to {verb}:")
+    summarised by scope so the listing stays legible.
+
+    `verb_of` maps a unit to the objective its BATCH will be handed, which is
+    not always `verb` — see `Stage.objective_of`. When a wave is mixed each
+    item is tagged, because "About to wrap" over an item the scheduler ports is
+    the one thing a plan must not say."""
+    mixed = bool(verb_of) and len(set(verb_of.values())) > 1
+    print(f"\nAbout to {'translate' if mixed else verb}:")
+    width = max((len(u.label()) for u in units), default=0) if mixed else 0
     for u in units:
-        print(f"  • {u.label()}")
+        tag = ""
+        if mixed:
+            tag = f"  {verb_of.get((u.node.id, u.node.defined_in), verb)}"
+        print(f"  • {u.label():<{width}}{tag}" if mixed else f"  • {u.label()}")
 
     dt: set[SymKey] = set()
     ds: set[SymKey] = set()
@@ -422,6 +433,12 @@ class Stage:
     # homogeneous in scope, which is what lets the emit seam derive one correct
     # objective for it. Unset = no scope partition (single-objective callers).
     scope_of: Callable[[Node], str] | None = None
+    # `Batch -> verb`. The objective the emit seam will ACTUALLY hand this
+    # batch, which is not always `verb`: a symbol batch takes its scope's, so a
+    # wave invoked `wrap` ports its port-scope symbols. Wired by the caller to
+    # the same function the emit seam calls, so `--dry-run` cannot drift from
+    # what runs. Unset = single-objective caller, everything takes `verb`.
+    objective_of: Callable[["Batch"], str] | None = None
     shared_artifact_fn: Callable[[], None] | None = None  # serialized post-step
     # Worktree-isolation seam. When wired, EVERY agent runs in its own worktree,
     # serial or parallel alike: isolation is what makes an agent's scoped
@@ -758,8 +775,21 @@ def schedule(
         return []
 
     if dry_run:
+        # The objective each batch will ACTUALLY be handed. `stage.verb` is the
+        # caller's, and a symbol batch overrides it with its scope's, so a wave
+        # invoked with the default `wrap` runs `port` over its port-scope
+        # symbols. Resolved through `stage.objective_of` — the same function the
+        # emit seam calls — so the plan cannot drift from what runs.
+        obj_of = stage.objective_of or (lambda _b: stage.verb)
+        verb_of = {(u.node.id, u.node.defined_in): obj_of(b)
+                   for b in all_batches for u in b.units}
+        tally: dict[str, int] = {}
+        for v in verb_of.values():
+            tally[v] = tally.get(v, 0) + 1
+        split = (" — " + " · ".join(f"{n} {v}" for v, n in sorted(tally.items()))
+                 if len(tally) > 1 else "")
         print(f"\n[{stage.verb} dry-run] {len(units)} unit(s) across "
-              f"{len(layers)} dependency layer(s) (lower → higher):")
+              f"{len(layers)} dependency layer(s) (lower → higher){split}:")
         # Chains, not just batches. Batches are what gets packed; CHAINS are
         # what runs concurrently, and under `serialize-per-file` the two differ
         # whenever a layer homes several batches in one `.rs`. Reporting only
@@ -777,7 +807,7 @@ def schedule(
             print(f"  L{li}: {len(by_layer[li])} unit(s) → {len(lb)} batch(es)"
                   f"{extra}{' (parallel)' if n_chain > 1 else ''}")
         print(f"  policy: {chain_policy}")
-        show_plan(units, all_batches, by_key, stage.in_scope, stage.verb)
+        show_plan(units, all_batches, by_key, stage.in_scope, stage.verb, verb_of)
         return []
 
     # Run each layer in turn, lower → higher; a layer's agents land on the

@@ -158,6 +158,38 @@ def _selection_pred(scope_json, *, files: set[str]):
 
 
 
+def batch_objective(batch, objective: str, scope_of=None) -> str:
+    """One objective per batch, because the prompt has one `{objective}`.
+
+    A TYPE takes the caller's: a port-scope type is legitimately either
+    wrapped (layout-compatible while C still reads it) or nativized, and
+    which one depends on the opacification burn-down -- live state only the
+    orchestrator tracks.
+
+    A SYMBOL takes its SCOPE's, and the caller does not get a say: principles.md
+    settles it -- wrap-scope symbols get a safe view over the FFI surface,
+    port-scope ones are translated to native Rust. A wrap-scope symbol can
+    never be ported (it is foreign code) and a port-scope one has no reason
+    to stay wrapped for good, so exposing the choice would only be a way to
+    get it wrong. `_schedule.pack` keys the free-symbol pool by scope so the
+    question has a single answer here.
+
+    `review` crosses both: it is a second visit to emitted work, whatever
+    that work was, so scope has nothing to say about it.
+
+    MODULE-LEVEL, and wired into `Stage.objective_of` as well as the emit seam,
+    so `--dry-run` reports the objective each batch will actually be handed.
+    While this lived inside the emit closure the plan could only print the
+    CALLER's verb, which for a port-scope symbol batch is not what runs: a wave
+    invoked with the default `wrap` showed `About to wrap:` over items the
+    scheduler then ported."""
+    if objective == "review" or not scope_of:
+        return objective
+    if any(u.kind == "type" for u in batch.units):
+        return objective
+    return scope_of(batch.members[0]) if batch.members else objective
+
+
 def _translate_emit(
     target: Path, layout, *, max_syms: int, objective: str = "wrap",
     scope_of=None,
@@ -168,32 +200,8 @@ def _translate_emit(
     `scaffold --name` (query mode); nothing is pre-resolved here."""
     from crustify.agents.translate import TranslateAgent
 
-    def _objective_for(batch) -> str:
-        """One objective per batch, because the prompt has one `{objective}`.
-
-        A TYPE takes the caller's: a port-scope type is legitimately either
-        wrapped (layout-compatible while C still reads it) or nativized, and
-        which one depends on the opacification burn-down -- live state only the
-        orchestrator tracks.
-
-        A SYMBOL takes its SCOPE's, and the caller does not get a say: principles.md
-        settles it -- wrap-scope symbols get a safe view over the FFI surface,
-        port-scope ones are translated to native Rust. A wrap-scope symbol can
-        never be ported (it is foreign code) and a port-scope one has no reason
-        to stay wrapped for good, so exposing the choice would only be a way to
-        get it wrong. `_schedule.pack` keys the free-symbol pool by scope so the
-        question has a single answer here.
-
-        `review` crosses both: it is a second visit to emitted work, whatever
-        that work was, so scope has nothing to say about it."""
-        if objective == "review" or not scope_of:
-            return objective
-        if any(u.kind == "type" for u in batch.units):
-            return objective
-        return scope_of(batch.members[0]) if batch.members else objective
-
     def emit(batch) -> None:  # batch: _schedule.Batch
-        obj = _objective_for(batch)
+        obj = batch_objective(batch, objective, scope_of)
         type_units = [u for u in batch.units if u.kind == "type"]
         if type_units:
             # type-pull: the batch's tags plus their field-accessor sets; the
@@ -612,6 +620,7 @@ def translate_types(
                                            objective=objective,
                                            scope_of=scope_of),
         max_syms=max_syms, max_loc=max_loc, scope_of=scope_of,
+        objective_of=lambda b: batch_objective(b, objective, scope_of),
         emit_factory=emit_factory, target=target, layout=layout,
     )
     failures = S.schedule(
