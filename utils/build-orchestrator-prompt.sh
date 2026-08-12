@@ -22,16 +22,18 @@
 # prompt is pasted -- before a target repo has been named.
 #
 # WHERE SKILLS COME FROM. Content is read from each skill's SOURCE, never from
-# a deployed copy: this repo's own skills/ for the ones it owns, plus the
-# crustify-prim checkout named on the command line, since that skill lives in
-# its own repo. Reading a target's .claude/skills/ instead would source a
-# generator from its own deployed derivative, so a stale copy there would
-# silently yield a stale prompt.
+# a deployed copy: prompts/skill-oracle.md here, plus the crustify-prim
+# checkout named on the command line, since that skill lives in its own repo.
+# Reading a target's .claude/skills/ instead would source a generator from its
+# own deployed derivative, so a stale copy there would silently yield a stale
+# prompt. The orchestrator's own playbook is not in this list -- it IS this
+# document, appended below the template, so routing to it would be circular.
 #
-# The PATHS written into the output are the deployed ones, `.claude/skills/
-# <name>/SKILL.md`, because that is where the orchestrator opens them at
-# runtime. Content from truth, references to where the reader can reach it --
-# and since those are repo-relative, one generated prompt serves every target.
+# A skill WITH a body also gets a path, and that path is the deployed one
+# (`.claude/skills/<name>/SKILL.md`), because that is where the orchestrator
+# opens it at runtime. Content from truth, references to where the reader can
+# reach it -- and since those are repo-relative, one prompt serves every
+# target. A metadata-only skill is inlined whole and gets no path.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -77,12 +79,11 @@ from crustify.agents.base import _skill_meta
 prompts = repo / "src" / "crustify" / "prompts"
 template = (prompts / "orchestrator.md").read_text()
 
-# Mirrors `CrustifyAgent.SKILLS` plus this repo's own procedure skills. The
-# oracle entry lives under prompts/ rather than skills/: its whole content is
-# the three metadata fields, so there is no body to route an agent to.
-sources = (sorted((repo / "skills").glob("*/SKILL.md"))
-           + [repo / "src" / "crustify" / "prompts" / "skill-oracle.md",
-              prim / "SKILL.md"])
+# Mirrors `CrustifyAgent.SKILLS`. The oracle entry is metadata only, so it
+# lives under prompts/ as plain markdown; crustify-prim keeps frontmatter and a
+# real body.
+sources = [repo / "src" / "crustify" / "prompts" / "skill-oracle.md",
+           prim / "SKILL.md"]
 
 blocks = []
 for skill in sources:
@@ -94,7 +95,7 @@ for skill in sources:
         block += f"\n  read in full: .claude/skills/{name}/SKILL.md"
     blocks.append((name, block))
 if not blocks:
-    sys.exit(f"no SKILL.md found under {repo / 'skills'}")
+    sys.exit("no skill sources resolved")
 
 index = (
     "## Skills\n\n"
