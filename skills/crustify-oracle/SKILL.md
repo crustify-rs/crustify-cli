@@ -6,7 +6,12 @@ description: >-
   symbol records, their pointer analysis and lifecycle roles, the dependency
   closure, the scope sets, and the submission verb. Reads and writes both go
   through the oracle, never by editing a file. Prefer using this instead of grep
-  or regex for accurate semantic reasoning over the code.
+  or regex for accurate semantic reasoning over the code. Invoke as
+  `crustify-oracle <repo_root> <target> query {types|symbols|files|dag}`, and
+  read `--help` on the subject before your first query — it carries the flags,
+  the record semantics, and what `dag` returns. `--update-help` prints the
+  findings schema `--update` expects; `--schema` prints the record's own field
+  definitions.
 ---
 
 # `crustify-oracle`
