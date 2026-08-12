@@ -30,10 +30,6 @@ the T1/T2 tables, crate placement, scaffold and bindgen. Translation: planning,
 running, landing and auditing waves of translate agents over that tree. Read
 Setup before any wave; every later stage reads what it produces.
 
-Two phases. **Setup** takes an untouched checkout to a scaffolded Rust tree and
-runs once per repository. **Translation** drives waves of agents over that tree
-and repeats until the target is closed.
-
 Paths below are relative to the crustify checkout (`deps.crustify` in
 `cli-config.json`). Run any command's `--help` for exact flags — argparse is the
 source of truth.
@@ -73,22 +69,14 @@ From an untouched checkout to the first commit of the scaffolded Rust tree.
 Ask the user which agent backends it wants to install, as it may not want you to install both.
 On macOS arm64 the CodeQL bundle needs Rosetta.
 
-**`crustify-prim` must be checked out beside crustify.** It is the
-wrap-primitive crate — the `C*` smart pointers and lifetime traits every emitted
-wrapper is built from — and it is a hard dependency of the scaffold stage, not an
-optional extra.
+**`crustify-prim` must be checked out.** It is the wrap-primitive crate — the
+`C*` smart pointers and lifetime traits every emitted wrapper is built from —
+and a hard dependency of the scaffold stage, not an optional extra. Clone it
+anywhere and name that path in `deps.crustify-prim` (step 2); scaffold fails
+without it.
 
 ```bash
 git clone https://github.com/crustify-rs/crustify-prim.git
-```
-
-`deps.crustify-prim` in `cli-config.json` is authoritative for where it lives;
-a checkout beside the crustify one is the fallback when that entry is absent:
-
-```
-<parent>/
-  crustify/          # this checkout
-  crustify-prim/     # the fallback location
 ```
 
 #### 2. Bootstrap `crustify/`

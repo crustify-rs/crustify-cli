@@ -18,8 +18,9 @@
     "                      the installed package's own tree when absent.",
     "  * `crustify-prim` - the wrap-primitive crate. Its `SKILL.md` joins that",
     "                      index, and `scaffold` writes this path into every",
-    "                      generated crate's `Cargo.toml`. Falls back to a",
-    "                      checkout beside the crustify one."
+    "                      generated crate's `Cargo.toml`. Required: scaffold",
+    "                      errors out when it is missing rather than guess a",
+    "                      location and emit manifests that cannot build."
   ],
   "deps": {
     "crustify": "/absolute/path/to/crustify",

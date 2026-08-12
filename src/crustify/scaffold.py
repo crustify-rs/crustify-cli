@@ -387,28 +387,33 @@ def _materialize(layout, entries: list[dict],
 
 
 def _crustify_prim(layout) -> Path:
-    """Absolute path to the crustify-prim checkout.
+    """Absolute path to the crustify-prim checkout, from ``deps.crustify-prim``
+    in ``cli-config.json``.
 
-    ``deps.crustify-prim`` in ``cli-config.json`` is authoritative — the same
-    entry :meth:`crustify.agents.base.CrustifyAgent._dep` resolves — so one
-    config line places the crate for both the generated manifests and the agent
-    prompts. A checkout beside the crustify one is the fallback, which is the
-    layout a repo without a config gets.
+    That entry is the only source — the same one
+    :meth:`crustify.agents.base.CrustifyAgent._dep` resolves, so one config line
+    places the crate for both the generated manifests and the agent prompts.
+    Absent or unreadable is a hard error: the path is written into every
+    generated ``Cargo.toml``, so guessing produces a tree that scaffolds
+    cleanly and fails at the first ``cargo`` invocation, pointing at a location
+    nobody chose.
 
-    Absolute either way: the path is written into a ``Cargo.toml`` under
-    ``rust/``, and a relative one is depth-sensitive — it resolves differently
-    inside a git worktree, which sits two levels deeper under
+    Absolute, because the path lands in a ``Cargo.toml`` under ``rust/`` and a
+    relative one is depth-sensitive — it resolves differently inside a git
+    worktree, which sits two levels deeper under
     ``crustify/.worktrees/<slug>/``.
     """
     p = layout.repo_config
-    if p.exists():
-        try:
-            dep = (json.loads(p.read_text()).get("deps") or {}).get("crustify-prim")
-        except (json.JSONDecodeError, OSError):
-            dep = None
-        if dep:
-            return Path(dep)
-    return Path(__file__).resolve().parents[3] / "crustify-prim"
+    try:
+        dep = (json.loads(p.read_text()).get("deps") or {}).get("crustify-prim")
+    except (json.JSONDecodeError, OSError) as exc:
+        raise SystemExit(f"scaffold: cannot read {p}: {exc}") from exc
+    if not dep:
+        raise SystemExit(
+            f"scaffold: no `deps.crustify-prim` in {p}. Every generated "
+            f"Cargo.toml needs the wrap-primitive crate's absolute path; set "
+            f"it from templates/cli-config.json.")
+    return Path(dep)
 
 
 def _materialize_manifests(layout, doc: dict) -> str:
