@@ -1,44 +1,12 @@
 # Crustify
 
-Crustify leverages LLM agents to automate the migration of production C/C++ codebases to **safe,
-idiomatic Rust**, incrementally and efficiently, with little human involvement.
+Crustify leverages LLM agents to automate (a) **migrating production C/C++ codebases** to safe,
+idiomatic Rust, and (b) **generating safe Rust wrappers** for unsafe APIs, incrementally and
+efficiently, with little human involvement.
 
 Point it at a repo and it will map its build system and test suite, extract an exact dependency
-graph of its types and symbols, and translate them in dependency order, focusing on maximizing
+graph of its types and symbols, and translate/wrap them in dependency order, focusing on maximizing
 safety without sacrificing correctness.
-
-
-## Why Crustify
-
-LLM agents have become extremely powerful and versatile at every software engineering task. However,
-they need the right guidance, the right unit of work, and the right tools to enable them to produce
-high quality outputs. We tested LLMs on translating large, production codebases from the real world
-(libgit2 and OpenSSL); here are some notable pitfalls we observed:
-
-- **Overthinking.** Without a clear translation playbook, LLMs tend to overthink and get lost in
-  their own reasoning traces, especially on large codebases. Moreover, we observed that they produce
-  higher quality outputs, faster, and cheaper when tasks are smaller and well defined, thus calling
-  for task decomposition.
-
-- **Reward hacking.** When faced with complex type systems, pointers with rich ownership semantics,
-  and FFI code, LLMs often tend to fall back to emitting `unsafe` blocks and _raw pointers_, which
-  bypass Rust's compile-time guarantees.
-
-- **Inaccuracy.** When asked to analyze code (e.g. to find the users of a `struct` field), LLMs
-  default to using grep and regex, which is, however, a notoriously inaccurate static analysis
-  method that misses true sites (_false negatives_) and records false ones (_false positives_).
-
-- **Non-determinism.** When re-running LLMs on translating the same function or struct they would
-  often use a different coding convention and struct shape across runs. This is especially
-  aggravated on translation tasks where an idiom in one language can be expressed in many ways in
-  the other language (e.g. a C/C++ `struct` in Rust).
-
-Crustify mitigates all these via: (a) properly engineered, clear prompts that ensure LLMs don't
-derail from the task, (b) pointers to the right Rust primitives that facilitate code with memory-
-and type-safety guarantees (c) a deterministic dependency graph of types and symbols to guide them
-through an incremental, bottom-up translation that enables safety-first coding, (d) a balanced
-workload and task decomposition to keep them focused and enable parallel agent work, and (e) coding
-conventions and structured specifications to enable deterministic outputs.
 
 
 ## Quick Setup
@@ -76,6 +44,39 @@ utils/build-orchestrator-prompt.sh <crustify-prim-checkout> -o orchestrator.md
 It will first ask you to point it at the repo root and the target subsystem(s) you want to translate
 — a subset of files, an entire `src/` directory, or the whole repo. Then it will wait for your
 approval before starting work. Adjust to your liking / use case.
+
+
+## Why Crustify
+
+LLM agents have become extremely powerful and versatile at every software engineering task. However,
+they need the right guidance, the right unit of work, and the right tools to enable them to produce
+high quality outputs. We tested LLMs on translating large, production codebases from the real world
+(libgit2 and OpenSSL); here are some notable pitfalls we observed:
+
+- **Overthinking.** Without a clear translation playbook, LLMs tend to overthink and get lost in
+  their own reasoning traces, especially on large codebases. Moreover, we observed that they produce
+  higher quality outputs, faster, and cheaper when tasks are smaller and well defined, thus calling
+  for task decomposition.
+
+- **Reward hacking.** When faced with complex type systems, pointers with rich ownership semantics,
+  and FFI code, LLMs often tend to fall back to emitting `unsafe` blocks and _raw pointers_, which
+  bypass Rust's compile-time guarantees.
+
+- **Inaccuracy.** When asked to analyze code (e.g. to find the users of a `struct` field), LLMs
+  default to using grep and regex, which is, however, a notoriously inaccurate static analysis
+  method that misses true sites (_false negatives_) and records false ones (_false positives_).
+
+- **Non-determinism.** When re-running LLMs on translating the same function or struct they would
+  often use a different coding convention and struct shape across runs. This is especially
+  aggravated on translation tasks where an idiom in one language can be expressed in many ways in
+  the other language (e.g. a C/C++ `struct` in Rust).
+
+Crustify mitigates all these via: (a) properly engineered, clear prompts that ensure LLMs don't
+derail from the task, (b) pointers to the right Rust primitives that facilitate code with memory-
+and type-safety guarantees (c) a deterministic dependency graph of types and symbols to guide them
+through an incremental, bottom-up translation that enables safety-first coding, (d) a balanced
+workload and task decomposition to keep them focused and enable parallel agent work, and (e) coding
+conventions and structured specifications to enable deterministic outputs.
 
 
 ## Use Cases
