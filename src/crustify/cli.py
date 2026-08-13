@@ -122,19 +122,6 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
              "scope.",
     )
     p.add_argument(
-        "--coalesce", action="store_true", dest="coalesce",
-        help="Merge consecutive dependency layers into ONE wave wherever their "
-             "union packs to a single batch — one agent, which orders the "
-             "cross-layer edges itself. Collapses the tail of one-unit layers "
-             "where each agent otherwise pays a full worktree build to emit one "
-             "function; the wide, genuinely parallel layers are untouched "
-             "because they already pack to several batches. Requires "
-             "--transitive (the selection must be closed under dependencies) "
-             "and is refused with --skip (a blocklisted item that is not "
-             "already emitted leaves a hole). The trade is blast radius: one "
-             "failure loses every unit in the merged wave.",
-    )
-    p.add_argument(
         "--dry-run", action="store_true", dest="dry_run",
         help="Print the plan (units, batches, first-layer deps) and stop.",
     )
@@ -511,7 +498,6 @@ def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
         dag_layer=getattr(args, "dag_layer", None),
         skip=getattr(args, "skip", None),
         transitive=bool(getattr(args, "transitive", False)),
-        coalesce=bool(getattr(args, "coalesce", False)),
         objective=getattr(args, "objective", None) or "wrap",
         parallel=bool(getattr(args, "parallel", False)),
         chain_policy=getattr(args, "parallel_policy", "per-agent"),

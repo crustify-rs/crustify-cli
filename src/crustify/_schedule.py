@@ -739,9 +739,13 @@ def coalesce_waves(
     dependencies and a partial one is not.
 
     ``closed`` gates the whole thing on the selection being closed under
-    dependencies (``--transitive``). Without it a unit's deps may sit outside
-    the selection entirely and the prefix argument does not hold, so every
-    layer stays its own wave — exactly the previous behaviour.
+    dependencies (``--transitive``, and no ``--skip`` to re-open it). Without
+    that a unit's deps may sit outside the selection entirely and the prefix
+    argument does not hold, so every layer stays its own wave. There is no
+    opt-out beyond that: where the merge is legal it is also strictly better —
+    the alternative is paying a worktree build per unit to emit one function.
+    The cost is blast radius, one failure taking the whole merged wave, and a
+    failed batch is re-runnable where a wasted hour is not.
     """
     if not closed:
         return [[li] for li in layers]

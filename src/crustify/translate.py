@@ -425,7 +425,6 @@ def translate_types(
     dag_layer: int | None = None,
     skip: list[str] | None = None,
     transitive: bool = False,
-    coalesce: bool = False,
     objective: str = "wrap",
     parallel: bool = False,
     chain_policy: str = "per-agent",
@@ -635,7 +634,7 @@ def translate_types(
         # `--transitive` is what closes the selection under dependencies, and
         # `--skip` re-opens it: a blocklisted unit that is NOT already emitted
         # leaves a hole a merged wave would step into.
-        closed_selection=bool(transitive) and not skip and bool(coalesce),
+        closed_selection=bool(transitive) and not skip,
     )
     if failures:
         # Print the EXCEPTION, not just the label. A batch that fails before its
