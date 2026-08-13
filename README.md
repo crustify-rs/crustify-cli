@@ -6,7 +6,8 @@ efficiently, with little human involvement.
 
 Point it at a repo and it will map its build system and test suite, extract an exact dependency
 graph of its types and symbols, and translate/wrap them in dependency order, focusing on maximizing
-safety without sacrificing correctness.
+safety without sacrificing correctness. See the [Results](#results) section for our experiments with
+Crustify on translating libgit2 and OpenSSL.
 
 
 ## Quick Setup
@@ -46,6 +47,28 @@ It will first ask you to point it at the repo root and the target subsystem(s) y
 approval before starting work. Adjust to your liking / use case.
 
 
+## Use Cases
+
+Crustify helps you automates the following C-to-Rust tasks:
+
+**Safe wrappers for C/Rust interop.** Crustify can emit a safe wrapper interface over the public API
+of a C/C++ library, and re-export it so that Rust-native consumers can integrate it without having
+to use unsafe or raw pointers. Moreover, if the library is already written in Rust, or is in the
+process of being migrated to Rust, Crustify can emit safe wrappers for its public API so that C/C++
+consumers can integrate it without introducing undefined behavior hazards.
+
+**Incremental migration to Rust.** Crustify can also automate the migration of production C/C++
+codebases to memory-safe, idiomatic Rust. It first decomposes the target in smaller units (symbols
+and types), and translates them in dependency order, bottom-up. Some lower-layer Rust items may
+still need to stay interoperable with the higher-layer C/C++ code (e.g. a god object storing a Rust
+handle) — Crustify reuses the same approach of safe wrappers over FFI items, temporarily, and once
+they no longer cross the FFI boundary it nativizes them.
+
+**Partial migration to Rust.** Using the above principles, Crustify can also narrow its scope to
+migrate only a subset of the subsystems, files, or types/symbols, keeping them interoperable with
+what stays in C/C++.
+
+
 ## Why Crustify
 
 LLM agents have become extremely powerful and versatile at every software engineering task. However,
@@ -77,28 +100,6 @@ and type-safety guarantees (c) a deterministic dependency graph of types and sym
 through an incremental, bottom-up translation that enables safety-first coding, (d) a balanced
 workload and task decomposition to keep them focused and enable parallel agent work, and (e) coding
 conventions and structured specifications to enable deterministic outputs.
-
-
-## Use Cases
-
-Crustify can help you automate the following C-to-Rust tasks:
-
-**Safe wrappers for C/Rust interop.** Crustify can emit a safe wrapper interface over the public API
-of a C/C++ library, and re-export it so that Rust-native consumers can integrate it without having
-to use unsafe or raw pointers. Moreover, if the library is already written in Rust, or is in the
-process of being migrated to Rust, Crustify can emit safe wrappers for its public API so that C/C++
-consumers can integrate it without introducing undefined behavior hazards.
-
-**Incremental migration to Rust.** Crustify can also automate the migration of production C/C++
-codebases to memory-safe, idiomatic Rust. It first decomposes the target in smaller units (symbols
-and types), and translates them in dependency order, bottom-up. Some lower-layer Rust items may
-still need to stay interoperable with the higher-layer C/C++ code (e.g. a god object storing a Rust
-handle) — Crustify reuses the same approach of safe wrappers over FFI items, temporarily, and once
-they no longer cross the FFI boundary it nativizes them.
-
-**Partial migration to Rust.** Using the above principles, Crustify can also narrow its scope to
-migrate only a subset of the subsystems, files, or types/symbols, keeping them interoperable with
-what stays in C/C++.
 
 
 ## Agent Harness
@@ -446,3 +447,9 @@ one:
 Every unit lands only after `cargo check`, `cargo clippy` and `cargo test --workspace` pass over the
 whole tree. A second visit to an already-wrapped unit runs as LLM-as-a-Judge review against the
 agent-owned state on disk.
+
+
+## Acknowledgements
+
+This material is based upon work supported by the Defense Advanced Research Projects Agency (DARPA)
+Translating All C To Rust (TRACTOR) program under Agreement No. HR00112590134.
