@@ -44,7 +44,7 @@ translations across multiple port sessions.
 **Analysis oracle.** For each item in your target set use `crustify-oracle` to fetch its analysis record,
 including the pointer analysis of its args and return (ownership, mutability, nullability,
 type, cardinality, etc.). If any of your work items lacks the agent-owned analysis, then you must do that first
-before proceeding with the translation work. Use the established principles and meaning of each agent-owned block.
+before proceeding with the codegen work. Use the established principles and meaning of each agent-owned block.
 
 **Lifetime primitives.** If your target set contains the special marker `lifetime-for : <spec>` then
 you enter discovery mode and scout the codebase for `<spec>` lifetime primitives using
@@ -160,8 +160,7 @@ stateless when possible.
 
 #### Emit safe wrappers for callbacks
 
-A symbol whose record is `kind: "callback"` is a C **function-pointer typedef**,
-not a free function - wrap it as a callable handle.
+A symbol whose record is `kind: "callback"` is a C function-pointer typedef - wrap it as a callable handle.
 
 Use the `crustify-oracle` skill to learn its pointer argument and return analysis,
 and the callsites of this callback. When the callsites' ownership semantics
@@ -214,8 +213,8 @@ errors that occur during testing; fix them if they do.
 
 ### Port the symbols
 
-If your symbols are port-scope then port them to safe, native, idiomatic Rust and use
-our established conventions for re-exporting them to C.
+If your symbols are port-scope then port them to safe, native, idiomatic Rust, preserving
+functionality and I/O equivalence. Use our established conventions for re-exporting them to C.
 
 **Demote TU-local re-exports.** If your batch removed all the C-side consumers of any
 re-exported Rust symbol that was previously TU-local in C, e.g. inline or static functions

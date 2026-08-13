@@ -212,15 +212,20 @@ and the [philosophy](docs/principles.md) document.
   - Re-export ported items, build and run original tests
   - Commit changes, merge in parent, fix conflicts, and purge worktree once landed
 
-**Batch scheduling.** Crustify employs a deterministic scheduler that queries the dependency graph
-for a set of translation seeds to produce batches and routes them to the type/symbol agents. The
-batching policy is governed by DAG layers---a single agent's batch only contains items from the same
-layer, and lower layers get scheduled before higher ones. Crustify also supports **workload
-tuning**: the symbol agent takes a batch of symbols capped by a configurable max number of symbols
-and `LoC` (currently 50 and 1000), while the type agent currently only gets a single type. Agents
-with batches at the same layer run concurrently in **isolated worktrees** via a configurable
-concurrency threshold, i.e. max nr of cores. The orchestrator agent chooses how to best use the
-scheduler for driving translation campaigns.
+**Batch scheduling.** Crustify employs a deterministic scheduler that queries the oracle's DAG
+to compose translation batches and routes them to the type/symbol agents. The
+batching policy is governed by kind, DAG, and scope. First a batch is either types or symbols, never
+both. Second, a single agent's batch either contains items from a single DAG layer, or from multiple
+layers if their dep closure is also in the batch; lower layers get scheduled before higher ones.
+Third, a batch contains either only port or wrap items, never both.
+
+**Workload tuning.** Crustify also supports workload tuning: the symbol agent takes a batch of
+symbols capped by a configurable max number of symbols and `LoC` (currently `50` and `1000`), while
+the type agent gets a batch of types capped by a max number of types and a min number of fields
+(currently `5` and `10`). Both have tunable CLI parameters. Agents with separate batches and scopes
+run concurrently in **isolated worktrees** via a configurable concurrency threshold, i.e. max nr of
+parallel agents. The orchestrator agent chooses how to best use the scheduler for driving
+translation campaigns.
 
 **FFI interop.** Interoperability across the FFI boundary is the hard, historically manual half, and
 is Crustify's current focus. A wrapper lets a C type be used from Rust with no raw pointers, no
