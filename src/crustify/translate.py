@@ -215,6 +215,7 @@ def _translate_emit(
                 target, batch_kind="type",
                 tags=[u.node.id for u in type_units],
                 kinds=[u.node.subkind for u in type_units],
+                entry_files=[u.node.defined_in for u in type_units],
                 objective=obj,
                 repo_root=layout.repo_root,
             ).run()

@@ -4,10 +4,10 @@ types (`struct` / `union` / `enum`) and porting them to a Rust-native shape once
 become fully owned by the Rust world.
 
 You build safe wrappers using the smart pointers and lifetime traits from the `crustify-prim` framework. 
-Your surface is the type itself: its definition, its lifecycle, and its field accessors.
+Your surface is the types' definition, lifecycle, and field accessors.
 
-The scheduler decided what to wrap and in what order - every type you depend on is already
-wrapped on disk (with some few exceptions in the case of fallback edges due to SCCs).
+The scheduler decided what to wrap and in what order - every type you depend on is either in your target
+set or already wrapped on disk, except fallback edges due to cut SCCs.
 
 <!-- PRINCIPLES -->
 
@@ -27,7 +27,8 @@ wrapped on disk (with some few exceptions in the case of fallback edges due to S
 - `{build_json}`: the build manifest -- libraries, link deps, build / test commands,
   feature flags.
 
-- `{tag}` your target type entity of kind `{kind}`.
+- `{types}` a JSON list of `{{name, defined_in}}` - your worklist. (`defined_in`
+  disambiguates same-named file-local statics.)
 
 - `{git_base}`: the base git branch where you merge your committed worktree changes into.
 
@@ -51,12 +52,13 @@ submit your findings through the oracle.
 ### Locate your files
 
 Use `crustify-cli scaffold` to locate the `.rs` module of your target set and their
-anchors, as well as the module of their deps (types, callbacks). Since you're wrapping
-both port- and wrap-scope types your target set may cover both types of anchros.
+anchors, as well as the module of their deps (types, callbacks). Since your target
+set may be containing port- or wrap-scope types then you may deal with both types of anchros.
 
 Find the generated `bindings.rs` for the `<lib>-sys` crate of the crate that homes your
-target set (their crate's `-sys` companion). It exposes the FFI struct and the C functions
-your lifetime primitives call.
+target set (their crate's `-sys` companion). It exposes the FFI structs and the C functions
+your lifetime primitives call. If you're porting a TU type then its definition will not
+be in bindgen - write it manually yourself in Rust.
 
 If you hit a genuine bindgen bug that blocks you or a missing binding for an item that you
 need, you may adjust the `<lib>-sys` `bindgen.h` / agent-owned allowlist and re-run `cargo
@@ -71,7 +73,7 @@ that's the case, rebuild / reconfigure the target in your worktree to obtain the
 **`review`.** If our objective is `review` then you act as the **LLM-as-a-Judge** assessing the
 quality and accuracy of the agent-owned ownership and lifecycle analysis from `crustify-oracle`,
 and of the emitted Rust code for your target set; note that your target set may contain both safe
-wrappers or and ported items. For both, you verify their claims against our principles and instructions and if
+wrappers or and ported items. For both, verify their claims against our principles and instructions and if
 you notice any inconsistencies, submit your new findings through the oracle, and fix / extend its
 existing Rust code if necessary, justifying why they fix the existing state.
 
@@ -105,17 +107,16 @@ regarless whether they are wrap- or port- or out-of-scope.
 #### Emit safe wrappers
 
 **Type definition.** Use the appropriate primitive from the `crustify-prim` skill to
-  define the newtype wrapper over the `ffi::` type.
-  
-  If no primitive allows expressing certain properties of the newtype, e.g. lifetimes for
-  borrowed refs, or parametric generics for type-erased fields, hand-write them manually
+  define the newtype wrapper over the `ffi::` types. If no primitive allows expressing
+  certain properties of the newtypes, e.g. lifetimes for borrowed refs, or parametric
+  generics for type-erased fields, hand-write them manually
   following the crate's guidelines and principles.
   
-**Polymorphism.** Use the `crustify-oracle` skill to find the set of types that this type
-  is cast `to` and that others cast `into` this type. Check whether the type is a synthetic
-  type generator, i.e. a macro whose expansion emits type definitions, which may not be casted
-  to / from its instances. Read its topology to decide whether it can be represented by a
-  generic paremtrized newtype:
+**Polymorphism.** Use the `crustify-oracle` skill to find the set of types that your types
+  is cast `to` and that others cast `into` your types. For each type in your target set, check
+  whether it is a synthetic type generator, i.e. a macro whose expansion emits type definitions,
+  which may not be casted to / from its instances. Read its topology to decide whether it can be
+  represented by a generic paremtrized newtype:
 
   - **Generic parametrized newtype**: if the type is the convergence point of a larger,
   homogeneous family, i.e. multiple same-shaped sibling types type-erase to and from you,
@@ -226,10 +227,10 @@ during testing; fix them if they do.
 
 ### Port the layout to Rust 
 
-Determine via `crustify-oracle` whether the type's layout can be made Rust-native by checking
-if its field touchers are now Rust-native. Next, determine if the type's definition is part of
-a public header and exported to C-side consumers (not just a forward-declaration but the
-whole body).
+For each type in your target set, determine via `crustify-oracle` whether the its layout can
+be made Rust-native by checking if its field touchers are now Rust-native. Next, determine
+if the type's definition is part of a public header and exported to C-side consumers
+(not just a forward-declaration but the whole body).
 
 If it still has C-side field touchers or its body is exported on the public API, then 
 report why that's not possible yet and quit.
@@ -242,8 +243,8 @@ symbol re-exporting and C/Rust build switch wiring principles for symbols.
 
 ### Port the storage to Rust
 
-Determine  via `crustify-oracle` whether the type's storage is allocated / deallocated by
-the C world. If not, report why is that and quit.
+For each type in your target set, determine  via `crustify-oracle` whether the its storage
+is still allocated / deallocated by the C world. If not, report that and quit.
 
 Otherwise, then you may now fully own the type in Rust, with its storage allocated
 and released by the Rust-native allocator.

@@ -173,10 +173,22 @@ class TranslateAgent(CrustifyAgent):
             # syms-pull: the pooled symbol names (+ defined_in for collisions).
             common["syms"] = json.dumps(self._syms)
             return common
-        # types.md handles ONE struct / union / enum — `_schedule.pack` builds
-        # one batch per type and never splits it. The agent pulls the field
-        # set, the reverse-derived lifecycle and the cast graph from the record
-        # itself; nothing about the accessor surface is handed to it, since a
-        # wrap-scope type already carries only its port-touched fields.
-        common.update({"tag": self._tags[0], "kind": self._kind})
+        # types-pull, shaped exactly like syms-pull: the batch's type names
+        # (+ defined_in for collisions). `_schedule.pack` pools up to
+        # `max_types` of them, so this is a LIST — handing only `tags[0]` here
+        # silently dropped the rest of a pooled batch.
+        #
+        # No `kind`: the agent reads it off the record it fetches anyway, and
+        # every kind routes to this one prompt, so passing it added a slot the
+        # scheduler had to keep true. It stays on `self._kinds` for the prompt
+        # dispatch above, which is internal.
+        #
+        # The agent pulls the field set, the reverse-derived lifecycle and the
+        # cast graph from each record itself; nothing about the accessor
+        # surface is handed over, since a wrap-scope type already carries only
+        # its port-touched fields.
+        files = self._entry_files or [None] * len(self._tags)
+        common["types"] = json.dumps(
+            [{"name": n, "defined_in": f}
+             for n, f in zip(self._tags, files)])
         return common
