@@ -432,6 +432,8 @@ def translate_types(
     parallel_max: int = 8,
     max_syms: int | None = None,
     max_loc: int | None = None,
+    max_types: int | None = None,
+    min_fields: int | None = None,
     dry_run: bool = False,
     emit_fn=None,
 ) -> None:
@@ -452,6 +454,10 @@ def translate_types(
         max_syms = _cfg.TRANSLATE_MAX_SYMS
     if max_loc is None:
         max_loc = _cfg.TRANSLATE_MAX_LOC
+    if max_types is None:
+        max_types = _cfg.TRANSLATE_MAX_TYPES
+    if min_fields is None:
+        min_fields = _cfg.TRANSLATE_MIN_FIELDS
 
     layout = Layout.discover(target)
     scope_json = _preflight(target, layout)
@@ -624,7 +630,7 @@ def translate_types(
                                            objective=objective,
                                            scope_of=scope_of),
         max_syms=max_syms, max_loc=max_loc, scope_of=scope_of,
-        max_types=_cfg.TRANSLATE_MAX_TYPES, min_fields=_cfg.TRANSLATE_MIN_FIELDS,
+        max_types=max_types, min_fields=min_fields,
         objective_of=lambda b: batch_objective(b, objective, scope_of),
         emit_factory=emit_factory, target=target, layout=layout,
     )

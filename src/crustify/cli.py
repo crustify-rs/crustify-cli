@@ -82,6 +82,20 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
              "closes a batch. Default: config.TRANSLATE_MAX_LOC.",
     )
     p.add_argument(
+        "--max-types", type=int, default=None, metavar="N", dest="max_types",
+        help="Per-batch TYPE budget — how many types ride one type agent. The "
+             "symbol caps measure the wrong things for a type, so it has its "
+             "own; the ceiling is the agent's output, not its input. "
+             "Default: config.TRANSLATE_MAX_TYPES.",
+    )
+    p.add_argument(
+        "--min-fields", type=int, default=None, metavar="N", dest="min_fields",
+        help="Per-batch DECLARED-field floor: a type batch closes once it holds "
+             "this many, and a type meeting it alone never shares an agent. "
+             "Binds together with --max-types — whichever is hit first closes "
+             "the batch. Default: config.TRANSLATE_MIN_FIELDS.",
+    )
+    p.add_argument(
         "--dag-layer", type=int, default=None, metavar="N", dest="dag_layer",
         help="Select EVERY in-scope unit at dag layer N — types AND symbols, "
              "port- or wrap-scope alike. Scope is no longer a selector here: "
@@ -498,6 +512,8 @@ def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
         dag_layer=getattr(args, "dag_layer", None),
         skip=getattr(args, "skip", None),
         transitive=bool(getattr(args, "transitive", False)),
+        max_types=getattr(args, "max_types", None),
+        min_fields=getattr(args, "min_fields", None),
         objective=getattr(args, "objective", None) or "wrap",
         parallel=bool(getattr(args, "parallel", False)),
         chain_policy=getattr(args, "parallel_policy", "per-agent"),

@@ -298,8 +298,8 @@ Four stages, run in this order the first time:
 |---|---|---|
 | `scaffold` | homes each C entity in the `.rs` that carries its `// Wraps:` / `// Replaces:` anchor, via `crates.json` | `--all` `--name` `--create` `--validate` `--file` `--dir` |
 | `bindgen` | composes the `<lib>-sys` FFI crates, partitioning the wrap-scope surface by owning crate | `--libs` `--reset` |
-| `translate` | emits the wrappers, layer by layer, one agent per batch | `--name` `--dag-layer` `--transitive` `--skip` `--objective` `--max-syms` `--max-loc` `--lifetime-for` `--dry-run` · `--model` `--billing` `--parallel` `--parallel-max` `--parallel-policy` `--override-base-prompt` `--no-console` `--no-file-log` |
-| `audit` | scans the emitted tree for `unsafe`, raw pointers and naked `ffi::`, as JSON on stdout | `--all` `--name` `--crate` `--mod` `--file` |
+| `translate` | emits the wrappers, layer by layer, one agent per batch | `--name` `--file` `--dag-layer` `--transitive` `--skip` `--port-only` `--objective` `--max-syms` `--max-loc` `--max-types` `--min-fields` `--lifetime-for` `--dry-run` · `--model` `--billing` `--parallel` `--parallel-max` `--parallel-policy` `--override-base-prompt` `--no-console` `--no-file-log` |
+| `audit` | scans the emitted tree for `unsafe`, raw pointers and naked `ffi::`, as JSON on stdout | `--all` `--name` `--crate` `--mod` `--file` `--dir` |
 
 `translate` is the only stage that spawns agents; the other three are deterministic composers.
 
