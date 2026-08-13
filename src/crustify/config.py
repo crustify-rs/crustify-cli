@@ -53,6 +53,38 @@ count 1, macros 0. When `loc` is absent, a symbol contributes 0 and the count
 cap binds alone. A lone symbol heavier than this still gets its own batch — a
 function is never split."""
 
+TRANSLATE_MAX_TYPES: int = 5
+"""Per-batch type budget — how many type-units ride one type agent.
+
+A type used to stand alone, on the reasoning that it is not budgetable in the
+symbol caps. True, and the fix is a cap of its own rather than none: the floor
+an agent pays before it writes anything — worktree fork, C archive, cargo
+target, oracle reads — swamps the type itself. Across the 76 wrapped libgit2
+types a 0-field opaque handle cost a median $5.54 / 366 lines against $7.35 /
+456 for an 11+-field struct, so paying that floor per handle is most of what a
+tail of handles costs.
+
+5 rather than more because the CEILING is the agent's output, not its input:
+the largest single-agent emission observed is 1,877 lines, and 5 median types
+(~1,890) sits at it. Ten would be ~3,780 — twice anything seen.
+"""
+
+TRANSLATE_MIN_FIELDS: int = 10
+"""Per-batch field floor — a type batch stays open until it holds this many
+declared fields, then closes.
+
+The complement of :data:`TRANSLATE_MAX_TYPES`: the count cap stops a batch of
+handles growing unbounded, this one stops a fat struct sharing an agent with
+anything. A 30-field type meets the floor alone and gets the batch to itself,
+which is the old behaviour for exactly the types that earned it.
+
+DECLARED fields, which is what the dag carries (a type node's ``loc`` is its
+field count). It overcounts: the scaffolder anchors only the port-touched
+subset, so ``evp_keymgmt_st`` reads 35 fields against 0 anchors on disk. That
+makes this a coarse floor, not a work estimate — which is why the type cap
+above is the binding one in practice.
+"""
+
 
 # ---------------------------------------------------------------------------
 # Port stage — per-batch effort budget

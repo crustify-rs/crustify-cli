@@ -623,6 +623,7 @@ def translate_types(
                                            objective=objective,
                                            scope_of=scope_of),
         max_syms=max_syms, max_loc=max_loc, scope_of=scope_of,
+        max_types=_cfg.TRANSLATE_MAX_TYPES, min_fields=_cfg.TRANSLATE_MIN_FIELDS,
         objective_of=lambda b: batch_objective(b, objective, scope_of),
         emit_factory=emit_factory, target=target, layout=layout,
     )

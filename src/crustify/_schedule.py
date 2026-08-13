@@ -250,6 +250,8 @@ def pack(
     max_loc: int | None = None,
     syms_by_file: bool = False,
     scope_of: "Callable[[Node], str] | None" = None,
+    max_types: int = 1,
+    min_fields: int = 0,
 ) -> list[Batch]:
     """Budget-bounded batches. A type-unit gets a batch to itself, bounded by
     neither cap — see the comment below.
@@ -288,21 +290,17 @@ def pack(
     batches: list[Batch] = []
     pool: dict[str | None, list[Node]] = {}
 
+    type_pool: list[Unit] = []
     for u in units:
         if u.kind == "type":
-            # ONE batch per type, bounded by nothing. A type is not budgetable
-            # in the units these caps are denominated in: `max_syms` counts
-            # symbol wrappers, and a type costs several of them; `max_loc`
-            # counts body line span, and a type node's `loc` is its FIELD
-            # count. Pooling under either compares unlike things — 50 types
-            # under a 50-symbol cap is ~7x the intended load, and a count cap
-            # cannot tell `ssl_connection_st` (250 fields) from an opaque
-            # handle (0). So a type stands alone and the caps stay symbol-only.
-            b = Batch(file=u.file, units=[u],
-                      op_range=(0, 0), field_range=(0, len(u.fields)))
-            b.members.append(u.node)
-            b.fields = list(u.fields)
-            batches.append(b)
+            # Types pool among THEMSELVES, never with symbols: `_translate_emit`
+            # routes on `any(u.kind == "type")`, so a mixed batch would hand a
+            # symbol to the type agent. They also need caps of their own — the
+            # symbol ones are denominated in the wrong units (`max_syms` counts
+            # symbol wrappers; a type costs several) — hence `max_types` and
+            # `min_fields`, which cannot tell `ssl_connection_st` (250 fields)
+            # from an opaque handle (0) but do stop the two sharing an agent.
+            type_pool.append(u)
         else:
             # `None` key = one global pool for the layer (the default): the
             # defining file is not a write boundary, so it must not bound a batch.
@@ -312,6 +310,37 @@ def pack(
             pool.setdefault((u.file if syms_by_file else None,
                              scope_of(u.node) if scope_of else None),
                             []).append(u.node)
+
+    # Types: close on EITHER cap — `max_types` bounds the agent's output (the
+    # binding one in practice), `min_fields` keeps a fat struct off a shared
+    # agent by closing the batch as soon as the floor is met. `max_types=1`,
+    # the default, reproduces one-type-per-batch exactly.
+    def _flush_types(chunk: list[Unit]):
+        b = Batch(file=chunk[0].file, units=list(chunk),
+                  op_range=(0, 0),
+                  field_range=(0, sum(len(u.fields) for u in chunk)))
+        b.members = [u.node for u in chunk]
+        b.fields = [f for u in chunk for f in u.fields]
+        batches.append(b)
+
+    chunk_t: list[Unit] = []
+    fields_sum = 0
+    for u in type_pool:
+        n_fields = len(u.fields)
+        # Closed BEFORE the append, and `n_fields >= min_fields` is the third
+        # test: a type that meets the floor on its own never shares an agent,
+        # whatever it happens to follow. Closing after the append instead made
+        # the split order-dependent — a 30-field struct landed with whichever
+        # handle preceded it and only stood alone when it happened to be first.
+        if chunk_t and (len(chunk_t) >= max_types
+                        or fields_sum >= min_fields
+                        or n_fields >= min_fields):
+            _flush_types(chunk_t)
+            chunk_t, fields_sum = [], 0
+        chunk_t.append(u)
+        fields_sum += n_fields
+    if chunk_t:
+        _flush_types(chunk_t)
 
     # pool atomic syms into batches bounded by count (<= max_syms) and,
     # when set, lines-of-code (Σ loc <= max_loc) — whichever cap is hit first
@@ -433,6 +462,11 @@ class Stage:
     # homogeneous in scope, which is what lets the emit seam derive one correct
     # objective for it. Unset = no scope partition (single-objective callers).
     scope_of: Callable[[Node], str] | None = None
+    # Type-batch budgets, denominated in types and declared fields — the symbol
+    # caps measure the wrong things for a type. Defaults reproduce the old
+    # one-type-per-batch behaviour for callers that do not set them.
+    max_types: int = 1
+    min_fields: int = 0
     # `Batch -> verb`. The objective the emit seam will ACTUALLY hand this
     # batch, which is not always `verb`: a symbol batch takes its scope's, so a
     # wave invoked `wrap` ports its port-scope symbols. Wired by the caller to
@@ -808,7 +842,8 @@ def schedule(
 
     syms_by_file = chain_policy == "per-file"
     pack_kw = dict(max_syms=stage.max_syms, max_loc=stage.max_loc,
-                   syms_by_file=syms_by_file, scope_of=stage.scope_of)
+                   syms_by_file=syms_by_file, scope_of=stage.scope_of,
+                   max_types=stage.max_types, min_fields=stage.min_fields)
     # Packed PER WAVE and concatenated — never `pack(units)` over the whole
     # selection. A wave is the unit a barrier falls between, so packing across
     # one reports a plan that cannot happen: with the free-symbol pool no longer
