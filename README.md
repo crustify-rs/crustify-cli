@@ -1,8 +1,8 @@
 # Crustify
 
-Crustify leverages LLM agents to automate (a) **migrating production C/C++ codebases** to safe,
-idiomatic Rust, and (b) **generating safe Rust wrappers** for unsafe APIs, incrementally and
-efficiently, with little human involvement.
+Crustify leverages LLM agents to (a) **migrate production C/C++ codebases** to safe,
+idiomatic Rust, and (b) **generate safe Rust wrappers** for unsafe APIs - automatically,
+incrementally and efficiently, with little human involvement.
 
 Point it at a repo and it will map its build system and test suite, extract an exact dependency
 graph of its types and symbols, and translate/wrap them in dependency order, focusing on maximizing
