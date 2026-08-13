@@ -128,9 +128,10 @@ Billing modes: subscription-based (Claude Max, Codex Pro) or via API key (BYOK).
 
 Crustify enables LLM agents to analyze code with high precision by equipping them with a **_semantic
 oracle_** - a CLI tool that leverages [CodeQL](https://codeql.github.com/) to statically analyze a
-target repository and extract an exact dependency graph between types and symbols. The `.ql` queries
-are verified and tracked in this repo, so agents do not have to re-invent them on the fly every
-time, which would re-introduce the very inaccuracy issues mentioned above.
+target repository and extract an exact dependency graph of types and symbols. We developed, tested,
+and shipped the `.ql` queries that index the CodeQL database to compose the graph (see [utils](utils/codeql/)).
+This way, agents do not have to re-invent them every time, which would re-introduce the very inaccuracy
+issues mentioned above.
 
 The semantic oracle has three primary jobs:
 
@@ -153,8 +154,8 @@ Crustify is a pipeline consisting of two phases, each with its own stages and st
 artifacts, where work is split between **deterministic composers for mechanical tasks** and **LLMs
 for semantic reasoning and codegen**. The composers are implemented in Python and packaged as two
 CLI binaries that can be driven by LLMs and humans alike. The pipeline is designed to allow humans
-to verify and modify the artifacts produced by the LLM between stages, which can help find pitfalls
-and fine tune the outputs for the downstream stages.
+to verify and modify the artifacts produced by the LLM between stages, facilitating debugging and
+fine tuning for custom preferences.
 
 ### 1. Setup
 
