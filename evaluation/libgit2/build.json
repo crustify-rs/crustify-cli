@@ -1,0 +1,348 @@
+{
+  "_comment": "REPO-ROOT-tier build metadata for libgit2 1.9.0 (commit ddf3b5c85), hand-authored. All paths are repo-root-relative except system include_dirs. The library/executable topology below was NOT guessed: it was read back out of the generated build/build.ninja link rules after `build_commands.configure` ran, so source_dirs and link_dependencies match what the linker actually produces on this host. This configuration deliberately prefers SYSTEM libraries over libgit2's in-tree deps/ vendoring wherever the build system offers the choice; see _comment_vendoring. HOST MIGRATION 2026-08-08: the campaign moved from Debian 13 trixie / aarch64 / glibc 2.41 to Debian 12 bookworm / x86_64; see _comment_host_migration.",
+
+  "_comment_vendoring": "libgit2 vendors eight dependencies under deps/. Only three can be replaced by system libraries, and all three are: zlib (USE_COMPRESSION=zlib), pcre2 (USE_REGEX=pcre2), llhttp (USE_HTTP_PARSER=llhttp). That removes ~86.6k LOC of C from the CodeQL database and turns those three into real system link dependencies (hence `-sys` crates at the bindgen stage) instead of object blobs folded into libgit2. The remaining three POSIX-relevant vendored deps CANNOT be de-vendored and stay compiled into the libgit2 target: deps/xdiff (cmake/SelectXdiff.cmake raises `FATAL_ERROR \"external/system xdiff is not yet supported\"` for USE_XDIFF=system), deps/reftable (src/CMakeLists.txt add_subdirectory is unconditional, no option exists), and deps/ntlmclient (cmake/SelectAuthNTLM.cmake offers only `builtin` on POSIX; the only alternative is USE_AUTH_NTLM=OFF, which removes the feature). deps/winhttp is Win32-only and deps/clar is the test harness; neither is in this build.",
+
+  "_comment_libraries": "One shared library. Note that src/util is NOT a separate artifact: cmake builds `util` and `libgit2` as OBJECT libraries and links both object sets plus the vendored dependency objects into a single libgit2package target, so src/util/, deps/xdiff/, deps/ntlmclient/ and deps/reftable/ are all source_dirs of `libgit2`. The key `libgit2` is the stem of target `libgit2.so` (cmake OUTPUT_NAME is ${LIBGIT2_FILENAME}=git2, prefixed to libgit2.so.1.9.0 with SONAME libgit2.so.1.9).",
+  "libraries": {
+    "libgit2": {
+      "kind": "shared",
+      "target": "libgit2.so",
+      "source_dirs": [
+        "src/libgit2/",
+        "src/util/",
+        "deps/xdiff/",
+        "deps/ntlmclient/",
+        "deps/reftable/"
+      ],
+      "include_dirs": [
+        "include/",
+        "include/git2/",
+        "include/git2/sys/",
+        "src/libgit2/",
+        "src/util/",
+        "deps/xdiff/",
+        "deps/ntlmclient/",
+        "deps/reftable/"
+      ],
+      "link_dependencies": ["libssl", "libcrypto", "libllhttp", "libpcre2-8", "libz", "librt", "libc"]
+    },
+
+    "libssl": {
+      "kind": "system",
+      "target": null,
+      "source_dirs": [],
+      "include_dirs": ["/usr/include/openssl/"],
+      "link_dependencies": ["libcrypto", "libc"]
+    },
+    "libcrypto": {
+      "kind": "system",
+      "target": null,
+      "source_dirs": [],
+      "include_dirs": ["/usr/include/openssl/"],
+      "link_dependencies": ["libc"]
+    },
+    "libllhttp": {
+      "kind": "system",
+      "target": null,
+      "source_dirs": [],
+      "include_dirs": ["/usr/include/"],
+      "link_dependencies": ["libc"]
+    },
+    "libpcre2-8": {
+      "kind": "system",
+      "target": null,
+      "source_dirs": [],
+      "include_dirs": ["/usr/include/"],
+      "link_dependencies": ["libc"]
+    },
+    "libz": {
+      "kind": "system",
+      "target": null,
+      "source_dirs": [],
+      "include_dirs": ["/usr/include/"],
+      "link_dependencies": ["libc"]
+    },
+    "librt": {
+      "kind": "system",
+      "target": null,
+      "source_dirs": [],
+      "include_dirs": ["/usr/include/"],
+      "link_dependencies": ["libc"]
+    },
+    "libc": {
+      "kind": "system",
+      "target": null,
+      "source_dirs": [],
+      "include_dirs": ["/usr/include/", "/usr/include/aarch64-linux-gnu/"],
+      "link_dependencies": []
+    }
+  },
+
+  "_comment_executables": "`git2` is the CLI (src/cli/). It does NOT dynamically link libgit2: cmake links $<TARGET_OBJECTS:libgit2> and $<TARGET_OBJECTS:util> directly into the binary, because the util library uses libgit2's thread-local error buffers (see the TODO in src/cli/CMakeLists.txt). `link_dependencies` records `libgit2` anyway, since that is the dependency relationship downstream stages care about. `libgit2_tests` and `util_tests` are the clar test binaries built from tests/ with deps/clar; `headertest` is a compile-only check that every public header is self-contained. All three are outside the port target and exist here so the composer can recognise tests/ as executable-only.",
+  "executables": {
+    "git2": {
+      "source_dirs": ["src/cli/"],
+      "link_dependencies": ["libgit2", "libssl", "libcrypto", "libllhttp", "libpcre2-8", "libz", "librt", "libc"]
+    },
+    "libgit2_tests": {
+      "source_dirs": ["tests/libgit2/", "deps/clar/"],
+      "link_dependencies": ["libgit2", "libssl", "libcrypto", "libllhttp", "libpcre2-8", "libz", "librt", "libc"]
+    },
+    "util_tests": {
+      "source_dirs": ["tests/util/", "deps/clar/"],
+      "link_dependencies": ["libgit2", "libssl", "libcrypto", "libllhttp", "libpcre2-8", "libz", "librt", "libc"]
+    },
+    "headertest": {
+      "source_dirs": ["tests/headertest/"],
+      "link_dependencies": ["libc"]
+    }
+  },
+
+  "_comment_features": "The feature macros libgit2's sources key on. These are emitted into a GENERATED header, build/gen_headers/git2_features.h, from src/util/git2_features.h.in; `enabled` below is transcribed from that generated header as produced by this build's `build_commands.configure`, not from the .in defaults. `default_value` is what libgit2's own unflagged cmake run would produce on this platform (Debian 13, glibc, no macOS/Win32 paths). Documentation only - no composer reads this block; dead code is filtered implicitly because scope.json is anchored on the T1 tables, so a body elided by an #ifdef contributes no entities. That implicit filtering matters more than usual here: cmake globs ALL backend variants into the compile (streams/mbedtls.c, streams/schannel.c, streams/stransport.c, transports/winhttp.c, transports/ssh_libssh2.c, transports/auth_sspi.c are all in the libgit2.so link line) and relies on the #ifdefs below to empty them out.",
+  "features": {
+    "all": [
+      {
+        "name": "GIT_THREADS",
+        "role": "Threading support for the global state, cache locks and mwindow. Per cmake/SelectThreads.cmake, defaults ON and selects the pthreads provider on POSIX. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_THREADS_PTHREADS",
+        "role": "Selects the pthreads implementation of the threading abstraction in src/util/thread.h. Per cmake/SelectThreads.cmake, implied by GIT_THREADS on non-Win32. On glibc >= 2.34 pthreads lives inside libc, which is why no -lpthread appears on the link line. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_SHA1_BUILTIN",
+        "role": "Uses the bundled sha1dc collision-detecting SHA1 (src/util/hash/collisiondetect.c + src/util/hash/sha1dc/). Per cmake/SelectHashes.cmake this is the default and the only backend that does NOT trigger the SHAttered warning - git's hash algorithm is sha1dc, not plain SHA1. Chosen deliberately for port fidelity; it keeps ~2.4k LOC of crypto inside the port scope. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_SHA256_BUILTIN",
+        "role": "The bundled RFC 6234 SHA256 (src/util/hash/builtin.c + src/util/hash/rfc6234/). DISABLED, and not by preference: USE_SHA256=builtin is INCOMPATIBLE with USE_HTTPS=OpenSSL and does not compile. src/util/hash/rfc6234/sha.h:121 defines `typedef enum SHAversion { SHA1, SHA224, SHA256, SHA384, SHA512 }`, and OpenSSL's <openssl/sha.h> declares functions of those exact names; any TU reaching both - i.e. any TU including src/libgit2/streams/openssl.h for TLS and src/util/hash.h via futils.h, which is most of libgit2 - fails with `'SHA1' redeclared as different kind of symbol`. cmake/SelectHashes.cmake does not reject the pairing, and upstream CI never exercises it (the only USE_SHA256 in .github/workflows is OpenSSL-FIPS; every other job relies on the `https` default, which silently resolves to OpenSSL and sidesteps the collision). Broken combination.",
+        "default_value": false,
+        "enabled": false
+      },
+      {
+        "name": "GIT_SHA256_OPENSSL",
+        "role": "SHA256 via system OpenSSL 3.5.6 (src/util/hash/openssl.c). This is what cmake/SelectHashes.cmake's default USE_SHA256=https resolves to when USE_HTTPS is OpenSSL, and it is set explicitly here because the builtin alternative does not compile against OpenSSL (see GIT_SHA256_BUILTIN). Consequence for the port scope: src/util/hash/rfc6234/ (846 LOC) and hash/builtin.c drop out, hash/openssl.c enters. SHA1 is unaffected - the fidelity-critical sha1dc stays builtin. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_COMPRESSION_ZLIB",
+        "role": "Deflate/inflate via SYSTEM zlib rather than deps/zlib. Per cmake/SelectCompression.cmake, USE_COMPRESSION=zlib; when unset the build auto-detects and would also pick system zlib if found. De-vendored: drops deps/zlib (20.7k LOC) from the build and the CodeQL database. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_REGEX_PCRE2",
+        "role": "Regular expressions via SYSTEM PCRE2 (libpcre2-8 10.46) rather than deps/pcre2. Per cmake/SelectRegex.cmake the default fallback chain on glibc is regcomp_l (absent - it is a BSD/Apple interface), then system PCRE1, then `builtin`; so without this override the build would vendor deps/pcre2. De-vendored: drops 54.2k LOC, the single largest vendored blob. Stable.",
+        "default_value": false,
+        "enabled": true
+      },
+      {
+        "name": "GIT_REGEX_BUILTIN",
+        "role": "The bundled deps/pcre2 regex provider. Per cmake/SelectRegex.cmake this is what glibc hosts fall back to. Disabled here in favour of GIT_REGEX_PCRE2. Stable.",
+        "default_value": true,
+        "enabled": false
+      },
+      {
+        "name": "GIT_HTTPPARSER_LLHTTP",
+        "role": "HTTP message parsing via SYSTEM llhttp (9.2.1) rather than deps/llhttp. Per cmake/SelectHTTPParser.cmake, USE_HTTP_PARSER=llhttp; cmake/FindLLHTTP.cmake hard-requires LLHTTP_VERSION_MAJOR == 9. De-vendored: drops deps/llhttp (11.7k LOC). Stable.",
+        "default_value": false,
+        "enabled": true
+      },
+      {
+        "name": "GIT_HTTPPARSER_BUILTIN",
+        "role": "The bundled deps/llhttp parser, the libgit2 default per cmake/SelectHTTPParser.cmake. Disabled here in favour of GIT_HTTPPARSER_LLHTTP. Stable.",
+        "default_value": true,
+        "enabled": false
+      },
+      {
+        "name": "GIT_HTTP",
+        "role": "HTTP transport support, covering both http:// and https:// remotes (src/libgit2/transports/http.c, httpclient.c, httpparser.c). Per cmake/SelectHTTP.cmake, defaults ON. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_HTTPS",
+        "role": "TLS transport support. Per cmake/SelectHTTPSBackend.cmake, defaults ON and auto-selects OpenSSL on Linux. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_HTTPS_OPENSSL",
+        "role": "TLS via system OpenSSL 3.5.6 (src/libgit2/streams/openssl.c, openssl_legacy.c). Per cmake/SelectHTTPSBackend.cmake this is the Linux auto-selection; set explicitly here. Also drives deps/ntlmclient's crypto backend to crypt_openssl.c per deps/ntlmclient/CMakeLists.txt. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_HTTPS_OPENSSL_DYNAMIC",
+        "role": "dlopen()s libssl at runtime instead of link-time binding (src/libgit2/streams/openssl_dynamic.c). Per cmake/SelectHTTPSBackend.cmake, opt-in via USE_HTTPS=OpenSSL-Dynamic. Disabled: link-time binding gives bindgen a concrete .so to bind against. Stable.",
+        "default_value": false,
+        "enabled": false
+      },
+      {
+        "name": "GIT_HTTPS_MBEDTLS",
+        "role": "TLS via mbedTLS (src/libgit2/streams/mbedtls.c, src/util/hash/mbedtls.c). Per cmake/SelectHTTPSBackend.cmake, opt-in. Disabled - the .c files still compile but the #ifdef empties them. Stable.",
+        "default_value": false,
+        "enabled": false
+      },
+      {
+        "name": "GIT_HTTPS_SECURETRANSPORT",
+        "role": "TLS via Apple SecureTransport (src/libgit2/streams/stransport.c). Per cmake/SelectHTTPSBackend.cmake, macOS-only default. Deprecated by Apple since macOS 10.15. Not applicable on Linux. Legacy.",
+        "default_value": false,
+        "enabled": false
+      },
+      {
+        "name": "GIT_HTTPS_SCHANNEL",
+        "role": "TLS via Win32 Schannel (src/libgit2/streams/schannel.c). Per cmake/SelectHTTPSBackend.cmake, Win32-only. Not applicable on Linux. Stable.",
+        "default_value": false,
+        "enabled": false
+      },
+      {
+        "name": "GIT_HTTPS_WINHTTP",
+        "role": "TLS via Win32 WinHTTP (src/libgit2/transports/winhttp.c + deps/winhttp/). Per cmake/SelectHTTPSBackend.cmake, Win32-only. Not applicable on Linux. Stable.",
+        "default_value": false,
+        "enabled": false
+      },
+      {
+        "name": "GIT_AUTH_NTLM",
+        "role": "NTLM authentication for HTTP remotes (src/libgit2/transports/auth_ntlm.h). Per cmake/SelectAuthNTLM.cmake, defaults ON. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_AUTH_NTLM_BUILTIN",
+        "role": "NTLM via the bundled deps/ntlmclient (src/libgit2/transports/auth_ntlmclient.c). Per cmake/SelectAuthNTLM.cmake this is the ONLY POSIX provider - there is no system-library alternative, so deps/ntlmclient (5.5k LOC) stays vendored despite this build's de-vendoring preference. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_AUTH_NEGOTIATE",
+        "role": "Negotiate/SPNEGO authentication (src/libgit2/transports/auth_gssapi.c). Per cmake/SelectAuthNegotiate.cmake, requires GSSAPI; cmake reported 'Could NOT find GSSAPI' on this host, so it is off. Stable.",
+        "default_value": false,
+        "enabled": false
+      },
+      {
+        "name": "GIT_SSH",
+        "role": "SSH transport support (src/libgit2/transports/ssh.c). Per cmake/SelectSSH.cmake, defaults OFF. Left off: it would add libssh2 as a dependency and ssh_libssh2.c to the port scope for no analytical gain. Stable.",
+        "default_value": false,
+        "enabled": false
+      },
+      {
+        "name": "GIT_NSEC",
+        "role": "Nanosecond-precision file timestamps for index/stat comparison. Per cmake/SelectNsec.cmake, defaults ON with provider auto-detection. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_NSEC_MTIM",
+        "role": "Selects the POSIX `struct stat.st_mtim` spelling of the nanosecond field, per cmake/FindStatNsec.cmake probing on glibc. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_I18N",
+        "role": "Internationalization support, used only for macOS precomposeUnicode. Per the top-level CMakeLists.txt the USE_I18N option is only offered when APPLE. Not applicable on Linux. Stable.",
+        "default_value": false,
+        "enabled": false
+      },
+      {
+        "name": "GIT_DEPRECATE_HARD",
+        "role": "Excludes every function marked deprecated in include/git2/deprecated.h from compilation. Per the top-level CMakeLists.txt option DEPRECATE_HARD (default OFF) and src/CMakeLists.txt. Enabled here so the deprecated API surface never reaches the port scope - the analysis is anchored on T1, so those bodies simply produce no entities. Note tests/libgit2/CMakeLists.txt and tests/util/CMakeLists.txt already add_definitions(-DGIT_DEPRECATE_HARD) unconditionally, so enabling it does not break the test build. Legacy / transitional.",
+        "default_value": false,
+        "enabled": true
+      },
+      {
+        "name": "GIT_EXPERIMENTAL_SHA256",
+        "role": "Exposes the experimental SHA256 repository-format APIs (emitted into build/gen_headers/experimental.h from src/libgit2/experimental.h.in). Per the top-level CMakeLists.txt option EXPERIMENTAL_SHA256, default OFF and explicitly labelled 'for R&D/testing'. Left off - it changes public API shape. Transitional.",
+        "default_value": false,
+        "enabled": false
+      },
+      {
+        "name": "GIT_QSORT_GNU",
+        "role": "Selects the GNU/POSIX qsort_r argument order (context last) in src/util/util.h. Per the check_prototype_definition_safe probes in src/CMakeLists.txt, true on glibc. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_ARCH_64",
+        "role": "64-bit pointer width, from CMAKE_SIZEOF_VOID_P in src/CMakeLists.txt. aarch64 host. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_FUTIMENS",
+        "role": "futimens() is available for setting file timestamps, per cmake/Findfutimens.cmake. True on glibc. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_RAND_GETENTROPY",
+        "role": "Seeds the hashmap/PRNG from getentropy(), probed by check_symbol_exists in src/CMakeLists.txt. Available on glibc. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_IO_POLL",
+        "role": "poll()-based socket readiness in src/libgit2/transports/. Probed in src/CMakeLists.txt; GIT_IO_SELECT is also defined as a fallback. Stable.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "GIT_DEBUG_POOL",
+        "role": "Debug-mode instrumentation of the struct pool allocator (src/libgit2/pool.c). Per the top-level CMakeLists.txt option DEBUG_POOL, default OFF. Left off - it changes allocator data layout, which would distort the ownership analysis. Stable.",
+        "default_value": false,
+        "enabled": false
+      },
+      {
+        "name": "GIT_DEBUG_STRICT_ALLOC",
+        "role": "Debug-mode strict allocator behaviour (src/util/alloc.h). Per the top-level CMakeLists.txt option DEBUG_STRICT_ALLOC, default OFF. Stable.",
+        "default_value": false,
+        "enabled": false
+      },
+      {
+        "name": "GIT_DEBUG_STRICT_OPEN",
+        "role": "Debug-mode path validation in open() (src/util/futils.c). Per the top-level CMakeLists.txt option DEBUG_STRICT_OPEN, default OFF. Stable.",
+        "default_value": false,
+        "enabled": false
+      }
+    ]
+  },
+
+  "_comment_test_baseline": "RE-MEASURED 2026-08-08 on the migrated x86_64 host, native sanitized build (clang 19.1.7, ASan+UBSan active, -DSHA1DC_FORCE_ALIGNED_ACCESS). ctest: 12/12 suites passed. clar granularity: libgit2_tests 391 suites, 3033 tests -> 2954 passed / 79 skipped / 0 failed; util_tests 54 suites, 448 tests -> 438 passed / 10 skipped / 0 failed. Combined: 3392 passed, 89 skipped, 0 failed out of 3481. NO TESTS WERE DISABLED - the baseline is clean as configured, so the orchestrator's 'disable failing tests' step stays a no-op. DELTA vs the aarch64 baseline of 2026-07-31 (3395 passed / 86 skipped): the totals, the suite counts (391 + 54) and the zero-failure result are IDENTICAL; exactly 3 libgit2_tests moved passed -> skipped. Those are clar's own environment gates responding to the new host, not regressions - the root filesystem here is overlayfs where trixie's was not, and the skip set is dominated by filesystem- and feature-gated suites (checkout::icase 13, object::commit::parse 12, index::bypath 6, object::lookup256 6 and core::oid 3 from the disabled experimental SHA256 API, odb::largefiles 6, repo::init 6, transport::ssh::exec 3 from USE_SSH=OFF). Note this run did NOT reproduce the first attempt's 5 ctest failures: those were a single UBSan misaligned-load abort in sha1dc, fixed by the alignment flag - see _comment_host_migration item 4. A post-port run must match THESE numbers.",
+  "test_baseline": "3392/3481 passed, 89 skipped, 0 failed (libgit2_tests 2954/3033, util_tests 438/448); ctest 12/12 suites; no tests disabled",
+
+  "_comment_build_commands": "IMPORTANT: this project is built TWICE, deliberately, and `build` below is NOT the command that produced the CodeQL database. CodeQL ships no Linux/arm64 binary (github/codeql-cli-binaries publishes only linux64/osx64/win64), and this host is aarch64. Its x86_64 preload_tracer segfaults under qemu-user when asked to trace a native aarch64 compiler ('qemu: uncaught target signal 11'), so the database is instead built inside a linux/amd64 container where the whole process tree is x86_64 - see `codeql_database` below. The native aarch64 build described by `configure`/`build`/`test` is what produces the sanitized test baseline. -j64 bounds every build below the host's core count, leaving headroom. CC=clang pins clang 19.1.7 - without it cmake silently picks gcc-14 via /usr/bin/cc, and the two compilers disagree on which warnings fire.",
+  "build_commands": {
+    "configure": "CC=clang cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DUSE_COMPRESSION=zlib -DUSE_REGEX=pcre2 -DUSE_HTTP_PARSER=llhttp -DUSE_HTTPS=OpenSSL -DUSE_SHA1=builtin -DUSE_SHA256=OpenSSL -DUSE_SSH=OFF -DUSE_AUTH_NTLM=builtin -DUSE_THREADS=ON -DDEPRECATE_HARD=ON -DBUILD_SHARED_LIBS=ON -DBUILD_TESTS=ON -DBUILD_CLI=ON -DBUILD_EXAMPLES=OFF -DBUILD_FUZZERS=OFF -DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -DSHA1DC_FORCE_ALIGNED_ACCESS -g' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address,undefined'",
+    "build":     "cmake --build build -j64",
+    "test":      "ctest --test-dir build -j64 --output-on-failure",
+    "clean":     "rm -rf build build-amd64 build-static"
+  },
+
+  "_comment_static_build": "A THIRD build, required by the bindgen stage. libgit2-sys's wrap closure is almost entirely deps/{xdiff,reftable,ntlmclient} symbols, and those compile into libgit2.so under -fvisibility=hidden: `nm -D build/libgit2.so.1.9.0` finds git_repository_open but NOT ntlm_client_init or reftable_error_str, so a -sys crate bound to the shared object cannot link them. They are present in a static archive, so libgit2-sys binds against build-static/libgit2.a via rustc-link-lib=static=git2. Library-only (no tests, no CLI) and unsanitized — it exists solely to give the FFI crates a linkable target.",
+  "static_build_commands": {
+    "configure": "CC=clang cmake -S . -B build-static -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DUSE_COMPRESSION=zlib -DUSE_REGEX=pcre2 -DUSE_HTTP_PARSER=llhttp -DUSE_HTTPS=OpenSSL -DUSE_SHA1=builtin -DUSE_SHA256=OpenSSL -DUSE_SSH=OFF -DUSE_AUTH_NTLM=builtin -DUSE_THREADS=ON -DDEPRECATE_HARD=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTS=OFF -DBUILD_CLI=OFF -DBUILD_EXAMPLES=OFF -DBUILD_FUZZERS=OFF -DCMAKE_C_FLAGS='-DSHA1DC_FORCE_ALIGNED_ACCESS -g'",
+    "build":     "cmake --build build-static -j64"
+  },
+
+  "_comment_codeql_database": "How crustify/codeql/db is produced (59 MiB). REBUILT NATIVELY on 2026-08-08 after the host migration: this host IS x86_64, which is the only arch CodeQL ships a Linux binary for, so the nerdctl + qemu binfmt container the aarch64 host needed is gone and the tracer runs on a native clang-19. `build-amd64` keeps its name, now literal rather than emulated. Two divergences from the sanitized build remain, both unchanged in intent: (1) no -fsanitize, because the database records what the code IS, not what it does at run time - sanitizer coverage comes from the native build's test baseline; (2) BUILD_TESTS=OFF, because tests/ and deps/clar are neither port- nor wrap-scope, so excluding them keeps the database to shipped artifacts. The third divergence, -funsigned-char, is RETIRED: it existed to record aarch64 plain-char semantics on an aarch64 port target, and on this host plain char is signed and bindgen maps c_char to i8, so modelling the host is now the consistent choice. -DSHA1DC_FORCE_ALIGNED_ACCESS is added instead; see _comment_host_migration. Everything downstream - extract-ql, the composed scope/dag caches, scaffold, bindgen, wrap, port, cargo - runs natively.",
+  "codeql_database": {
+    "host_arch": "x86_64",
+    "database_arch": "x86_64 (native, no container)",
+    "reason": "host and database arch now agree; CodeQL's linux64 tracer traces the native clang-19 directly",
+    "image": null,
+    "compiler": "clang-19 (Debian clang version 19.1.7, 3~deb12u1)",
+    "configure": "CC=clang-19 cmake -S . -B build-amd64 -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DUSE_COMPRESSION=zlib -DUSE_REGEX=pcre2 -DUSE_HTTP_PARSER=llhttp -DUSE_HTTPS=OpenSSL -DUSE_SHA1=builtin -DUSE_SHA256=OpenSSL -DUSE_SSH=OFF -DUSE_AUTH_NTLM=builtin -DUSE_THREADS=ON -DDEPRECATE_HARD=ON -DBUILD_SHARED_LIBS=ON -DBUILD_TESTS=OFF -DBUILD_CLI=ON -DBUILD_EXAMPLES=OFF -DBUILD_FUZZERS=OFF -DCMAKE_C_FLAGS='-DSHA1DC_FORCE_ALIGNED_ACCESS -g'",
+    "create": "codeql database create crustify/codeql/db --language=cpp --command='cmake --build build-amd64 -j64'",
+    "codeql_cli": "2.26.2"
+  },
+
+  "_comment_host_migration": "2026-08-08. The campaign moved hosts mid-flight, between god-object DAG layer 1 (landed) and layer 2 (pending). FROM Debian 13 trixie / aarch64 / glibc 2.41 / 18 cores TO Debian 12 bookworm / x86_64 / 224 cores / 2 TB RAM. What changed, and why each choice was made: (1) COMPILER unchanged - bookworm carries clang 19.1.7 (1:19.1.7-3~deb12u1), byte-identical in version to the trixie clang the first two layers were analyzed under. (2) LLHTTP - bookworm has no libllhttp-dev, and cmake/SelectHTTPParser.cmake hard-fails unless LLHTTP_VERSION_MAJOR is exactly 9. Rather than flip USE_HTTP_PARSER to builtin - which would move llhttp from a system dep into the wrap scope and invalidate scope.json, crates.json, the bindgen allowlists and the libllhttp/libllhttp-sys crates - llhttp 9.2.1 was compiled from this repo's own deps/llhttp/ and installed to /usr/local/lib + /usr/include/llhttp.h. The configure line's reported features are unchanged: 'HTTP Parser, using system llhttp'. (3) PLAIN CHAR - -funsigned-char retired, see _comment_codeql_database. (4) SHA1DC ALIGNMENT - -DSHA1DC_FORCE_ALIGNED_ACCESS added to ALL THREE builds. src/util/hash/sha1dc/sha1.c:125 defines SHA1DC_ALLOW_UNALIGNED_ACCESS on Intel-like processors only, so x86_64 takes a raw misaligned uint32_t load that -fno-sanitize-recover=undefined aborts on; that alone failed 5 of 12 ctest suites on the first run here. The flag is upstream's own supported knob and is preferred over -fno-sanitize=alignment because it keeps full UBSan coverage. It is ALSO analysis-load-bearing: the same #if at sha1.c:1842 decides whether SHA1DCUpdate memcpy's into ctx->buffer or hashes the caller's buffer in place, i.e. whether SHA1_CTX.buffer has a toucher - and SHA1_CTX is a LANDED layer-1 unit whose wrapper was written against the aarch64 (aligned) reading. Forcing aligned access keeps the new database consistent with the analysis layers 0 and 1 were wrapped against. (5) OPENSSL/PCRE2 are older here (3.0.20 / 10.42 vs trixie's) - watched for, and no divergence materialized: `cargo check --workspace --all-targets` is green with the libcrypto-sys / libssl-sys allowlists exactly as composed on trixie. (6) VERIFICATION - after the rebuild, every one of the 28 pending god-object units resolves to exactly the DAG layer crustify/evaluation/port-closure/god-objects.md recorded for it, and git_diff_driver's dep bucket reproduces to the unit (port L0:1 L1:1, wrap L0:1). The regenerated analysis is the same graph."
+}

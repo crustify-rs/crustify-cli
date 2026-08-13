@@ -44,7 +44,6 @@ From an untouched checkout to the first commit of the scaffolded Rust tree.
 | CodeQL | the CodeQL CLI bundle, on `PATH` |
 | `crustify-prim` | `git clone https://github.com/crustify-rs/crustify-prim.git` |
 
-Ask the user which agent backends it wants to install, as it may not want you to install both.
 On macOS arm64 the CodeQL bundle needs Rosetta.
 
 ### 2. Bootstrap `crustify/`
