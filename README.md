@@ -73,17 +73,17 @@ what stays in C/C++.
 
 LLM agents have become extremely powerful and versatile at every software engineering task. However,
 they need the right guidance, the right unit of work, and the right tools to enable them to produce
-high quality outputs. We tested LLMs on translating large, production codebases from the real world
-(libgit2 and OpenSSL); here are some notable pitfalls we observed:
+high quality outputs. We tested bare LLMs on translating large, production codebases from the real
+world (libgit2 and OpenSSL) and observed the following notable pitfalls:
 
 - **Overthinking.** Without a clear translation playbook, LLMs tend to overthink and get lost in
-  their own reasoning traces, especially on large codebases. Moreover, we observed that they produce
-  higher quality outputs, faster, and cheaper when tasks are smaller and well defined, thus calling
-  for task decomposition.
+  endless reasoning traces, making them very expensive especially on large codebases. However, when
+  tasked with smaller, finer-grained tasks we observed that they produce higher quality outputs,
+  faster, and cheaper.
 
 - **Reward hacking.** When faced with complex type systems, pointers with rich ownership semantics,
-  and FFI code, LLMs often tend to fall back to emitting `unsafe` blocks and _raw pointers_, which
-  bypass Rust's compile-time guarantees.
+  and FFI code, LLMs often tend to fall back to emitting `unsafe` blocks and _raw pointers_ in order
+  to claim success, thus losing the safety benefits of Rust.
 
 - **Inaccuracy.** When asked to analyze code (e.g. to find the users of a `struct` field), LLMs
   default to using grep and regex, which is, however, a notoriously inaccurate static analysis
@@ -95,7 +95,7 @@ high quality outputs. We tested LLMs on translating large, production codebases 
   the other language (e.g. a C/C++ `struct` in Rust).
 
 Crustify mitigates all these via: (a) properly engineered, clear prompts that ensure LLMs don't
-derail from the task, (b) pointers to the right Rust primitives that facilitate code with memory-
+derail from the task, (b) access to the right Rust primitives that facilitate code with memory-
 and type-safety guarantees (c) a deterministic dependency graph of types and symbols to guide them
 through an incremental, bottom-up translation that enables safety-first coding, (d) a balanced
 workload and task decomposition to keep them focused and enable parallel agent work, and (e) coding
@@ -199,27 +199,27 @@ it, and ensure all required bindings are properly emitted.
 Here's where translation work happens. The bits below give a high-level summary of Crustify's
 translation philosophy, while the complete workflow can be best understood by consulting the prompts
 of the [type](src/crustify/prompts/types.md) and [symbol](src/crustify/prompts/symbols.md) agents,
-and the [philosophy](docs/principles.md) document.
+and the [principles](docs/principles.md) document.
 
-**Agent task.** In short, each symbol and type agent is tasked with the following steps:
-  - Read `principles.md`
-  - Use `crustify-oracle` to obtain the footprint of your target set
-  - Identify your items' `bindgen` bindings; add if missing
+**Agent Task.** In short, each translator agent is tasked with the following workflow:
+  - Read [principles](docs/principles.md)
+  - Use `crustify-oracle` to obtain the deps of your target set
+  - Identify the `bindgen` bindings of your items; add if any missing
   - Analyze pointer ownership and type lifetimes and submit findings to `ownership-store.json` via
     `crustify-oracle`
-  - Emit safe wrappers or port to native Rust
-  - Write Rust unit tests, run safety audit and fix issues
+  - Emit safe wrappers for wrap-scope items / port to native Rust port-scope items
+  - Write unit tests in Rust, run the _safety audit_ pass (see below), fix issues
   - Re-export ported items, build and run original tests
-  - Commit changes, merge in parent, fix conflicts, and purge worktree once landed
+  - Commit changes, merge in parent branch, fix conflicts, purge worktree once landed
 
-**Batch scheduling.** Crustify employs a deterministic scheduler that queries the oracle's DAG
+**Batch Scheduling.** Crustify employs a deterministic scheduler that queries the oracle's DAG
 to compose translation batches and routes them to the type/symbol agents. The
 batching policy is governed by kind, DAG, and scope. First a batch is either types or symbols, never
 both. Second, a single agent's batch either contains items from a single DAG layer, or from multiple
 layers if their dep closure is also in the batch; lower layers get scheduled before higher ones.
 Third, a batch contains either only port or wrap items, never both.
 
-**Workload tuning.** Crustify also supports workload tuning: the symbol agent takes a batch of
+**Workload Tuning.** Crustify also supports workload tuning: the symbol agent takes a batch of
 symbols capped by a configurable max number of symbols and `LoC` (currently `50` and `1000`), while
 the type agent gets a batch of types capped by a max number of types and a min number of fields
 (currently `5` and `10`). Both have tunable CLI parameters. Agents with separate batches and scopes
@@ -227,7 +227,7 @@ run concurrently in **isolated worktrees** via a configurable concurrency thresh
 parallel agents. The orchestrator agent chooses how to best use the scheduler for driving
 translation campaigns.
 
-**FFI interop.** Interoperability across the FFI boundary is the hard, historically manual half, and
+**FFI Interop.** Interoperability across the FFI boundary is the hard, historically manual half, and
 is Crustify's current focus. A wrapper lets a C type be used from Rust with no raw pointers, no
 `unsafe` at the call site and no naked FFI — which puts the borrow checker back in charge of
 ownership and lifetimes for an item the compiler could otherwise say nothing about. Field access
