@@ -49,7 +49,7 @@ approval before starting work. Adjust to your liking / use case.
 
 ## Use Cases
 
-Crustify helps you automates the following C-to-Rust tasks:
+Crustify helps you automate the following C-to-Rust tasks:
 
 **Safe wrappers for C/Rust interop.** Crustify can emit a safe wrapper interface over the public API
 of a C/C++ library, and re-export it so that Rust-native consumers can integrate it without having
