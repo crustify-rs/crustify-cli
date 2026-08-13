@@ -694,6 +694,72 @@ def _isolated_wave(
 
 # -------------------------------------------------------------- orchestration
 
+def _wave_label(w: list[int]) -> str:
+    """`4` for a lone layer, `4-7` for a merged run — the same string in the
+    plan, the console and the session log, so the three cannot disagree."""
+    return str(w[0]) if len(w) == 1 else f"{w[0]}-{w[-1]}"
+
+
+def coalesce_waves(
+    by_layer: dict[int, list[Unit]],
+    layers: list[int],
+    *,
+    closed: bool,
+    **pack_kw,
+) -> list[list[int]]:
+    """Group consecutive dependency layers into WAVES — the unit a barrier
+    actually falls between.
+
+    A wave is a maximal run of consecutive layers whose UNION packs to exactly
+    ONE batch. That single test is the entire safety argument: one batch is one
+    agent, which emits its units in an order it controls, so a cross-layer edge
+    inside the wave is satisfied by construction. Two batches would run
+    concurrently in sibling worktrees and the higher layer's dep would not have
+    landed.
+
+    Deferring to :func:`pack` is what makes the test sufficient rather than
+    merely conservative — it already enforces the three rules a hand-written
+    check would have to rediscover:
+
+    * a type-unit gets a batch to itself, so any union holding a type and
+      anything else packs to >=2 and the run stops there;
+    * ``scope_of`` partitions the pool, so a port+wrap union packs to >=2 —
+      which is the case that matters, since a port-scope unit above a
+      wrap-scope one has a real edge to it and co-scheduling would break it;
+    * ``max_syms`` / ``max_loc`` are already the split condition, so an
+      oversized union cannot merge.
+
+    It also self-limits to the TAIL. A wide layer packs to several batches
+    already, so nothing can absorb it and the genuinely parallel base is left
+    alone; what collapses is the run of one-unit layers at the top, where each
+    agent otherwise pays a full worktree build to emit a single function.
+
+    Whole layers only, never a slice: a layer-N unit's closure lies entirely in
+    layers < N, so a contiguous run of COMPLETE layers is closed under
+    dependencies and a partial one is not.
+
+    ``closed`` gates the whole thing on the selection being closed under
+    dependencies (``--transitive``). Without it a unit's deps may sit outside
+    the selection entirely and the prefix argument does not hold, so every
+    layer stays its own wave — exactly the previous behaviour.
+    """
+    if not closed:
+        return [[li] for li in layers]
+    waves: list[list[int]] = []
+    i = 0
+    while i < len(layers):
+        group, j = [layers[i]], i + 1
+        while j < len(layers):
+            cand = group + [layers[j]]
+            merged = [u for li in cand for u in by_layer[li]]
+            if len(pack(merged, **pack_kw)) != 1:
+                break
+            group, j = cand, j + 1
+        waves.append(group)
+        i = j
+    return waves
+
+
 def schedule(
     *,
     dag: dict,
@@ -704,9 +770,15 @@ def schedule(
     chain_policy: str = "per-agent",
     parallel_max: int = 4,
     dry_run: bool = False,
+    closed_selection: bool = False,
 ) -> list[tuple[Batch, BaseException]]:
     """End-to-end: resolve --names → units → budget batches → run.
-    ``dry_run`` stops after printing the plan."""
+    ``dry_run`` stops after printing the plan.
+
+    ``closed_selection`` says the selection is closed under dependencies
+    (``--transitive``), which is what lets :func:`coalesce_waves` merge a run of
+    consecutive layers into one barrier. Left false, every layer is its own
+    wave."""
     by_key, by_name = load_nodes(dag)
     nodes, unknown = resolve_names(names, by_key, by_name, stage.in_scope)
     if unknown:
@@ -731,16 +803,18 @@ def schedule(
     layers = sorted(by_layer)
 
     syms_by_file = chain_policy == "per-file"
-    # Packed PER LAYER and concatenated — never `pack(units)` over the whole
-    # selection. A wave runs layer by layer, so a cross-layer pack reports a plan
-    # that cannot happen: with the free-symbol pool no longer partitioned by file,
-    # it merges symbols from different layers into one batch and undercounts the
-    # run (9 units over 2 layers read as 1 batch where the wave runs 2).
-    all_batches = [b for li in layers
-                   for b in pack(by_layer[li], max_syms=stage.max_syms,
-                                 max_loc=stage.max_loc,
-                                 syms_by_file=syms_by_file,
-                                 scope_of=stage.scope_of)]
+    pack_kw = dict(max_syms=stage.max_syms, max_loc=stage.max_loc,
+                   syms_by_file=syms_by_file, scope_of=stage.scope_of)
+    # Packed PER WAVE and concatenated — never `pack(units)` over the whole
+    # selection. A wave is the unit a barrier falls between, so packing across
+    # one reports a plan that cannot happen: with the free-symbol pool no longer
+    # partitioned by file, it merges symbols from different waves into one batch
+    # and undercounts the run (9 units over 2 waves read as 1 batch where the
+    # run does 2). `coalesce_waves` merges layers only where doing so is exactly
+    # equivalent to one batch, so this stays honest.
+    waves = coalesce_waves(by_layer, layers, closed=closed_selection, **pack_kw)
+    wave_units = {tuple(w): [u for li in w for u in by_layer[li]] for w in waves}
+    all_batches = [b for w in waves for b in pack(wave_units[tuple(w)], **pack_kw)]
 
     # Plan-time placement check: every batch member must have its home `.rs`
     # materialized on disk, or emit would fail mid-run — after parallel siblings
@@ -798,14 +872,15 @@ def schedule(
         if chain_policy == "serialize-per-file" and stage.layout is not None:
             from crustify import crates as _crates
             doc = _crates.load(stage.layout)
-        for li in layers:
-            lb = pack(by_layer[li], syms_by_file=syms_by_file, max_syms=stage.max_syms,
-                      max_loc=stage.max_loc, scope_of=stage.scope_of)
+        for w in waves:
+            wu = wave_units[tuple(w)]
+            lb = pack(wu, **pack_kw)
             n_chain = (len(_chains_by_home(lb, doc, stage.layout))
                        if doc is not None else len(lb))
             extra = (f" → {n_chain} chain(s)" if n_chain != len(lb) else "")
-            print(f"  L{li}: {len(by_layer[li])} unit(s) → {len(lb)} batch(es)"
-                  f"{extra}{' (parallel)' if n_chain > 1 else ''}")
+            merged = " (merged)" if len(w) > 1 else ""
+            print(f"  L{_wave_label(w)}: {len(wu)} unit(s) → {len(lb)} batch(es)"
+                  f"{extra}{' (parallel)' if n_chain > 1 else ''}{merged}")
         print(f"  policy: {chain_policy}")
         show_plan(units, all_batches, by_key, stage.in_scope, stage.verb, verb_of)
         return []
@@ -828,21 +903,22 @@ def schedule(
     with open_session_log(log_root, stage.verb) as slog:
         slog.line(f"[crustify] {len(units)} unit(s), {len(layers)} layer(s), "
                   f"parallel={parallelize} max={parallel_max}")
-        for li in layers:
-            lb = pack(by_layer[li], syms_by_file=syms_by_file, max_syms=stage.max_syms,
-                      max_loc=stage.max_loc, scope_of=stage.scope_of)
+        for w in waves:
+            wu = wave_units[tuple(w)]
+            lb = pack(wu, **pack_kw)
             if not lb:
                 continue
-            if len(layers) > 1:
-                print(f"\n[{stage.verb}] dependency layer {li}: {len(by_layer[li])} "
+            label = _wave_label(w)
+            if len(waves) > 1:
+                print(f"\n[{stage.verb}] dependency layer {label}: {len(wu)} "
                       f"unit(s) → {len(lb)} batch(es) (lower layers already landed)")
-            show_plan(by_layer[li], lb, by_key, stage.in_scope, stage.verb)
+            show_plan(wu, lb, by_key, stage.in_scope, stage.verb)
             before = len(failures)
             failures += run(lb, stage, parallelize=parallelize,
                             parallel_max=parallel_max,
                             chain_policy=chain_policy)
             slog.checkpoint(
-                f"layer {li}: {len(by_layer[li])} unit(s), {len(lb)} batch(es), "
+                f"layer {label}: {len(wu)} unit(s), {len(lb)} batch(es), "
                 f"{len(failures) - before} failure(s)")
         slog.line(f"[crustify] {len(failures)} failure(s) over "
                   f"{len(all_batches)} batch(es)")
