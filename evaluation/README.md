@@ -20,6 +20,8 @@ docker run --rm -it --name crustify-libgit2 \
     crustify
 ```
 
+The orchestrator is instructed to track translation results in `wrappers-results.md`.
+
 The campaign mount is the only target-specific input; everything under `/work`
 — the clone, the CodeQL database, the emitted crates, the session branches —
 is the orchestrator's own work and survives `--rm` in the named volume. The
