@@ -1,5 +1,15 @@
 # Bootstraps a crustify ORCHESTRATOR. Nothing here is target-specific.
 #
+# Both commands run from the repo root:
+#
+#   docker build -t crustify evaluation/
+#
+#   docker run --rm -it --name crustify-libgit2 \
+#       -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
+#       -v "$PWD/evaluation/libgit2:/campaign:ro" \
+#       -v crustify-work:/work \
+#       crustify
+#
 # The image carries the harness — the toolchain from the playbook's Setup
 # table, the two checkouts, and a rendered orchestrator prompt. The only
 # run-time input is the campaign task. Everything else is the orchestrator's
@@ -8,13 +18,11 @@
 # build.json, crates.json and scope-config.json, building the CodeQL
 # database, scaffold, bindgen — before any wave.
 #
-#   docker build -t crustify evaluation/
-#
-#   docker run --rm -it \
-#       -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
-#       -v "$PWD/evaluation/libgit2:/campaign:ro" \
-#       -v crustify-work:/work \
-#       crustify
+# The container is NAMED after its campaign, one name per target: `docker
+# attach crustify-libgit2` reaches a detached run, `docker exec -it
+# crustify-libgit2 bash` opens a second shell beside the orchestrator to
+# inspect /work while it works, and a stale name is the signal that a
+# campaign is still up. `--rm` frees the name on exit.
 #
 # Both agent backends are installed; CRUSTIFY_BACKEND picks the one that
 # drives the orchestrator (`claude`, the default, or `codex` with
@@ -22,7 +30,7 @@
 #
 # The session is INTERACTIVE — hence `-it` — so the approval gates in the
 # prompt and in TASK.md have someone to ask. To leave a campaign running and
-# detach, start it with `-d` instead and `docker attach` later, or run tmux
+# detach, start it with `-d` instead and attach by name later, or run tmux
 # inside the container.
 #
 # /campaign/TASK.md, when mounted, is appended to the rendered prompt. Without
@@ -49,6 +57,9 @@ ARG INSTALL_CODEX=1
 ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/opt/venv/bin:/root/.cargo/bin:/root/.local/bin:/opt/codeql:$PATH \
     CARGO_TERM_COLOR=never \
+    # bindgen dlopens libclang at run time, and the versioned package ships it
+    # as libclang-19.so.1 rather than the libclang.so.1 clang-sys looks for.
+    LIBCLANG_PATH=/usr/lib/llvm-19/lib \
     # Claude Code refuses --dangerously-skip-permissions as root without this.
     IS_SANDBOX=1
 
@@ -56,10 +67,20 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #    built at least twice here — once for its own baseline, once under
 #    `codeql database create` — and a target's own libraries are the
 #    orchestrator's problem, installed once it has read the build system.
+#
+#    clang is pinned to 19 by package name; bookworm's unversioned `clang`
+#    metapackage is 14. The versioned packages ship only versioned binaries —
+#    no /usr/bin/clang, no /usr/bin/ld.lld — so the names a build system
+#    actually invokes are linked by hand. lld is versioned to match: mixing
+#    lld 14 with clang 19 is the failure mode `-fuse-ld=lld` walks into.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git unzip xz-utils pkg-config file \
-        build-essential clang lld cmake ninja-build python3 \
-    && rm -rf /var/lib/apt/lists/*
+        build-essential clang-19 lld-19 cmake ninja-build python3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s clang-19   /usr/bin/clang \
+    && ln -s clang++-19 /usr/bin/clang++ \
+    && ln -s ld.lld-19  /usr/bin/ld.lld \
+    && ln -s lld-19     /usr/bin/lld
 
 # 2. Python. crustify needs >= 3.13; bookworm ships 3.11, so uv supplies it.
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \

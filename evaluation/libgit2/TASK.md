@@ -15,7 +15,9 @@ model: ask user, showing available options
 
 ## Phase 1
 
-Run Phase 1 of the playbook end to end using the already-authored `/campaign/build.json`.
+Run Phase 1 of the playbook end to end.
+The following artifacts are already authored, you can skip authoring them: 
+    - `/campaign/{build, scope-config, crates}.json`
 
 Playbook toolchain is already installed.
 
