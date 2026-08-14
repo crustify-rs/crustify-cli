@@ -114,6 +114,98 @@ porting the C consumers (see the callback-gate note below).
 
 ---
 
+## Relax the blanket interior-mutability representation (2026-08-14)
+
+`CType<T> = UnsafeCell<MaybeUninit<T>> + PhantomPinned` is applied to every
+wrapped type. It is the correct *floor*, but it is currently also the ceiling:
+every type pays the union of four separate taxes whether or not the hazard each
+answers is present.
+
+**The four properties are orthogonal, and the taxonomy must not fuse them.**
+
+| property | mechanism | decided by |
+|---|---|---|
+| C may access concurrently | `UnsafeCell` | escape closure + thread-sharing |
+| memory may be uninitialized | `MaybeUninit` | constructor state |
+| C holds the ADDRESS | `PhantomPinned` | escape closure |
+| may form `&mut Self` | -- (follows from aliasing) | whole-object, not exemptible |
+
+Init-ness is independent of aliasing: a fully-constructed object C still writes
+to needs the cell but not `MaybeUninit`; a half-built object Rust exclusively
+owns needs the reverse. So init is a STATE, not a family of its own.
+
+**What is and is not UB.** Holding an aliasing pointer is not UB on its own --
+the UB is a conflicting ACCESS during the reference's lifetime (Stacked/Tree
+Borrows retag, or `noalias` violated at the LLVM level). In single-threaded
+code with no intervening call into C that reaches the object, control flow
+alone closes the window. That is a real licence, not a heuristic.
+
+The predicate is therefore REACHABILITY, never call count: zero intervening
+calls can still be unsound if an EARLIER call stored the pointer
+(`SSL_set_bio`, `BIO_push`, any callback registration taking `void *arg`), and
+five hundred are fine if none escape. Decidable per METHOD from
+`depends_on.syms` plus the callback nodes: does the method's transitive callee
+set intersect the functions that touch `self`?
+
+**Threads are the hard limit.** Once an object is shared across threads the
+window never closes and no local analysis helps. Signals for it already exist
+per field: `locked_by`, `refcount`. Refcount is the SHARING signal, not the
+threading one, and it is neither necessary nor sufficient -- `SSL_CTX` hands
+out pointers to its `CERT` and session cache, which are shared by containment
+without being refcounted.
+
+**Granularity.** `UnsafeCell` is per-FIELD: `&Struct` grants immutability over
+every byte except those inside a cell. `&mut Struct` is whole-object and NOT
+exemptible -- one concurrently-mutated field means `&mut Self` is illegal for
+that type forever. But `&mut *addr_of_mut!((*p).f)` covers only that field's
+bytes, so private fields can still get real `&mut` accessors (`split_at_mut`
+reasoning). The loss is confined to the object, not its fields.
+
+The refcount field itself stays off-limits regardless: C bumps it atomically or
+under a lock, so a plain Rust read/write of those bytes is a DATA RACE, which
+`UnsafeCell` does not address. Delegate to `X_up_ref` / `X_free`, or expose it
+as a real atomic.
+
+**Proposed shape.** Three object-level states, not two families, with the
+conversion direction carrying the structure -- widening always sound, narrowing
+carrying one obligation each:
+
+```
+COwned<T>  ->  CInit<T>  ->  CType<T>      safe, free, repr-compatible
+CType<T>   ->  CInit<T>  ->  COwned<T>     unsafe: assume_init / assume_exclusive
+```
+
+An agent that cannot establish exclusivity simply does not call the narrowing
+constructor, so the automated judgement fails closed. Name by the invariant
+asserted (`CShared`/`CExclusive`, `CAliased`/`COwned`) rather than
+safe/unsafe: both are safe to USE, and the conservative one asserts LESS, so it
+is the safer one to be wrong about.
+
+**Cheapest first move, no new machinery:** add `CInit<T>` alone
+(`UnsafeCell<T>` + `PhantomPinned`, no `MaybeUninit`) with a safe widening to
+`CType` and an `unsafe assume_init`. That drops the validity ceremony on every
+already-constructed object, which is most of them -- one type, one obligation.
+
+**Costs to price before committing.**
+
+- Per-field cells require emitting a `#[repr(C)]` MIRROR struct with a layout
+  assertion, not wrapping bindgen's opaque `ffi::T` as today. Highest value,
+  by far the most work, and where layout drift would bite. Separate step.
+- Every representation multiplies against the owning handles (`CBox`, `CVal`,
+  `CVec`, `CDropped`, `CCloned`). Few types with explicit conversions, not
+  parallel families.
+- The escape closure has to be TRANSITIVE and is not recorded that way today:
+  the store has per-argument `borrowed: {lifetime}`, but not "is this type
+  reachable from a shared parent". That analysis is the prerequisite for any
+  of this being safe to switch on.
+
+**Scoreboard.** `audit --all` on `ssl` today: 2,531 unsafe LoC, 93.5% inside
+`impl` blocks, 7.39% of 34,235 code lines. Any relaxation should move the first
+two down without moving `field_proj_outside_impl` or `mut_borrow_wrapper` off
+zero.
+
+---
+
 ## Harden `crates.json` validation (2026-07-29)
 
 `crates.validate()` checks three things: `(kind, name, tu)` uniqueness, the
