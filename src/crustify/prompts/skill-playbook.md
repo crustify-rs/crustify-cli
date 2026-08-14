@@ -5,8 +5,8 @@
   install through the first commit of the scaffolded Rust tree — authoring
   `build.json`, `cli-config.json` and a target's `scope-config.json`, building
   the CodeQL database and extracting the T1/T2 tables, crate placement, scaffold
-  and bindgen. Translation: planning, running, landing and auditing waves of
-  translate agents over that tree, then promoting and guarding the result. Read
+  and bindgen. Translation: spawning raw lifetime discovery, landing and auditing
+  waves of translate agents over that tree, then promoting and guarding the result. Read
   Setup before any wave; every later stage reads what it produces. The procedure
   is at <!-- PLAYBOOK_PATH --> — read it in full before acting.
 

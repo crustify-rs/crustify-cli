@@ -86,6 +86,33 @@ report.
 | **Σ** | **`<n>`** | **`<n>`** | **`$<n>`** | **`<n>`** | **`$<n>`** | **`$<n>`** |
 
 
+## Safety audit
+
+`crustify-cli <repo> <target> audit`, `global` section — tree-wide, not per seed.
+
+| unsafe loc | % of loc | blocks | % in `impl T` | naked raw ptrs | `&mut` | field proj |
+|---|---|---|---|---|---|---|
+| `<n>` | `<n>`% | `<n>` | `<n>`% | `<n>` | `<n>` | `<n>` |
+
+- `unsafe loc` / `% of loc` — `unsafe_block_code_lines` (non-blank,
+  non-comment) over `code_lines`
+- `blocks` / `% in impl T` — `unsafe_blocks`, and the share that is
+  `unsafe_blocks_wrapper_impl`; the remainder sits outside a wrapper's own impl
+- `naked raw ptrs` — `rp_outside_args` + `rp_outside_rets`: raw pointers in
+  signatures outside both wrapper impls and `mod ffi_export`
+- `&mut` — `mut_borrow_wrapper`: `&mut W` (including `&mut self`) in a
+  signature, `W` a wrapper. The interior-mutability discipline holds at `0`
+- `field proj` — `field_proj_wrapped`: `(*p).field` on a wrapped C type,
+  bypassing the accessor
+
+Also emitted, if a run wants them: `unsafe_blocks_ffi_export`;
+`wrapper_impl_macro` vs `wrapper_impl_handwritten`; the seam split
+`rp_wrap_nonseam_args` / `_rets` and the `_wrapped` subsets of both regions;
+`void_ptr_sanctioned` vs `void_ptr_smell`; `raw_ptr_derefs` and
+`raw_ptr_derefs_outside_impl`; `field_proj_outside_impl`; `unsafe_block_stmts`
+over `total_stmts`; and the `*_sites` arrays giving `(file, line)` for the
+naked, raw-ptr, void-ptr, field-projection and raw-deref categories.
+
 ## Notes
 
 > The only section where the orchestrator leaves any worthy notes regarding the campaign:

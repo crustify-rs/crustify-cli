@@ -224,10 +224,20 @@ type-erased and NUL-terminated objects. First run `--lifetime-for void` and then
 
 ### Land and promote
 
-Session branches are never auto-merged; landing it is a deliberate
+A session branch is never auto-merged; landing it is a deliberate
 act. Reviewing it, then promoting anchors to the canonical branch
 is the orchestrator's job.
 
-### Verify
+### Verify before proceeding
 
 Check the agent's logs to make sure the C/Rust targets build and the tests pass.
+
+### Accounting
+
+Use `utils/log_cost.py` over the per-agent `<stage>.usage.json` to compute cost
+and fetch token usage, and never from provider-reported dollars.
+Session wall from `session.log`, agent wall from `<stage>.usage.json`.
+
+Fill whatever evaluation table the user provides.
+
+
