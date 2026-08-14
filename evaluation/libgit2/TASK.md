@@ -4,13 +4,13 @@ The user has chosen the following configuration:
 
 Repo root: upstream `libgit2`, commit ddf3b5c85d86a389330b1d1dd90f08f60ae05fe4
 Port-scope target: `libgit2/src/`
-Agent backend: claude
-Model: claude-opus-5
 max-syms and max-loc: default
 max-types: 1
 billing: API
-parallel-max: full concurrency
+parallel-max: decide an optimal value
 parallel-policy: default
+Agent backend: ask user, showing options
+Model: ask user, showing options
 
 ## Phase 1
 

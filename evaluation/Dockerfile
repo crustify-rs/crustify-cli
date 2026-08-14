@@ -10,7 +10,8 @@
 #
 #   docker build -t crustify evaluation/
 #
-#   docker run --rm -it -e ANTHROPIC_API_KEY \
+#   docker run --rm -it \
+#       -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
 #       -v "$PWD/evaluation/libgit2:/campaign:ro" \
 #       -v crustify-work:/work \
 #       crustify
