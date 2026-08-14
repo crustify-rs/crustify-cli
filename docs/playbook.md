@@ -211,71 +211,23 @@ promotion is read against.
 
 ## Phase 2 — Translation
 
-> **DRAFT — structure only.** Sections below are placeholders; nothing here is
-> authoritative yet. Until it is filled, drive waves from `crustify-cli
-> translate --help` and the `--dry-run` plan.
-
 A wave is one `crustify-cli … translate` invocation: the scheduler selects
 units, batches them under budget, and spawns one agent per batch in its own git
 worktree. Waves repeat bottom-up until the target is closed.
 
-### 1. Wave mechanics
+### Raw lifetime discovery stage
 
-<!-- TODO: session branch `crustify/session/<verb>-<SESSION_ID>` (no checkout);
-one worktree per agent under `crustify/.worktrees/`, one `crustify/agent/<slug>`
-branch each; landing by push-to-session + rebase-on-rejection; why isolation is
-correctness (a scoped `cargo check`) and not a parallelism trick; a worktree that
-outlives the wave IS the failure signal. Source: `crustify/worktree.py`. -->
+Regardless of the target set, the first translation waves have to be the raw lifetime
+discovery set, which will produce release/clone strategies for owned pointers that host
+type-erased and NUL-terminated objects. First run `--lifetime-for void` and then
+`--lifetime-for string`.
 
-### 2. Plan a wave
+### Land and promote
 
-<!-- TODO: selection — `--name`, `--dag-layer N`, `--transitive`, `--file`,
-`--skip`, `--wrap-only`/`--port-only`. The bottom-up rule and how to read the
-next layer off `query dag`. The `--lifetime-for void` then `string` tiers, why
-that order, and why they precede the typed clusters. -->
+Session branches are never auto-merged; landing it is a deliberate
+act. Reviewing it, then promoting anchors to the canonical branch
+is the orchestrator's job.
 
-### 3. Objectives
+### Verify
 
-<!-- TODO: `--objective wrap|port|review` — what each asks the agent to DO, and
-that it is NOT the scope filter. `wrap` drops already-done units (the gate that
-makes `--transitive` usable); `port` and `review` bypass that gate because both
-act on filled anchors. -->
-
-### 4. Budgets and concurrency
-
-<!-- TODO: `--max-syms` / `--max-loc` and the whichever-hits-first rule;
-`config.TRANSLATE_MAX_*` defaults. `--parallel`, `--parallel-max N`,
-`--parallel-policy per-agent|serialize-per-file|per-file` and when each is
-right. Sizing a wave: layer width vs. host cores. -->
-
-### 5. Run it
-
-<!-- TODO: `--dry-run` first — units, batches, first-layer deps — then the wave.
-What the live console and `targets/<target>/logs/<session>/` show. -->
-
-### 6. Land and promote
-
-<!-- TODO: the session branch is never auto-merged; landing it is a deliberate
-act. Reviewing it, then promoting anchors to the canonical branch. Source:
-`worktree.py` "The session branch is never merged … left for review". -->
-
-### 7. Verify
-
-<!-- TODO: `audit` and reading its surface counts; re-running
-`build_commands.test` against `build.json.test_baseline`. -->
-
-### 8. Account
-
-<!-- TODO: `utils/log_cost.py` over the per-agent `<stage>.usage.json`; why cost
-is computed from token counts and never from provider-reported dollars; the
-per-wave tables under `crustify/evaluation/`. -->
-
-### 9. Recover
-
-<!-- TODO: surviving worktrees and agent branches as the inspectable record;
-reading a failed agent's log; re-running a wave with `--skip`; when to re-scope
-instead of re-run. -->
-
-### Gates before the next wave
-
-<!-- TODO: the per-wave checklist, mirroring Phase 1's gate table. -->
+Check the agent's logs to make sure the C/Rust targets build and the tests pass.
