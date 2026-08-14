@@ -2,15 +2,16 @@
 
 The user has chosen the following configuration:
 
-Repo root: upstream `libgit2`, commit ddf3b5c85d86a389330b1d1dd90f08f60ae05fe4
-Port-scope target: `libgit2/src/`
-max-syms and max-loc: default
+target repo: `https://github.com/libgit2/libgit2.git`, commit ddf3b5c85d86a389330b1d1dd90f08f60ae05fe4
+port-scope target: the whole `src/` dir of libgit2
+max-syms: default
+max-loc: default
 max-types: 1
 billing: API
-parallel-max: decide an optimal value
+parallel-max: you pick an optimal value
 parallel-policy: default
-Agent backend: ask user, showing options
-Model: ask user, showing options
+agent backend: ask user, showing available options
+model: ask user, showing available options
 
 ## Phase 1
 

@@ -39,7 +39,7 @@ FROM debian:12-slim
 
 ARG CRUSTIFY_CLI_REF=main
 ARG CRUSTIFY_PRIM_REF=main
-ARG CODEQL_VERSION=v2.26.2
+ARG CODEQL_VERSION=v2.26.3
 ARG PYTHON_VERSION=3.13
 # Both backends by default. The playbook says to ask which are wanted, so
 # either can be dropped from the image; crustify drives them interchangeably.
@@ -70,7 +70,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
 #    rustc driver, bindgen-cli for the -sys crates.
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --default-toolchain stable --component clippy \
-    && rustup toolchain install nightly --component rustc-dev llvm-tools \
+    && rustup toolchain install nightly --component rustc-dev --component llvm-tools \
     && cargo install bindgen-cli --locked
 
 # 4. CodeQL CLI. The cpp query pack is installed from crustify's own qlpack
