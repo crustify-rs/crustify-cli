@@ -130,7 +130,10 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
              "gone — for a type, its layout and possibly its storage. "
              "`review` re-examines emitted work as LLM-as-a-Judge. `port` "
              "and `review` both also BYPASS the already-done gate, since "
-             "both act on items whose anchors are already filled. NOTE: this "
+             "both act on items whose anchors are already filled. A fourth, "
+             "`raw`, is not selectable here and is not overridable either: it "
+             "is the discovery arm of a lifetime tier, set automatically by "
+             "--lifetime-for, whose marker the arm is gated on. NOTE: this "
              "is the objective, NOT a scope filter — `translate` has none; "
              "use `crustify-oracle query … --port-only` to inspect a slice by "
              "scope.",
@@ -402,7 +405,10 @@ def main() -> None:
              "reads back the `lifetime` blocks that exist (`query symbols "
              "--lifetime-for TIER`) and, when none do, discovers the routines "
              "that drop/dispose/clone the tier and submits their blocks first, "
-             "over a wrap-scope candidate set. TIER is `void` (raw byte-level) "
+             "over a wrap-scope candidate set. SETS the objective to `raw` "
+             "-- the discovery arm, which this flag is the only way to reach "
+             "and which --objective cannot select or override. TIER is `void` "
+             "(raw byte-level) "
              "or `string` (NUL-terminated) -- ONLY those two, and in that order, "
              "since a typed cluster's Drop usually delegates to the untyped "
              "one's. A struct tag is NOT accepted: a type's own droppers / "
@@ -498,11 +504,16 @@ def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
     if spec:
         # `--lifetime-for SPEC` IS the selection: no --name, no DAG layer, no
         # batching. The SPEC is the whole selection.
+        #
+        # It also SETS the objective, and --objective has no say: the tier is
+        # the selection AND the mode. `raw` is the discovery arm of
+        # `prompts/symbols.md`, gated there on the very marker this flag
+        # plants in the target set, so the two are one decision -- which is
+        # why `raw` is absent from --objective's choices and unreachable any
+        # other way.
         from crustify.translate import translate_lifetime_for
         translate_lifetime_for(
-            target, spec,
-            objective=getattr(args, "objective", None) or "wrap",
-            dry_run=bool(getattr(args, "dry_run", False)))
+            target, spec, dry_run=bool(getattr(args, "dry_run", False)))
         return
     from crustify.translate import translate_types
     translate_types(

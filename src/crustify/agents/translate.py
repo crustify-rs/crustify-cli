@@ -83,7 +83,9 @@ class TranslateAgent(CrustifyAgent):
         # `manifests`.
         lifetime_for: str | None = None,
         # What the agent is being asked to DO with this batch, handed straight
-        # to the prompt as `{objective}`: "wrap" | "port" | "review". The
+        # to the prompt as `{objective}`: "wrap" | "port" | "review" | "raw".
+        # The last is the lifetime-tier discovery arm and rides with
+        # `lifetime_for`, which injects it -- no --objective selects it. The
         # scheduler always supplies one, so the prompt never branches on an
         # empty slot -- and the agent no longer has to INFER review mode from
         # finding a filled anchor on disk, which was indistinguishable from

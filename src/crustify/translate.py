@@ -239,20 +239,32 @@ def _translate_emit(
 LIFETIME_TIERS = ("void", "string")
 
 
+#: The objective a lifetime tier is ALWAYS run under: `raw`, the discovery arm
+#: of `prompts/symbols.md`. Not a default a caller may override -- the arm is
+#: gated on the `lifetime-for` marker, so passing the tier IS choosing the arm,
+#: and `raw` is reachable no other way (it is not among --objective's choices).
+LIFETIME_OBJECTIVE = "raw"
+
+
 def translate_lifetime_for(
-    target: Path, spec: str, *, objective: str = "wrap",
-    dry_run: bool = False,
+    target: Path, spec: str, *, dry_run: bool = False,
 ) -> None:
     """Untyped-tier mode: hand ONE **symbol** wrapper the job of wrapping
     ``spec``'s lifecycle primitives.
 
-    Discovery AND emission, in one agent. It reads back whatever `lifetime`
-    blocks already exist (``query symbols --lifetime-for <spec>``); when none
-    do, it scouts the codebase for the routines that drop/dispose/clone
-    ``spec`` and submits their blocks through the oracle first (see
-    `prompts/symbols.md`). Then it emits the Rust that turns
-    them into a lifetime contract — the strategy ZST plus the smart-pointer
-    Drop/Clone impls a reference to ``spec`` needs to be owned in Rust.
+    DISCOVERY, always: the objective is :data:`LIFETIME_OBJECTIVE` (`raw`), set
+    here rather than accepted from the caller, because `prompts/symbols.md`
+    gates that arm on the marker the SPEC plants in the target set — passing
+    the tier IS choosing the arm. The agent scouts the codebase for the
+    routines that drop/dispose/clone ``spec`` and submits their `lifetime`
+    blocks through the oracle, reading back with ``query symbols
+    --lifetime-for <spec>`` whatever already exists. Candidates are collected
+    codebase-wide, wrap- and port-scope alike, because a primitive is a
+    primitive wherever it is defined.
+
+    What the blocks then BUY — the strategy ZST plus the smart-pointer
+    Drop/Clone impls a reference to ``spec`` needs to be owned in Rust — is
+    emitted by the wrap arm, off the same marker, in the waves that follow.
 
     Not routed through the DAG scheduler: there is no worklist to select,
     batch or layer — the SPEC *is* the selection. It still runs in its own
@@ -286,19 +298,23 @@ def translate_lifetime_for(
     layout = Layout.discover(target)
     if dry_run:
         print(f"[translate dry-run] --lifetime-for {spec}: one agent, "
-              f"no composed worklist (the agent discovers the primitives).")
+              f"objective {LIFETIME_OBJECTIVE} (set by the tier, not "
+              f"--objective), no composed worklist (the agent discovers the "
+              f"primitives).")
         return
 
     def emit_factory(t_, l_):
         def emit(_batch) -> None:
             TranslateAgent(t_, batch_kind="syms", lifetime_for=spec,
-                           objective=objective, repo_root=l_.repo_root).run()
+                           objective=LIFETIME_OBJECTIVE,
+                           repo_root=l_.repo_root).run()
         return emit
 
     batch = S.Batch(file=f"lifetime-for-{spec}", units=[], members=[],
                     fields=[], op_range=None, field_range=None)
     stage = S.Stage(
-        verb=objective, in_scope=lambda n: True, emit_fn=lambda b: None,
+        verb=LIFETIME_OBJECTIVE, in_scope=lambda n: True,
+        emit_fn=lambda b: None,
         max_syms=1, emit_factory=emit_factory, target=target, layout=layout,
     )
     failures = S._isolated_wave({batch.file: [batch]}, stage, False, 1)

@@ -46,11 +46,6 @@ including the pointer analysis of its args and return (ownership, mutability, nu
 type, cardinality, etc.). If any of your work items lacks the agent-owned analysis, then you must do that first
 before proceeding with the codegen work. Use the established principles and meaning of each agent-owned block.
 
-**Lifetime primitives.** If your target set contains the special marker `lifetime-for : <spec>` then
-you enter discovery mode and scout the codebase for `<spec>` lifetime primitives using
-our recommended heuristics. Then, you submit your findings through the oracle. You collect 
-lifetime primitive candidates codebase-wide, regarless whether they are wrap- or port-scope.
-
 ### Locate your files
 
 Use `crustify-cli scaffold` to locate the `.rs` module of your target set
@@ -77,21 +72,25 @@ wrappers or ported items. For both, you verify their claims against our principl
 you notice any inconsistencies, submit your new findings through the oracle, and fix / extend the
 existing Rust code if necessary, justifying why they fix the existing state.
 
+**`raw`.** If your objective is `raw` and your target set contains the special marker
+`lifetime-for : <spec>`, then you enter discovery mode to scout the codebase for `<spec>` lifetime primitives using
+our recommended heuristics. Then, you submit your findings through the oracle, and proceed
+with generating safe wrappers for them according to the instructions in `Wrap the symbols` arm below. 
+You collect lifetime primitive candidates codebase-wide, regardless whether they are wrap- or port-scope.
+
 **`wrap`.** If your objective is `wrap` then you must emit safe wrappers for your target set
-by following the instructions via the `Wrap the symbols` section below, except in the following cases:
-  - **Utilities with Rust equivelents.** If your target set contains any methods
+by following the instructions via the `Wrap the symbols` section below. If your target set contains any methods
   that have equivalents in the Rust standard library (e.g. `memset`, `memcpy`), and are not
   required for the C and the Rust worlds to stay interoperable during the Rust migration,
   then you do not need to emit safe wrappers for them; downstream cosnumers will just use
   the Rust-native ones.
 
 **`port`.** If your objective is `port` then you may nativize your target set to Rust by following
-the instructions in the `Port the symbols` section below, except in the following cases: 
-  - **Raw lifecycle primitives.** If your target set contains any method that implement
+  the instructions in the `Port the symbols` section below. If your target set contains any method that implement
   raw lifecycle primitives (e.g. raw memory allocators / deallocators / cloners), or in general methods
   that are only needed for the C and Rust worlds to stay interoperable until the target is fully migrated to
   Rust (e.g. one side allocates and the other frees) but then they would be replaced by Rust-native
-  equivalents (e.g. Rust's heap allocator), then you wrap them using the above `Wrap the symbols`
+  equivalents (e.g. Rust's heap allocator), then you wrap them using the `Wrap the symbols`
   arm instead of porting them to native Rust; this will allow incremental port consumers to use them
   to stay interoperable with the reamining C.
 
