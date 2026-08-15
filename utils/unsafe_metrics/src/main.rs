@@ -51,21 +51,19 @@ fn is_seam_fn(tcx: TyCtxt<'_>, did: DefId) -> bool {
     tcx.opt_item_name(did).is_some_and(|n| SEAM_FNS.contains(&n.as_str()))
 }
 
-/// True if `t` is `&mut W` where `W` is an ALIASED wrapper (implements
-/// `CAliasedCell`). Catches both the `&mut self` receiver (its type is
-/// `&mut Self` = `&mut W`) and explicit `&mut W` params.
+/// True if `t` is `&W` or `&mut W` where `W` is a wrapper (implements `CCell`).
+/// Catches the `&self` / `&mut self` receiver (whose type is `&Self` / `&mut
+/// Self` = `&W` / `&mut W`) and explicit reference params alike.
 ///
-/// A discipline smell only for the aliased representation: C may write through a
-/// pointer it retains, so `&mut W` asserts a `noalias` the seam cannot honour
-/// and the write path is `&self` + interior mutability. A `CCell` wrapper makes
-/// the opposite claim -- nothing outside Rust points at it -- so `&mut` there is
-/// the intended spelling and is NOT counted.
-fn is_mut_ref_wrapper(tcx: TyCtxt<'_>, t: Ty<'_>) -> bool {
-    if let ty::TyKind::Ref(_, pointee, m) = t.kind() {
-        if m.is_mut() {
-            if let ty::TyKind::Adt(def, _) = pointee.kind() {
-                return is_aliased_wrapper(tcx, def.did());
-            }
+/// A reference of EITHER kind over a wrapped C object asserts something about
+/// memory C may write through a pointer it retains -- `noalias` and `readonly`
+/// on the shared form, `noalias` on the exclusive one, and validity on both.
+/// Access goes through the borrowed handles instead, which hold the pointer by
+/// value and so cover Rust-owned storage. This metric should be 0.
+fn is_ref_to_wrapper(tcx: TyCtxt<'_>, t: Ty<'_>) -> bool {
+    if let ty::TyKind::Ref(_, pointee, _) = t.kind() {
+        if let ty::TyKind::Adt(def, _) = pointee.kind() {
+            return is_wrapper(tcx, def.did());
         }
     }
     false
@@ -101,33 +99,23 @@ fn pointee_has_wrapper(tcx: TyCtxt<'_>, p: Ty<'_>, wrapped_c: &HashSet<DefId>) -
     }
 }
 
-/// The wrapper inventory of the current crate.
-struct Wrappers {
-    /// `wrapper ADT -> its C type ADT`, from the `type C` associated item.
-    c_ty: HashMap<DefId, DefId>,
-    /// The subset on the ALIASED representation, from `impl CAliasedCell for W`.
-    /// C may hold a pointer to these and write through it, so `&mut W` is a
-    /// smell for exactly this set.
-    aliased: HashSet<DefId>,
-}
+/// The wrapper inventory of the current crate: `wrapper ADT -> its C type ADT`.
+type Wrappers = HashMap<DefId, DefId>;
 
-/// Scan local trait impls for the wrapper seams.
+/// Scan local trait impls for the wrapper seam, reading each wrapper's C type
+/// from the `type C` associated item.
 ///
 /// The seam trait is the definition of "wrapper" in this codebase:
-/// `define_aliased_ctype!` / `define_ctype!` expand to a `CLayout` impl carrying
-/// `type C`, plus the marker sub-trait that fixes the representation, and the
-/// wrappers the macros cannot express — generic (`OpensslStackOwned<E>`,
-/// `Lhash<E>`) or lifetime-carrying (`Packet<'buf>`, `WPacket<'_>`) — write the
-/// same impls by hand. Keying on the traits therefore covers both, and reads the
-/// C type from `type C` instead of guessing at field 0.
+/// `define_ctype!` expands to an impl carrying `type C`, and the wrappers the
+/// macro cannot express -- generic (`OpensslStackOwned<E>`, `Lhash<E>`) or
+/// lifetime-carrying (`Packet<'buf>`, `WPacket<'_>`) -- write the same impl by
+/// hand. Keying on the trait therefore covers both, and reads the C type from
+/// `type C` instead of guessing at field 0.
 ///
-/// A `CCell` impl carrying `type C` is the pre-split spelling, where every
-/// wrapper was aliased; it feeds both maps so the tool stays correct against a
-/// tree that has not migrated. Post-split `CCell` is the exclusive marker and
-/// carries no `type C`, so it contributes to neither.
+/// `CLayout` is accepted alongside `CCell` so a tree part-way through a
+/// migration still resolves; whichever impl carries `type C` is the one read.
 fn scan_wrappers(tcx: TyCtxt<'_>) -> Wrappers {
     let mut c_ty = HashMap::new();
-    let mut aliased = HashSet::new();
     for ld in tcx.hir_crate_items(()).definitions() {
         let did = ld.to_def_id();
         if !matches!(tcx.def_kind(did), DefKind::Impl { of_trait: true }) {
@@ -135,15 +123,10 @@ fn scan_wrappers(tcx: TyCtxt<'_>) -> Wrappers {
         }
         let tr = tcx.impl_trait_ref(did).skip_binder();
         let trait_name = tcx.item_name(tr.def_id);
-        let trait_name = trait_name.as_str();
-        if !matches!(trait_name, "CLayout" | "CAliasedCell" | "CCell") {
+        if !matches!(trait_name.as_str(), "CCell" | "CLayout") {
             continue;
         }
         let ty::TyKind::Adt(sdef, _) = tr.self_ty().kind() else { continue };
-
-        // `type C` names the wrapped C type. Present on `CLayout`, and on the
-        // pre-split `CCell`; absent on the marker sub-traits.
-        let mut has_c_ty = false;
         for it in tcx.associated_items(did).in_definition_order() {
             if !matches!(tcx.def_kind(it.def_id), DefKind::AssocTy) {
                 continue;
@@ -151,17 +134,12 @@ fn scan_wrappers(tcx: TyCtxt<'_>) -> Wrappers {
             if tcx.item_name(it.def_id).as_str() != "C" {
                 continue;
             }
-            has_c_ty = true;
             if let ty::TyKind::Adt(cdef, _) = tcx.type_of(it.def_id).skip_binder().kind() {
                 c_ty.insert(sdef.did(), cdef.did());
             }
         }
-
-        if trait_name == "CAliasedCell" || (trait_name == "CCell" && has_c_ty) {
-            aliased.insert(sdef.did());
-        }
     }
-    Wrappers { c_ty, aliased }
+    c_ty
 }
 
 thread_local! {
@@ -180,20 +158,14 @@ fn with_wrappers<R>(tcx: TyCtxt<'_>, f: impl FnOnce(&Wrappers) -> R) -> R {
     })
 }
 
-/// Is `did` a wrapper type — either representation.
+/// Is `did` a wrapper type?
 fn is_wrapper(tcx: TyCtxt<'_>, did: DefId) -> bool {
-    with_wrappers(tcx, |w| w.c_ty.contains_key(&did))
-}
-
-/// Is `did` a wrapper on the ALIASED representation — the set for which `&mut`
-/// is a discipline smell.
-fn is_aliased_wrapper(tcx: TyCtxt<'_>, did: DefId) -> bool {
-    with_wrappers(tcx, |w| w.aliased.contains(&did))
+    with_wrappers(tcx, |w| w.contains_key(&did))
 }
 
 /// The C type `did` wraps, from its seam's `type C`.
 fn wrapper_c_ty(tcx: TyCtxt<'_>, did: DefId) -> Option<DefId> {
-    with_wrappers(tcx, |w| w.c_ty.get(&did).copied())
+    with_wrappers(tcx, |w| w.get(&did).copied())
 }
 
 /// The `DefId` of an impl's self-type (`impl T` / `impl Tr for T` -> `T`), via
@@ -302,7 +274,7 @@ struct Counts {
     rp_outside_args: u64, // outside wrapper impls AND outside `mod ffi_export`
     rp_outside_rets: u64,
     rp_outside_wrapped: u64, //        of those, pointee has a wrapper
-    mut_borrow_wrapper: u64, // `&mut W` (incl. `&mut self`), W an ALIASED wrapper
+    ref_to_wrapper: u64, // `&W` / `&mut W` (incl. the receiver), W a wrapper
     // `(*p).field` where `p: *C` and `C` has a wrapper (bypasses the
     // accessor): total, and the subset outside any impl/trait (the smell).
     field_proj_wrapped: u64,
@@ -467,9 +439,7 @@ impl<'a, 'tcx> Visitor<'tcx> for BodyVisitor<'a, 'tcx> {
 /// family emits the wrapper newtype (one per representation); the `impl_*!`
 /// family binds a lifecycle contract or an ownership marker to it.
 const CRUSTIFY_MACROS: &[&str] = &[
-    "define_aliased_ctype", "define_ctype", "define_uninit_ctype",
-    "impl_dropped", "impl_dropped_uninit", "impl_cloned", "impl_cvalued",
-    "impl_owned_excl",
+    "define_ctype", "impl_dropped", "impl_cloned", "impl_cvalued",
 ];
 
 /// Recursively tally references to crustify-crate structs in a type.
@@ -776,7 +746,7 @@ impl<'a, 'tcx> Visitor<'tcx> for NakedTyVisitor<'a, 'tcx> {
 /// `UM_MODE=seed`: per-seed audit metrics (own-region + naked footprint).
 fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
     // wrapped C types (for naked-ref matching + wrapper detection reuse).
-    let wrapped_c: HashSet<DefId> = with_wrappers(tcx, |w| w.c_ty.values().copied().collect());
+    let wrapped_c: HashSet<DefId> = with_wrappers(tcx, |w| w.values().copied().collect());
     let seeds = resolve_seeds(tcx);
     let mut metrics: Vec<Counts> = (0..seeds.len()).map(|_| Counts::default()).collect();
     let mut sites: Vec<Sites> = (0..seeds.len()).map(|_| Sites::default()).collect();
@@ -812,8 +782,8 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
                 let extern_c = is_extern_c_fn(tcx, did);
                 let span = tcx.def_span(did);
                 for t in sig.inputs().iter().copied().chain(std::iter::once(sig.output())) {
-                    if is_mut_ref_wrapper(tcx, t) {
-                        metrics[i].mut_borrow_wrapper += 1;
+                    if is_ref_to_wrapper(tcx, t) {
+                        metrics[i].ref_to_wrapper += 1;
                     }
                     if is_void_ptr(tcx, t) && !(seam || in_ffi || extern_c) {
                         metrics[i].void_ptr_smell += 1;
@@ -896,10 +866,10 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
         let st = &sites[i];
         let kind = if s.kind == SeedKind::Type { "type" } else { "func" };
         format!(
-            "{{\"name\":\"{}\",\"c_name\":\"{}\",\"kind\":\"{}\",\"region_owners\":{},\"unsafe_blocks\":{},\"unsafe_block_code_lines\":{},\"wrapper_macro\":{},\"wrapper_handwritten\":{},\"raw_ptr_derefs\":{},\"field_proj\":{},\"field_proj_outside_impl\":{},\"mut_borrow_wrapper\":{},\"void_ptr_smell\":{},\"naked\":{},\"naked_sites\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{}}}",
+            "{{\"name\":\"{}\",\"c_name\":\"{}\",\"kind\":\"{}\",\"region_owners\":{},\"unsafe_blocks\":{},\"unsafe_block_code_lines\":{},\"wrapper_macro\":{},\"wrapper_handwritten\":{},\"raw_ptr_derefs\":{},\"field_proj\":{},\"field_proj_outside_impl\":{},\"ref_to_wrapper\":{},\"void_ptr_smell\":{},\"naked\":{},\"naked_sites\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{}}}",
             s.name, s.c_name, kind, region_owners[i], m.unsafe_blocks, m.unsafe_block_code_lines,
             m.wrapper_impl_macro, m.wrapper_impl_handwritten, m.raw_ptr_derefs,
-            m.field_proj_wrapped, m.field_proj_outside_impl, m.mut_borrow_wrapper,
+            m.field_proj_wrapped, m.field_proj_outside_impl, m.ref_to_wrapper,
             m.void_ptr_smell, naked[i],
             sites_json(&st.naked), sites_json(&st.raw_ptr),
             sites_json(&st.void_ptr), sites_json(&st.field_proj),
@@ -955,7 +925,7 @@ impl Callbacks for MetricsCallbacks {
         }
         // Set of C types that have a wrapper (a safe wrapper exists). Each
         // wrapper contributes its seam's `type C`, either representation.
-        let wrapped_c: HashSet<DefId> = with_wrappers(tcx, |w| w.c_ty.values().copied().collect());
+        let wrapped_c: HashSet<DefId> = with_wrappers(tcx, |w| w.values().copied().collect());
 
         let mut c = Counts::default();
         let mut sites = Sites::default();
@@ -983,8 +953,8 @@ impl Callbacks for MetricsCallbacks {
                 let extern_c = is_extern_c_fn(tcx, did);
                 // `&mut <wrapper>` and `*c_void` anywhere in the signature.
                 for t in sig.inputs().iter().copied().chain(std::iter::once(sig.output())) {
-                    if is_mut_ref_wrapper(tcx, t) {
-                        c.mut_borrow_wrapper += 1;
+                    if is_ref_to_wrapper(tcx, t) {
+                        c.ref_to_wrapper += 1;
                     }
                     if is_void_ptr(tcx, t) {
                         if seam || in_ffi || extern_c {
@@ -1053,8 +1023,8 @@ impl Callbacks for MetricsCallbacks {
             }
         }
         println!(
-            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"rp_wrap_nonseam_args\":{},\"rp_wrap_nonseam_rets\":{},\"rp_wrap_nonseam_wrapped\":{},\"rp_outside_args\":{},\"rp_outside_rets\":{},\"rp_outside_wrapped\":{},\"mut_borrow_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"raw_deref_sites\":{}}}",
-            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.rp_wrap_nonseam_args, c.rp_wrap_nonseam_rets, c.rp_wrap_nonseam_wrapped, c.rp_outside_args, c.rp_outside_rets, c.rp_outside_wrapped, c.mut_borrow_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
+            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"rp_wrap_nonseam_args\":{},\"rp_wrap_nonseam_rets\":{},\"rp_wrap_nonseam_wrapped\":{},\"rp_outside_args\":{},\"rp_outside_rets\":{},\"rp_outside_wrapped\":{},\"ref_to_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"raw_deref_sites\":{}}}",
+            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.rp_wrap_nonseam_args, c.rp_wrap_nonseam_rets, c.rp_wrap_nonseam_wrapped, c.rp_outside_args, c.rp_outside_rets, c.rp_outside_wrapped, c.ref_to_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
             sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj), sites_json(&sites.raw_deref)
         );
         Compilation::Continue

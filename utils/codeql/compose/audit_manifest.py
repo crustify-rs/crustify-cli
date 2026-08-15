@@ -7,9 +7,9 @@ global. For each seed the audit reports:
     ``unsafe_blocks`` / ``raw_ptr_ret`` (signature return) / ``raw_ptr_arg``
     (signature args) / ``raw_ptr_body`` (every other raw ptr `*mut`/`*const` in
     the body — casts, ``let x: *T``, turbofish, field/`static` decls),
-    ``borrow_mut`` (items taking the wrapper as ``&mut self`` / ``&mut <Wrapper>``
-    — a §8 smell for an ALIASED wrapper, which interior-mutates through
-    ``&self``), ``ffi_self`` (raw ``ffi::T`` use *inside* its own impl),
+    ``wrapper_ref`` (items taking the wrapper by reference of either kind — a §8
+    smell, since access goes through the borrowed handles),
+    ``ffi_self`` (raw ``ffi::T`` use *inside* its own impl),
     ``ffi_self_smell`` (the subset of ``ffi_self`` that is NEITHER the
     ``define_*ctype!`` binding NOR inside an FFI-seam routine — with ``self`` in
     scope there is no reason to name ``ffi::T``), ``raw_ptr_void`` (the
@@ -66,7 +66,7 @@ from pathlib import Path
 #         "home": "libgit2/src/odb/oid_api.rs",
 #         "own": {"unsafe_pub_fn": 0, "unsafe_blocks": 1, "raw_ptr_ret": 0,
 #                 "raw_ptr_arg": 0, "raw_ptr_body": 0, "raw_ptr_body_smell": 0,
-#                 "raw_ptr_void": 0, "raw_ptr_seam": 2, "borrow_mut": 0,
+#                 "raw_ptr_void": 0, "raw_ptr_seam": 2, "wrapper_ref": 0,
 #                 "ffi_self": 1, "ffi_self_smell": 0},
 #         "naked": 6,
 #         "naked_sites": [
@@ -79,7 +79,7 @@ from pathlib import Path
 #         "wrapper": "git_oid_cpy", "home": "libgit2/src/odb/oid.rs",
 #         "own": {"unsafe_pub_fn": 0, "unsafe_blocks": 1, "raw_ptr_ret": 0,
 #                 "raw_ptr_arg": 0, "raw_ptr_body": 0, "raw_ptr_body_smell": 0,
-#                 "raw_ptr_void": 0, "raw_ptr_seam": 0, "borrow_mut": 0,
+#                 "raw_ptr_void": 0, "raw_ptr_seam": 0, "wrapper_ref": 0,
 #                 "ffi_self": 0, "ffi_self_smell": 0},
 #         # stage (port|wrap) inferred from a bare `#[no_mangle]` re-export;
 #         # raw_ptr_body_smell / ffi_self_smell fire only for port symbols.
@@ -110,7 +110,7 @@ from pathlib import Path
 #     "totals": {"naked_ffi": 6, "naked_type": 6, "naked_call": 0,
 #                "own_unsafe_blocks": 2, "own_raw_ptr": 0, "own_raw_ptr_void": 0,
 #                "own_raw_ptr_body_smell": 0, "own_ffi_self_smell": 0,
-#                "own_borrow_mut": 0, "global_void_ptr_smell": 42,
+#                "own_wrapper_ref": 0, "global_void_ptr_smell": 42,
 #                "global_raw_field_proj_smell": 3, "unwrapped": 0}
 #   }
 
@@ -140,20 +140,18 @@ _RE_RAW_FIELD_PROJ = re.compile(
     r"|(?<!addr_of!)(?<!addr_of_mut!)\(\s*\*\s*[\w.]+\.as_(?:mut_)?ptr\s*\(\s*\)\s*\)\s*\.\w")
 _RE_TRAIT_HEAD = re.compile(r"\btrait\s+\w+[^{;]*\{")
 
-_RE_DEFINE_TYPE = re.compile(
-    r"define_(?:aliased_|uninit_)?ctype!\s*[({](.*?)[)}]", re.DOTALL)
+_RE_DEFINE_TYPE = re.compile(r"define_ctype!\s*[({](.*?)[)}]", re.DOTALL)
 # Any wrapper-binding macro — `define_*ctype!` plus the lifecycle binders
 # (`impl_dropped!` / `impl_cloned!` / `impl_cloned_upref!` / …),
 # each of which takes `ffi::T` as a binding argument. Those `ffi::T` mentions are bindings,
 # not business-logic smells, so they are excluded from `ffi_self_smell`.
 _RE_BIND_MACRO = re.compile(
-    r"\b(?:define_(?:aliased_|uninit_)?ctype|impl_[a-z_]+)!\s*[({](.*?)[)}]",
+    r"\b(?:define_ctype|impl_[a-z_]+)!\s*[({](.*?)[)}]", re.DOTALL)
+_RE_DT_NAMES = re.compile(
+    r"\A(?:\s*(?://[^\n]*|\#\[[^\]]*\])\n?)*\s*(\w+)\s*,.*?\bffi::(\w+)",
     re.DOTALL)
-_RE_DT_NAMES = re.compile(r"(\w+)\s*,\s*ffi::(\w+)")
-# The three cells a wrapper may be `#[repr(transparent)]` over: `CAliasedType`
-# (C may write through a pointer it retains), `CType` (nothing outside Rust
-# points at it), `CUninitType` (the construction window).
-_RE_CTYPE = re.compile(r"\bC(?:Aliased|Uninit)?Type\s*<\s*ffi::(\w+)")
+# The layout newtype a wrapper is `#[repr(transparent)]` over.
+_RE_CTYPE = re.compile(r"\bCType\s*<\s*ffi::(\w+)")
 _RE_REPLACES = re.compile(r"//+\s*(?:Replaces|Wraps):\s*(\w+)")
 _RE_MOD_FFI_EXPORT = re.compile(r"\bmod\s+ffi_export\b")
 
@@ -507,14 +505,13 @@ def _own_counts(clean: str, spans: list[tuple[int, int]], c_tag: str,
     `#[no_mangle]` re-export): a PORT body must not use raw ptrs in its body nor
     call ``ffi::S`` (it claims to replace C); a WRAP body legitimately does both.
 
-    ``borrow_mut`` — items that take the wrapper as ``&mut`` (``&mut self`` or
-    ``&mut <Wrapper>``). A smell for the ALIASED representation only: C may hold
-    a pointer to a `CAliasedType` wrapper and write through it, so ``&mut``
-    would assert a ``noalias`` the seam cannot honour and the write path is
-    ``&self`` + interior mutability. A `CType` wrapper claims the opposite —
-    nothing outside Rust points at it — so ``&mut`` there is the intended
-    spelling. This textual pass cannot tell them apart; the resolution-aware
-    ``utils/unsafe_metrics`` keys on the seam trait and is authoritative."""
+    ``wrapper_ref`` — items that take the wrapper by reference (``&self`` /
+    ``&mut self`` / ``&<Wrapper>`` / ``&mut <Wrapper>``). A reference of either
+    kind over a wrapped C object asserts something about memory C may write
+    through a pointer it retains; access goes through the borrowed handles,
+    which hold the pointer by value. This textual pass matches on the wrapper
+    NAME; the resolution-aware ``utils/unsafe_metrics`` keys on the seam trait
+    and is authoritative."""
     ffx = ffx or []
 
     def smell(pos):
@@ -544,9 +541,9 @@ def _own_counts(clean: str, spans: list[tuple[int, int]], c_tag: str,
         # SYMBOL: a WRAP fn's `ffi::S(` call is the expected bridge (no smell); a
         # PORT fn that still calls `ffi::S` in its native body is not truly ported.
         ffi_self_smell = ffi_self if is_port else 0
-    borrow_mut = sum(1 for m in _RE_BORROW_MUT_SELF.finditer(clean) if smell(m.start()))
+    wrapper_ref = sum(1 for m in _RE_BORROW_MUT_SELF.finditer(clean) if smell(m.start()))
     if wrapper:
-        borrow_mut += sum(1 for m in re.finditer(
+        wrapper_ref += sum(1 for m in re.finditer(
             rf"&\s*(?:'\w+\s+)?mut\s+{re.escape(wrapper)}\b", clean) if smell(m.start()))
     # Signature raw-ptr surface (return + args); everything else is body:
     # `as *T` casts, `let x: *T`, turbofish `::<*T>`, struct/field decls, etc.
@@ -572,7 +569,7 @@ def _own_counts(clean: str, spans: list[tuple[int, int]], c_tag: str,
         "raw_ptr_body_smell": raw_body if (not is_type and is_port) else 0,
         "raw_ptr_void": raw_void,
         "raw_ptr_seam": raw_seam,
-        "borrow_mut": borrow_mut,
+        "wrapper_ref": wrapper_ref,
         "ffi_self": ffi_self,
         "ffi_self_smell": ffi_self_smell,
     }
@@ -805,7 +802,7 @@ def audit(rust_root: Path, *, all=False, names=None, crate=None, mod=None,
         "own_raw_ptr_void": sum((e["own"] or {}).get("raw_ptr_void", 0) for e in entries),
         "own_raw_ptr_body_smell": sum((e["own"] or {}).get("raw_ptr_body_smell", 0) for e in entries),
         "own_ffi_self_smell": sum((e["own"] or {}).get("ffi_self_smell", 0) for e in entries),
-        "own_borrow_mut": sum((e["own"] or {}).get("borrow_mut", 0) for e in entries),
+        "own_wrapper_ref": sum((e["own"] or {}).get("wrapper_ref", 0) for e in entries),
         "global_void_ptr_smell": glob["void_ptr"]["smell"],
         "global_raw_field_proj_smell": glob["raw_field_proj"]["smell"],
         "unwrapped": unwrapped,

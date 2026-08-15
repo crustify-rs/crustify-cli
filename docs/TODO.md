@@ -166,83 +166,49 @@ under a lock, so a plain Rust read/write of those bytes is a DATA RACE, which
 `UnsafeCell` does not address. Delegate to `X_up_ref` / `X_free`, or expose it
 as a real atomic.
 
-### DONE -- both axes (2026-08-14)
+### DONE -- handles instead of references (2026-08-15)
 
-Implemented in `crustify-prim` on branch `uninit-split`. Per-field cells stay
-open, below.
+Implemented in `crustify-prim` on branch `ref`. Per-field cells stay open,
+below.
+
+The representation question dissolves once no reference to a wrapped C object is
+formed: there is nothing for `UnsafeCell` to suppress and nothing asserting
+validity, so `CType<T>` is `T + PhantomPinned` and no more. Each C type gets
+three Rust types:
 
 ```rust
-CAliasedType<T> = UnsafeCell<T>              + PhantomPinned  // C may alias it
-CType<T>        = T                          + PhantomPinned  // nothing does
-CUninitType<T>  = UnsafeCell<MaybeUninit<T>> + PhantomPinned  // construction
-
-unsafe trait CLayout      { type C; }                                  // shared: repr contract
-unsafe trait CAliasedCell : CLayout                                    // as_ptr(&self) -> *mut C
-unsafe trait CCell        : CLayout                                    // as_ptr -> *const C, as_mut_ptr(&mut self)
-unsafe trait CUninitCell  { type C; type Init: CLayout<C = Self::C>; }
-unsafe trait COwnedExcl   : CCell                                      // no second Rust handle
-unsafe trait CElem                                                     // &[Self] is a sound view
+Foo          // repr(transparent) over CType<ffi::foo> -- the C layout, embeds
+             // by value in a #[repr(C)] mirror, is what CBox points at
+FooRef<'a>   // one pointer, Copy -- the getters
+FooMut<'a>   // one pointer, Deref to FooRef -- the setters
 ```
 
-Conversions: widening free on the init axis (`as_uninit`), obligated on both
-directions of the aliasing axis, since the aliased cell's write-through-`&self`
-capability cannot be derived from a `readonly` reference:
+`&FooRef` covers the HANDLE, one pointer of Rust-owned stack, so `&self` /
+`&mut self` methods are sound on it and `&mut FooRef` reborrows implicitly the
+way `&mut T` does. Field access projects a raw pointer out of the handle and
+goes through `addr_of!` / `addr_of_mut!`.
 
-```
-&CAliasedType<T>  ->  &CUninitType<T>    safe   (as_uninit)
-&CUninitType<T>   ->  &CAliasedType<T>   unsafe (assume_init_ref)
-&mut CType<T>     ->  &CAliasedType<T>   safe   (as_aliased)
-&CAliasedType<T>  ->  &CType<T>          unsafe (assume_exclusive)
-```
+`CCell` is a linking trait: `type C` plus `type Ref<'a>` / `type Mut<'a>` and
+their constructors, all bounded `Self: 'a`. Owning handles hand out handles --
+`as_ref()` / `as_mut()` rather than `Deref`, since `Deref::Target` cannot name a
+lifetime taken from `&self`.
 
-An agent that cannot establish exclusivity simply does not call the narrowing
-constructor, so the automated judgement fails closed. `CAliasedType` keeps the
-default and the pre-split API byte-for-byte.
+**What this costs.** `noalias` / `readonly` on the C object are unreachable for
+every type, permanently -- the same ceiling ffmpeg, libgit2 and rust-openssl
+hit. Reaching past it needs a reference over the object's bytes, which needs the
+escape closure below, and the header measurement put the reachable set at ~25
+leaf types per library (crypto contexts, key schedules, arithmetic scratch) --
+none of them the types an API is built around.
 
-`CAliasedCell` and `CCell` are DISJOINT, which is what keeps `&mut`
-structurally unreachable for an aliased type. `&mut` also needs a second fact
-`CCell` does not carry -- no second *Rust* handle, since a `CBox` is equally the
-refcount share -- so it is `COwnedExcl` + `CBox::get_mut`, a named method rather
-than `DerefMut` on any handle.
+**What it buys.** Soundness by construction on every type, with no analysis:
+`&mut` ergonomics on day one, and an audit rule that is pure syntax
+(`ref_to_wrapper`, target 0) rather than a per-type judgement.
 
-On the init axis both cells keep `UnsafeCell` and neither hands out `&mut`:
-there is nothing to optimize in the construction window, and `&mut` would assert
-a well-formedness that is exactly what does not hold there. So no accessor set
-changes,
-`CBoxUninit`'s `Deref -> &T` survives, and construction keeps the `&self` +
-`as_ptr` + `addr_of_mut!` path a formed object uses. `as_mut_ptr(&mut self)`
-stays -- that is `&mut` on the handle, not on the pointee.
-
-Naming follows the crate's convention (`CBox`/`CBoxUninit`,
-`CDropped`/`CDroppedUninit`, `from_raw`/`from_raw_uninit`): plain name for the
-normal case, `Uninit` suffix for the construction variant.
-
-`CBoxUninit<T: CUninitCell + CDroppedUninit>::assume_init(self) -> CBox<T::Init>`.
-The `Init` binding is what stops `CBoxUninit<FooUninit>` promoting to
-`CBox<Bar>`. Every other handle stays on `CCell`. `define_type!` is unchanged; a
-new `define_uninit_type!(FooUninit, Foo, ffi::foo_st)` emits the twin -- for the
-13 openssl types that implement `CDroppedUninit`, not all 123.
-
-`zeroed()` stays on `CCell` and stays safe. Across the three sys crates: 265
-bindgen structs, 0 `pub enum`, 0 `NonNull`, 0 reference fields, 0 `bool` fields
--- C headers have no niche types and bindgen emits enums as integer consts, so
-all-zero is a valid bit pattern for every wrapped struct. `uninit()` moves to
-`CUninitCell`; it produces genuinely invalid bytes.
-
-Migration measured on the openssl tree:
-
-| site | count | action |
-|---|---|---|
-| `define_type!` | 123 | unchanged |
-| `zeroed()` | 470 | unchanged |
-| `uninit()` | 51 | twin, or switch to `zeroed()` -- breaks loudly |
-
-What the compiler does NOT catch: `CType` keeps its name and changes meaning, so
-the 718 `from_ptr` / `from_raw` sites still compile while now asserting a fully
-valid pointee. `uninit()` covers the construction path; it does not cover C
-handing back an object mid-teardown or mid-reset (`SSL_clear`, a partially freed
-parent, a destructor callback receiving `self`). Targeted pass over the callback
-and teardown seams, not a blanket audit.
+**Measured against the alternatives.** A ZST borrowed type at the object's
+address (the `foreign-types` shape) is rejected by Stacked Borrows: the retag
+covers `[0x0..0x0]`, so a pointer cast out of it carries no provenance for the
+object's bytes. Tree Borrows accepts it. Holding the pointer by value is clean
+under both.
 
 **Costs to price before committing (per-field cells).**
 
@@ -259,7 +225,7 @@ and teardown seams, not a blanket audit.
 
 **Scoreboard.** `audit --all` on `ssl` today: 2,531 unsafe LoC, 93.5% inside
 `impl` blocks, 7.39% of 34,235 code lines. Any relaxation should move the first
-two down without moving `field_proj_outside_impl` or `mut_borrow_wrapper` off
+two down without moving `field_proj_outside_impl` or `ref_to_wrapper` off
 zero.
 
 ---

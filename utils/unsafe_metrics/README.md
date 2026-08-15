@@ -29,7 +29,7 @@ the regex pass in `audit.py` for the subset of properties below.
 | `rp_wrap_nonseam_wrapped` | ...of those, pointee is a type that has a `define_*ctype!` wrapper (a safe alternative exists) |
 | `rp_outside_args` / `_rets` | raw-ptr args / returns in fns outside wrapper impls AND outside `mod ffi_export` |
 | `rp_outside_wrapped` | ...of those, pointee has a `define_*ctype!` wrapper available |
-| `mut_borrow_wrapper` | `&mut W` in signatures (incl. `&mut self`) where `W` is an **aliased** wrapper (`CAliasedCell`) — a discipline smell, since C may write through a pointer it retains and the write path is `&self` + interior mutability; should be 0. A `CCell` wrapper claims nothing outside Rust points at it, so `&mut` there is the intended spelling and is not counted |
+| `ref_to_wrapper` | `&W` or `&mut W` in signatures (incl. the `&self` / `&mut self` receiver) where `W` is a wrapper — a reference of either kind over a wrapped C object asserts something about memory C may write through a pointer it retains, so access goes through the borrowed handles instead; **should be 0** |
 | `field_proj_wrapped` | `(*p).field` (incl. `addr_of!((*p).field)`) where `p: *C` and `C` has a `define_*ctype!` wrapper |
 | `field_proj_outside_impl` | ...of those, the subset outside any impl/trait body — the smell (a port body bypassing the accessor instead of calling it); inside-impl projections are accessor definitions (sanctioned) |
 | `void_ptr_sanctioned` / `void_ptr_smell` | `*const/*mut c_void` in signatures, split: sanctioned (seam method / `mod ffi_export`) vs smell (ordinary signatures, where a typed pointer/wrapper is preferred). Signature-scoped; `as *mut c_void` casts not counted |
@@ -42,13 +42,12 @@ the regex pass in `audit.py` for the subset of properties below.
 | `total_stmts` | `hir::Stmt` nodes crate-wide (denominator) |
 
 ## Classification model (all resolution-based, not textual)
-- **wrapper type `T`** — a struct implementing a seam trait, i.e. carrying the
-  `type C` associated item (`CLayout`, or the pre-split `CCell`). `C` then maps
-  to "has a wrapper". Keying on the trait rather than the macro covers the
-  generic and lifetime-carrying wrappers the macros cannot express.
-- **aliased wrapper** — the subset implementing `CAliasedCell`, i.e. wrapping
-  `CAliasedType<C>`: C may hold a pointer and write through it. The set for
-  which `&mut` is a smell.
+- **wrapper type `T`** — a struct implementing the seam trait `CCell`, i.e.
+  carrying the `type C` associated item. `C` then maps to "has a wrapper".
+  Keying on the trait rather than the macro covers the generic and
+  lifetime-carrying wrappers the macro cannot express. The borrowed handles
+  (`TRef<'a>` / `TMut<'a>`) are NOT wrappers: they hold the pointer by value, so
+  a reference to one covers Rust-owned storage and is not counted.
 - **wrapper impl** — an `impl` whose self-type (HIR path-resolved) is a wrapper `T`.
 - **seam method** — fn named `as_ptr`/`as_mut_ptr`/`as_c_ptr`/`as_raw`/`from_ptr`/
   `from_raw`/`to_ptr`/`to_raw`/`into_raw` (raw ptrs there are the expected boundary).
@@ -119,7 +118,7 @@ Emits `{"crate":...,"seeds":[ {per-seed} ]}`. Per seed:
 - **own-region** metrics (scoped to the region): `unsafe_blocks`,
   `unsafe_block_code_lines`, `wrapper_macro`/`wrapper_handwritten`,
   `raw_ptr_derefs`, `field_proj` / `field_proj_outside_impl`,
-  `mut_borrow_wrapper`, `void_ptr_smell`.
+  `ref_to_wrapper`, `void_ptr_smell`.
 - **`naked`** = uses of the seed's C entity outside the sanctioned homes
   (seam routines, `mod ffi_export`, macro-generated code via `from_expansion`),
   counted **everywhere including the seed's own region**: for a **type**, raw
@@ -163,6 +162,6 @@ methods (81% have a wrapper available), 91 outside excl. ffi_export (24% do).
 ## Scope / next steps
 Covers the unsafe-block / raw-pointer subset of `audit.py`. The same
 `after_analysis` HIR/typeck walk extends to the rest (naked `ffi::T` use by
-`DefId`, `&mut self` on wrappers, raw-field projections, the full THIR
+`DefId`, references to wrappers, raw-field projections, the full THIR
 `UnsafeOpKind` set). Productionize as a `dylint` lib to run via `cargo dylint`
 and emit diagnostics at source spans.
