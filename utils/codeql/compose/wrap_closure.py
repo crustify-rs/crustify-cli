@@ -732,6 +732,18 @@ def compose_wrap(
         if rdf is None:
             continue                               # genuine extern — keep as-is
         rec = sym_items.pop(key)
+        if rdf in port_paths:
+            # The null-def entry got in through `classify`'s decl fallback,
+            # which reads the DECLARING header — and a public header sits
+            # outside the port set even when the body does not. Resolving the
+            # definition settles it the way `classify` would have with the
+            # def_file in hand: the entity is port-scope, so it is dropped
+            # rather than re-keyed, which would otherwise file a port symbol
+            # under wrap with a port `defined_in`. Unreachable while a null
+            # def_file means "no body in the database" (a prototype-only call
+            # site still records the resolved `.c`), so this enforces an
+            # invariant the data currently supplies on its own.
+            continue
         tgt = sym_items.setdefault((name, rdf), {
             "name": name, "defined_in": rdf, "declared_in": set()})
         tgt["declared_in"].update(rec["declared_in"])
