@@ -774,6 +774,17 @@ def compose(
     port_funcs = scope.load_port_entities(_sj, "functions") if _sj else set()
     port_globals_set = scope.load_port_entities(_sj, "globals") if _sj else set()
     port_macros_set = scope.load_port_entities(_sj, "macros") if _sj else set()
+    # Wrap-scope anchors (`files.wrap`). They widen the admission gate below:
+    # an entity a config-named header declares is in this target's surface
+    # whether or not port code reaches it — which is the ONLY way in on a
+    # wrap-only target, where an empty port set makes every reach query false.
+    anchor_paths = scope.load_anchor_paths(_sj) if _sj else set()
+
+    def _anchored(r: dict) -> bool:
+        return scope.is_anchored(
+            r.get("def_file") or "",
+            scope.parse_decl_files(r.get("decl_files") or ""),
+            anchor_paths)
 
     funcs = scope.load_csv(csv_dir_t1 / "functions.csv")
     macros = scope.load_csv(csv_dir_t1 / "macros.csv")
@@ -815,9 +826,9 @@ def compose(
         if scope_enabled and not is_port and not unscoped:
             if r["linkage"] in _WRAP_DISALLOWED_FN_KINDS:
                 continue
-            if not seed_mode and not reach.is_function_port_reachable(
-                r["name"], r["def_file"],
-            ):
+            if not seed_mode and not _anchored(r) \
+                    and not reach.is_function_port_reachable(
+                        r["name"], r["def_file"]):
                 continue
         base = _base_function(r, reach)
         # Scope gates EMISSION only: every record we DO emit is composed
@@ -847,9 +858,9 @@ def compose(
         if scope_enabled and not is_port and not unscoped:
             if r["linkage"] in _WRAP_DISALLOWED_GLOBAL_KINDS:
                 continue
-            if not seed_mode and not reach.is_global_port_reachable(
-                r["name"], r["def_file"],
-            ):
+            if not seed_mode and not _anchored(r) \
+                    and not reach.is_global_port_reachable(
+                        r["name"], r["def_file"]):
                 continue
         base = _base_global(r)
         # content: codebase-wide
@@ -879,7 +890,8 @@ def compose(
         # `.c` (etc.) file that's in scope.
         is_port = scope_enabled and (r["name"], r["def_file"]) in port_macros_set
         if scope_enabled and not is_port and not seed_mode and not unscoped:
-            if not reach.is_macro_port_reachable(r["name"], r["def_file"]):
+            if not _anchored(r) and not reach.is_macro_port_reachable(
+                    r["name"], r["def_file"]):
                 continue
         base = _base_macro(r)
         port_add = _port_additions_macro(r, reach)    # content: codebase-wide
@@ -915,8 +927,9 @@ def compose(
         if not name or name.startswith("(") or name in seen_cb:
             continue
         seen_cb.add(name)
-        if scope_enabled and not seed_mode and not _wrap_port_reachable(
-                reach, name, "", by_name, port_paths):
+        if scope_enabled and not seed_mode and not _anchored(r) \
+                and not _wrap_port_reachable(
+                    reach, name, "", by_name, port_paths):
             continue
         base = _base_callback(r, reach, by_name)
         candidates.append({
@@ -940,11 +953,15 @@ def compose(
             if not is_seed(c["base"], filter_spec):
                 continue
             # Wrap-scope seed admission gate: a non-port seed must be reachable
-            # from port code per the scope.json. `--unscoped` bypasses it (same
-            # intent as the Pass-1 enumeration drop above), so an explicitly
-            # named primitive that no port file calls is still emitted. Any seed
-            # the gate drops is logged below (never silently omitted).
-            if scope_enabled and not unscoped and not c["is_port"]:
+            # from port code, or anchored by `files.wrap`, per the scope.json.
+            # `--unscoped` bypasses it (same intent as the Pass-1 enumeration
+            # drop above), so an explicitly named primitive that no port file
+            # calls is still emitted. Any seed the gate drops is logged below
+            # (never silently omitted).
+            if scope_enabled and not unscoped and not c["is_port"] \
+                    and not scope.is_anchored(
+                        c["base"].get("defined_in") or "",
+                        c["base"].get("declared_in") or [], anchor_paths):
                 name = c["base"]["name"]
                 def_file = c["base"].get("defined_in") or ""
                 kind = c["base"].get("kind") or ""

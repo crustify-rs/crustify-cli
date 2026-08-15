@@ -736,42 +736,23 @@ _LOCKED_BY_KEYS = {"lock", "lock_op", "unlock_op"}
 
 
 def _schema(kind: str) -> str:
-    """Field/slot MEANING for ``--schema`` — display-only markdown the wrapper
-    reads at runtime instead of opening the templates. Distinct from
-    ``--update-help`` (:func:`_findings_schema`), which gives the submission
-    *shape* + rules; meaning and shape are never duplicated.
-
-    Primary source: ``docs/schemas/<types|syms>.md``, split on ``## <field>``
-    headings. Falls back to the template's legacy ``_comment_*`` blocks
-    (rendered as markdown) until a given kind's ``.md`` exists, so the migration
-    off the templates is phased. Empty string if neither source is readable."""
+    """Field/slot MEANING for ``--schema`` — display-only markdown, read from
+    ``docs/schemas/<types|syms>.md`` and split on ``## <field>`` headings.
+    Distinct from ``--update-help`` (:func:`_findings_schema`), which gives the
+    submission *shape* + rules; meaning and shape are never duplicated. Empty
+    string if the doc is unreadable."""
     root = Path(__file__).resolve().parents[2]
     doc = root / "docs" / "schemas" / ("types.md" if kind == "type" else "syms.md")
-    if doc.exists():
-        try:
-            text = doc.read_text()
-        except OSError:
-            return ""
-        parts = re.split(r"(?m)^## (\S+)\s*$", text)
-        preamble, sections = parts[0], list(zip(parts[1::2], parts[2::2]))
-        keep = [preamble.rstrip()]
-        for field, body in sections:
-            keep.append(f"## {field}\n{body.rstrip()}")
-        return "\n\n".join(s for s in keep if s).rstrip() + "\n"
-    # Fallback: legacy template `_comment_*` blocks -> markdown, until <kind>.md.
-    tmpl = root / "templates" / ("types.json" if kind == "type" else "syms.json")
     try:
-        rec = json.loads(tmpl.read_text())
-    except (OSError, ValueError):
+        text = doc.read_text()
+    except OSError:
         return ""
-    out: list[str] = []
-    for k, v in rec.items():
-        if not k.startswith("_comment"):
-            continue
-        field = k[len("_comment_"):] or "overview"
-        body = " ".join(v) if isinstance(v, list) else v
-        out.append(f"## {field}\n{body}")
-    return "\n\n".join(out).rstrip() + "\n"
+    parts = re.split(r"(?m)^## (\S+)\s*$", text)
+    preamble, sections = parts[0], list(zip(parts[1::2], parts[2::2]))
+    keep = [preamble.rstrip()]
+    for field, body in sections:
+        keep.append(f"## {field}\n{body.rstrip()}")
+    return "\n\n".join(s for s in keep if s).rstrip() + "\n"
 
 
 def _findings_schema(kind: str) -> dict:

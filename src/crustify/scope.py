@@ -53,7 +53,9 @@ def build(layout: Layout, target: Path, *, stage: str) -> dict:
         _CACHE[ck] = disk
         return disk
 
-    from compose.scope_manifest import compose as _port_compose
+    import json
+
+    from compose.scope_manifest import compose as _port_compose, enumerate_files
     from compose import scope as _scope
     from compose.wrap_closure import compose_wrap
 
@@ -66,7 +68,7 @@ def build(layout: Layout, target: Path, *, stage: str) -> dict:
     if not config_path.is_file():
         raise SystemExit(
             f"{stage}: no scope-config.json at {config_path}. It is authored by "
-            f"hand — it names the port set — and there is nothing to derive "
+            f"hand — it names the file sets — and there is nothing to derive "
             f"scope from without it.")
     includes_csv = t1 / "includes.csv"
     if not includes_csv.is_file():
@@ -74,16 +76,31 @@ def build(layout: Layout, target: Path, *, stage: str) -> dict:
             f"{stage}: no includes.csv at {includes_csv}. "
             f"Run `crustify-oracle {target} extract-ql` first.")
 
+    config = json.loads(config_path.read_text())
+    anchor_paths = set(enumerate_files(config, layout.repo_root, "wrap"))
     manifest = _port_compose(config_path, t1, layout.repo_root)
+    port_paths = _scope.load_port_paths(manifest)
+    # Both file sets empty means the target covers nothing. There is no implicit
+    # walk to fall back on, so this is always a config error — a mistyped path
+    # under `files`, or a `files` block that never got filled in — and it would
+    # otherwise compose a well-formed, entirely empty scope that every later
+    # stage reports as "nothing to do".
+    if not port_paths and not anchor_paths:
+        raise SystemExit(
+            f"{stage}: {config_path} selects no files. `files.port` and "
+            f"`files.wrap` are both empty or name paths that do not exist "
+            f"under {layout.repo_root} — a port target needs `files.port`, a "
+            f"wrap-only target needs `files.wrap`.")
     # The wrap half needs the port half, and only the port half — it reads
     # neither syms.json nor types.json, so scope stands alone ahead of the
     # manifest composers.
     manifest["wrap"] = compose_wrap(
         t1, t2, manifest,
         _scope.load_csv(includes_csv),
-        _scope.load_port_paths(manifest),
+        port_paths,
         _scope.load_csv(t1 / "types.csv"),
         _scope.load_csv(t2 / "field_type_uses.csv"),
+        anchor_paths,
     )
     manifest = _cache.store(layout.scope(target), manifest, fp)
     _CACHE[ck] = manifest

@@ -112,6 +112,7 @@ def build_index(
     csv_dir_t2: Path,
     port_paths: set[str],
     scope_json_path,
+    anchor_paths: set[str] | None = None,
 ) -> _Index:
     """Build the closure index DIRECTLY from CodeQL T1/T2 — no ``syms.json``.
 
@@ -129,12 +130,16 @@ def build_index(
         with ``field_access_index=None``) — matching ``_wrap_additions_function``.
 
     ``sym``/``sig_types`` are filled for every symbol; the closure only ever
-    queries them for callees of port symbols (port-reachable ⇒ present), so any
-    extra entries are inert. ``port_syms`` is seeded FILE-level (``defined_in``
-    in a port file), exactly as the original walk did.
+    queries them for callees of port symbols (port-reachable ⇒ present) and for
+    anchored ones, so any extra entries are inert. ``port_syms`` is seeded
+    FILE-level (``defined_in`` in a port file), exactly as the original walk
+    did; ``anchor_paths`` widens only the candidate gate, since an anchored
+    symbol is a wrap seed, never a port one.
     """
     from . import syms_manifest as sm
     from .reach import Reach
+
+    anchor_paths = anchor_paths or set()
 
     funcs = scope.load_csv(csv_dir_t1 / "functions.csv")
     globals_ = scope.load_csv(csv_dir_t1 / "globals.csv")
@@ -172,12 +177,17 @@ def build_index(
             is_port = (name, def_file) in port_set
             # Candidate gate — mirror syms_manifest pass 1 (scope_enabled,
             # not seed): a non-port symbol is admitted only if it is
-            # port-reachable and an allowed kind. WITHOUT this, sig_types
-            # (keyed by bare name) conflates same-named statics in unreachable
-            # files — e.g. a port `git_odb` reaches odb.c's `normalize_options`,
-            # but blame.c/describe.c also define `normalize_options`, leaking
-            # git_blame/describe_options into the wrap surface.
-            if not is_port and not gate(r):
+            # port-reachable or anchored, and an allowed kind. WITHOUT the
+            # reach half, sig_types (keyed by bare name) conflates same-named
+            # statics in unreachable files — e.g. a port `git_odb` reaches
+            # odb.c's `normalize_options`, but blame.c/describe.c also define
+            # `normalize_options`, leaking git_blame/describe_options into the
+            # wrap surface. The anchor half is what admits a header-declared
+            # API symbol no port code calls (every symbol, on a wrap-only
+            # target), and it carries no such risk: it matches a declaration
+            # site the config named, not a bare name.
+            if not is_port and not gate(r) and not scope.is_anchored(
+                    def_file, decls_of(r), anchor_paths):
                 continue
             dep_types = sm._compose_dep_types(
                 reach, name, def_file, by_name,
@@ -366,27 +376,44 @@ def compose_wrap(
     port_paths: set[str],
     type_rows: list[dict],
     field_type_rows: list[dict],
+    anchor_paths: set[str] | None = None,
 ) -> dict:
-    """Build the ``wrap`` section: ``{files, functions, globals, macros, types}``.
+    """Build the ``wrap`` section:
+    ``{anchors, files, functions, globals, macros, types}``.
 
     ``files`` is the narrowed import-header surface; the entity buckets list the
-    reached wrap items with their import header(s) (``declared_in``) and a
+    in-surface wrap items with their import header(s) (``declared_in``) and a
     ``reexport`` flag when an item is imported through more than one header.
 
-    Two complementary walks:
-      - **symbols** — expand each port symbol's ``depends_on`` edges (callable
-        surface + the types its signature/body name), classifying each as
-        wrap (FFI frontier) or port (keep walking, via its own seed).
-      - **types** — walk the CodeQL field-type graph (``type_rows`` = T1
-        ``types``, ``field_type_rows`` = T2 ``field_type_uses``): a PORT struct
-        is full-scanned (the Rust port reimplements its whole ``#[repr(C)]``
-        layout, so every field type is a real dep); a WRAP struct only walks the
-        fields port code actually accesses (``port_touched``) — bindgen owns the
-        rest of its layout. This is what pulls a by-value-embedded external type
-        like ``pthread_mutex_t`` (``git_odb.lock``) into the wrap surface.
+    The surface has two seeds, unioned into one set of buckets:
+
+      - **derived** — the import closure of ``port_paths``. Two complementary
+        walks: *symbols*, expanding each port symbol's ``depends_on`` edges
+        (callable surface + the types its signature/body name), classifying
+        each as wrap (FFI frontier) or port (keep walking, via its own seed);
+        and *types*, over the CodeQL field-type graph (``type_rows`` = T1
+        ``types``, ``field_type_rows`` = T2 ``field_type_uses``) — a PORT
+        struct is full-scanned (the Rust port reimplements its whole
+        ``#[repr(C)]`` layout, so every field type is a real dep), a WRAP
+        struct walks only the fields port code actually accesses
+        (``port_touched``), bindgen owning the rest. This is what pulls a
+        by-value-embedded external type like ``pthread_mutex_t``
+        (``git_odb.lock``) into the wrap surface.
+
+      - **declared** — ``anchor_paths`` (``scope-config.json``'s
+        ``files.wrap``, expanded). Every symbol and type those files declare
+        is admitted directly, independent of port reachability, and its
+        signature / field types are walked the same way. This is the whole
+        surface of a wrap-only target, where an empty port set leaves no
+        closure to seed.
+
+    An item both anchored and reached is one entry: the two seeds meet in the
+    same ``sym_items`` / ``type_items`` maps, keyed by ``(name, defined_in)``.
     """
+    anchor_paths = anchor_paths or set()
     closure = build_include_closure(includes_rows)
-    idx = build_index(csv_dir_t1, csv_dir_t2, port_paths, scope_json_path)
+    idx = build_index(csv_dir_t1, csv_dir_t2, port_paths, scope_json_path,
+                      anchor_paths)
     type_meta = build_type_meta(type_rows)
     field_edges = build_field_edges(field_type_rows)
 
@@ -399,15 +426,21 @@ def compose_wrap(
     for _tag, _df in type_meta:
         defs_of[_tag].append(_df)
 
-    def narrow(decls: list[str], tu: str) -> list[str]:
+    def narrow(decls: list[str], tu: str | None) -> list[str]:
         """Headers declaring the item that the importing TU actually #includes.
         Falls back to the declared headers if the include graph has no row for
-        the TU (defensive — a real dep always has ≥1 in-closure header)."""
-        clo = closure(tu)
+        the TU (defensive — a real dep always has ≥1 in-closure header).
+
+        ``tu is None`` marks an ANCHORED item, which has no importing port TU.
+        The anchor set stands in for the include closure: those files are
+        exactly what a consumer of this API includes, so intersecting against
+        them narrows an item's all-decls superset down to the public header it
+        is imported through — the same job, one seed over."""
+        clo = anchor_paths if tu is None else closure(tu)
         hit = [d for d in decls if d in clo]
         return hit or [d for d in decls if d.endswith((".h", ".hpp", ".hh"))] or decls
 
-    def add_sym(name: str, df: str, decls: list[str], tu: str) -> None:
+    def add_sym(name: str, df: str, decls: list[str], tu: str | None) -> None:
         if not name or scope.classify(df, decls, port_paths) != "wrap":
             return
         via = narrow(decls, tu)
@@ -419,7 +452,7 @@ def compose_wrap(
         rec["declared_in"].update(via)
         files.update(via)
 
-    def resolve(tag: str, tu: str) -> list[tuple[str, str]]:
+    def resolve(tag: str, tu: str | None) -> list[tuple[str, str]]:
         """The ``(tag, def_file)`` entities a bare tag may denote, restricted to
         those ``tu`` can actually see.
 
@@ -445,7 +478,7 @@ def compose_wrap(
         keys = [(tag, df) for df in dfs]
         if len(keys) == 1:
             return keys
-        clo = closure(tu)
+        clo = anchor_paths if tu is None else closure(tu)
         hit = [k for k in keys if any(d in clo for d in type_meta[k]["decls"])]
         if hit:
             return hit
@@ -454,11 +487,22 @@ def compose_wrap(
             return hdr
         return [k for k in keys if k[1] == tu]
 
-    def add_type_key(key: tuple[str, str], tu: str) -> None:
+    def add_type_key(key: tuple[str, str], tu: str | None) -> None:
         meta = type_meta.get(key)
         if meta is None:
-            return  # unknown tag (anonymous / not in the types tree) — never
-                    # a C type bindgen binds.
+            return  # unknown tag (not in the types tree) — never a C type
+                    # bindgen binds.
+        if key[0].startswith("("):
+            return  # An ANONYMOUS tag (`(unnamed enum)`, `(unnamed
+                    # class/struct/union)`) is a synthetic placeholder CodeQL
+                    # reuses for every anonymous definition in the DB, so dozens
+                    # of distinct types collide on the one string and it is not
+                    # a name anything can reference or place. `_port_entities`
+                    # drops them from the port section for the same reason, and
+                    # the analysis tree carries none — so an entry here would
+                    # match no record and be unschedulable. Their FIELDS are not
+                    # lost: `entities/fields.ql` flattens an anonymous member
+                    # into its named parent under a qualified name.
         if not _is_aggregate(meta):
             return  # scalar/primitive typedef (Rust primitive) or a callback
                     # (a sym, handled on the symbol surface) — not a wrap-type.
@@ -473,7 +517,7 @@ def compose_wrap(
         rec["declared_in"].update(via)
         files.update(via)
 
-    def add_type(tag: str, tu: str) -> None:
+    def add_type(tag: str, tu: str | None) -> None:
         for key in resolve(tag, tu):
             add_type_key(key, tu)
 
@@ -509,13 +553,19 @@ def compose_wrap(
 
     # Field-walk over the CodeQL type graph. PORT struct → every field type
     # (full layout reimplemented in Rust); WRAP struct → only port-touched
-    # fields (bindgen owns the rest). Recurse into reached types the same way;
-    # cycle-safe via `walked`. The importing TU is the seed port type's
-    # def_file (a port file); narrow() falls back to declared headers when the
-    # include graph has no TU row (e.g. a header-defined struct).
+    # fields (bindgen owns the rest), unless it is DEFINED in an anchor file.
+    # A struct whose definition sits in a public header is a value type whose
+    # fields ARE the API (`git_strarray`, `git_diff_options`), so it is
+    # full-scanned like a port struct; one merely forward-declared there stays
+    # opaque, since bindgen owns a layout nobody can see and there are no
+    # accessors to write. Recurse into reached types the same way; cycle-safe
+    # via `walked`. The importing TU is the seed port type's def_file (a port
+    # file) or None for an anchored seed; narrow() falls back to declared
+    # headers when the include graph has no TU row (e.g. a header-defined
+    # struct).
     walked: set[tuple[str, str]] = set()
 
-    def walk_type(key: tuple[str, str], tu: str) -> None:
+    def walk_type(key: tuple[str, str], tu: str | None) -> None:
         if key in walked:
             return
         walked.add(key)
@@ -526,12 +576,14 @@ def compose_wrap(
         edges = field_edges.get(key, [])
         if cls == "wrap":
             add_type_key(key, tu)
-            # `port_touched` stays keyed by tag: it comes from the port symbols'
-            # `depends_on.types[].fields`, which name a tag and not a def_file.
-            # On a colliding tag that pools both structs' touched sets, which
-            # can only over-walk (a field name one struct lacks matches no edge).
-            touched = port_touched.get(key[0], set())
-            edges = [e for e in edges if e[0] in touched]
+            if meta["def_file"] not in anchor_paths:
+                # `port_touched` stays keyed by tag: it comes from the port
+                # symbols' `depends_on.types[].fields`, which name a tag and not
+                # a def_file. On a colliding tag that pools both structs' touched
+                # sets, which can only over-walk (a field name one struct lacks
+                # matches no edge).
+                touched = port_touched.get(key[0], set())
+                edges = [e for e in edges if e[0] in touched]
         for _field, ftype, ftype_df in edges:
             if ftype_df and (ftype, ftype_df) in type_meta:
                 walk_type((ftype, ftype_df), tu)   # exact edge target
@@ -542,6 +594,25 @@ def compose_wrap(
     for key, meta in type_meta.items():
         if meta["def_file"] in port_paths:
             walk_type(key, meta["def_file"])
+
+    # ANCHORED seeds — `files.wrap`. Declaration-site membership, so a public
+    # header's whole API comes in whether or not any port code calls it (on a
+    # wrap-only target, nothing does). Each anchored symbol pulls its signature
+    # types the same hop `add_sym` does for a reached facade, so a wrapper never
+    # takes or returns a raw `ffi::T`; each anchored type enters the field-walk,
+    # which decides full-scan vs opaque by where its definition sits. `tu=None`
+    # routes narrow()/resolve() through the anchor set: there is no importing
+    # port TU, and the anchors are what a consumer includes.
+    if anchor_paths:
+        for (name, df), meta in list(idx.sym.items()):
+            if not scope.is_anchored(df, meta["declared_in"], anchor_paths):
+                continue
+            add_sym(name, df, meta["declared_in"], None)
+            for st in idx.sig_types.get(name, ()):
+                add_type(st, None)
+        for key, meta in list(type_meta.items()):
+            if scope.is_anchored(key[1], meta["decls"], anchor_paths):
+                walk_type(key, None)
 
     # Callback typedefs (unaliased_kind == "callback" in types.csv): function-
     # pointer typedefs that are wrap-scope. They are excluded from add_type (not
@@ -565,28 +636,35 @@ def compose_wrap(
         # to avoid bucket overlap.
         if scope.classify(df, decls, port_paths) != "wrap":
             continue
+        # An ANCHORED callback needs no reachability: the config named the
+        # header that declares it, and the API it is a parameter of is being
+        # wrapped whether or not anything in this target calls through it.
+        anchored = scope.is_anchored(df, decls, anchor_paths)
         reach_ = idx.reach
-        # Try both the real def_file and "" (callback typedefs often have
-        # no def_file in the T1 table since they're header-only typedefs).
-        users = reach_.functions_using_type(tag, df) | reach_.functions_using_type(tag, "")
-        # Mirror the _wrap_port_reachable gate from types_manifest: a type is
-        # wrap-reachable if any function that mentions it (sig or body) is
-        # defined in a port file OR is port-reachable from a port file.
-        body_users = reach_.functions_using_type_in_body(tag, df) | \
-                     reach_.functions_using_type_in_body(tag, "")
-        all_users = users | body_users
-        reachable = (
-            any(fn_df in port_paths for _, fn_df in all_users)
-            or any(reach_.is_function_port_reachable(fn, fn_df) for fn, fn_df in all_users)
-        )
-        if not reachable:
-            continue
+        if not anchored:
+            # Try both the real def_file and "" (callback typedefs often have
+            # no def_file in the T1 table since they're header-only typedefs).
+            users = reach_.functions_using_type(tag, df) | reach_.functions_using_type(tag, "")
+            # Mirror the _wrap_port_reachable gate from types_manifest: a type is
+            # wrap-reachable if any function that mentions it (sig or body) is
+            # defined in a port file OR is port-reachable from a port file.
+            body_users = reach_.functions_using_type_in_body(tag, df) | \
+                         reach_.functions_using_type_in_body(tag, "")
+            all_users = users | body_users
+            reachable = (
+                any(fn_df in port_paths for _, fn_df in all_users)
+                or any(reach_.is_function_port_reachable(fn, fn_df) for fn, fn_df in all_users)
+            )
+            if not reachable:
+                continue
         # find a port TU that actually includes a declaring header to get the
-        # narrowed declared_in (mirrors narrow() used in add_sym).
+        # narrowed declared_in (mirrors narrow() used in add_sym); an anchored
+        # callback narrows against the anchor set instead, having no port TU.
         # add_sym re-checks scope.classify — bypass it and insert directly into
         # sym_items (the classify guard above already ensures wrap-scope only).
-        for port_path in port_paths:
-            via = [d for d in decls if d in closure(port_path)]
+        for src in ([None] if anchored else list(port_paths)):
+            via = narrow(decls, src) if src is None else \
+                [d for d in decls if d in closure(src)]
             if via:
                 rec = sym_items.setdefault((tag, df), {
                     "name": tag, "defined_in": df, "declared_in": set()})
@@ -600,7 +678,9 @@ def compose_wrap(
     # scope to mint a type. Its family IS reached, through the instances, and the
     # generic those instances alias has to be emitted by somebody, so emit the
     # macro itself. Same shape as the callback path above: narrow `declared_in`
-    # to the header a port TU actually includes.
+    # to the header a port TU actually includes, or — for an anchored target —
+    # admit the generator when its own defining header IS an anchor, the
+    # include test having nothing to run against.
     for _macro, _fam in _mf.load(csv_dir_t1.parent).items():
         _df = _fam["def_file"]
         if not _df or (_macro, _df) in sym_items:
@@ -625,13 +705,13 @@ def compose_wrap(
             for tag, df in _fam["members"])
         if not _reached:
             continue
-        for port_path in port_paths:
-            if _df in closure(port_path):
-                rec = sym_items.setdefault((_macro, _df), {
-                    "name": _macro, "defined_in": _df, "declared_in": set()})
-                rec["declared_in"].add(_df)
-                files.add(_df)
-                break
+        if _df not in anchor_paths and not any(
+                _df in closure(p) for p in port_paths):
+            continue
+        rec = sym_items.setdefault((_macro, _df), {
+            "name": _macro, "defined_in": _df, "declared_in": set()})
+        rec["declared_in"].add(_df)
+        files.add(_df)
 
     # Canonicalize a null-def `extern` item onto its real definition. A port
     # caller that saw only a prototype records the dep as (name, ""); another
@@ -656,31 +736,53 @@ def compose_wrap(
             "name": name, "defined_in": rdf, "declared_in": set()})
         tgt["declared_in"].update(rec["declared_in"])
 
+    # `anchored: true` separates the section's two populations, which have the
+    # same shape and different intent. An ANCHORED item is a deliverable: the
+    # config named the header that declares it, so wrapping it IS the job, and
+    # the anchor set fixes a denominator "am I done?" can be measured against. A
+    # bare item is instrumental: it is here only because port code reaches it,
+    # and it leaves the section as the port advances. Computed from the item's
+    # own declaration sites, not from which seed reached it first — a private
+    # struct pulled in through an anchored struct's field is still instrumental.
+    def _anchor_flag(df: str, decls: list[str]) -> dict:
+        return {"anchored": True} if scope.is_anchored(df, decls, anchor_paths) else {}
+
     # Bucket symbols by kind (looked up from the index).
     buckets: dict[str, list] = {"functions": [], "globals": [], "macros": []}
     for (name, df), rec in sym_items.items():
         kind = (idx.sym.get((name, df)) or {}).get("kind", "")
         via = sorted(rec["declared_in"])
+        decls = (idx.sym.get((name, df)) or {}).get("declared_in") or via
         buckets[_sym_bucket(kind)].append({
             "name": name, "defined_in": df, "declared_in": via,
-            **({"reexport": True} if len(via) > 1 else {})})
+            **({"reexport": True} if len(via) > 1 else {}),
+            **_anchor_flag(df, decls)})
 
     types_out = []
     for (tag, _tdf), rec in type_items.items():
         via = sorted(rec["declared_in"])
+        decls = (type_meta.get((tag, _tdf)) or {}).get("decls") or via
         types_out.append({
             "name": tag, "defined_in": rec["defined_in"], "declared_in": via,
-            **({"reexport": True} if len(via) > 1 else {})})
+            **({"reexport": True} if len(via) > 1 else {}),
+            **_anchor_flag(rec["defined_in"], decls)})
 
     return {
         "_comment": (
-            "DERIVED wrap-scope import surface for this target — regenerable "
-            "from `port`. Computed by compose/wrap_closure.py: the FFI items "
-            "port code reaches, with `declared_in` narrowed to the header(s) "
-            "the importing port TU actually #includes (build-resolved). "
-            "`reexport: true` marks an item imported through >1 header. "
-            "Recompute whenever `port` changes."
+            "Wrap-scope import surface for this target — regenerable from "
+            "`port` + `anchors`. Computed by compose/wrap_closure.py from two "
+            "seeds: the FFI items port code reaches, and the items the files in "
+            "`anchors` (`scope-config.json`'s `files.wrap`) declare outright. "
+            "`anchored: true` marks the first population — a deliverable API "
+            "item, versus an instrumental one present only because port code "
+            "reaches it. "
+            "`declared_in` is narrowed to the header(s) the importing port TU "
+            "actually #includes (build-resolved), or to `anchors` for an "
+            "anchored item, which has no importing TU. `reexport: true` marks "
+            "an item imported through >1 header. Recompute whenever `port` or "
+            "`anchors` changes."
         ),
+        "anchors": sorted(anchor_paths),
         "files": sorted(files),
         "functions": sorted(buckets["functions"], key=lambda r: (r["name"], r["defined_in"])),
         "globals": sorted(buckets["globals"], key=lambda r: (r["name"], r["defined_in"])),

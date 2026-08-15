@@ -74,7 +74,7 @@ def scaffold(
             raise SystemExit(
                 f"scaffold: crates.json is empty ({layout.crates_json}). It is the "
                 f"placement oracle and is authored outside this stage — populate it "
-                f"(see templates/crates.json for the schema) before scaffolding.")
+                f"(see specs/crates.json for the schema) before scaffolding.")
         entries = _all_entries(doc)
     elif name:
         _require_one_home(doc, name, file)
@@ -412,7 +412,7 @@ def _crustify_prim(layout) -> Path:
         raise SystemExit(
             f"scaffold: no `deps.crustify-prim` in {p}. Every generated "
             f"Cargo.toml needs the wrap-primitive crate's absolute path; set "
-            f"it from templates/cli-config.json.")
+            f"it from specs/cli-config.json.")
     return Path(dep)
 
 

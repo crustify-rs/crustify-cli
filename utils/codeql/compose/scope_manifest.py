@@ -1,25 +1,28 @@
-"""Derive `<target>/scope.json` from `scope-config.json`.
+"""Derive `<target>/scope.json`'s `port` section from `scope-config.json`.
 
 Pure filesystem walk + path predicate — no CodeQL, no agent. The
 target-tier scope manifest is the canonical port-scope file list for
-a given target invocation: every other source/header file in the
-analysis tree is implicitly wrap-scope.
+a given target invocation.
 
 Scope rule:
 
-  1. A file is a *candidate* if it lives under `<repo_root>/<target>`
-     (recursively) and has a C/C++ source or header extension
-     (`.c`, `.cc`, `.cpp`, `.h`, `.hpp`).
-  2. A candidate is *port-scope* iff its repo-root-relative path
-     does not match any entry in `config.out_of_scope.paths` (entries
-     ending with `/` match recursively; otherwise exact-file match).
-  3. Everything else is wrap-scope, implicit.
+  1. A file is a *candidate* if `config.files.port` names it — directly,
+     or through a trailing-slash directory entry that expands to every
+     C/C++ source or header (`.c`, `.cc`, `.cpp`, `.h`, `.hpp`) beneath
+     it.
+  2. A candidate survives iff its repo-root-relative path does not match
+     any entry in `config.out_of_scope.paths` (entries ending with `/`
+     match recursively; otherwise exact-file match).
+  3. Everything else is wrap-scope — derived as the import closure of
+     port (`wrap_closure.py`), plus whatever `config.files.wrap` anchors
+     directly. Both live in the sibling `wrap` section.
 
 `scope.json` schema:
 
     {
       "_comment": "...",
-      "port": ["ssl/statem/extensions.c", "ssl/statem/statem.c", ...]
+      "port": {"files": [...], "functions": [...], ...},
+      "wrap": {"anchors": [...], "files": [...], "functions": [...], ...}
     }
 """
 from __future__ import annotations
@@ -86,48 +89,39 @@ def _walk_dir(rel_dir: str, repo_root: Path, out_of_scope: list[str]) -> list[st
     return files
 
 
-def enumerate_port_files(config: dict, repo_root: Path) -> list[str]:
-    """Return the repo-root-relative port-scope candidate file paths.
+def enumerate_files(config: dict, repo_root: Path, which: str) -> list[str]:
+    """Return the repo-root-relative candidate file paths ``config.files``
+    names for scope ``which`` (``"port"`` | ``"wrap"``).
 
-    Two modes:
+    Always an explicit list — there is no implicit directory walk, so the
+    key must name everything its scope contains. Entries are
+    repo-root-relative and may be either:
 
-      - **Hand-authored list** — when ``config["port_files"]`` is a
-        non-empty list, the port scope is exactly what it names, and
-        ``target`` is not walked. Entries are repo-root-relative and may
-        be either:
+      * a **file** — ``include/internal/statem.h``
+      * a **directory**, written with a trailing slash — ``ssl/`` — which
+        expands to every source/header file beneath it
 
-          * a **file** — ``include/internal/statem.h``
-          * a **directory**, written with a trailing slash — ``ssl/`` —
-            which expands to every source/header file beneath it
+    The trailing-slash convention matches ``out_of_scope.paths``, so the
+    two path fields read the same way, and ``out_of_scope`` applies to
+    whatever a directory entry expands to. Directory entries are what make
+    "this whole subtree **plus** these specific headers" expressible: a
+    port cluster often spans a tree it does not own, because the structs
+    its code implements are declared in headers that live elsewhere.
 
-        The trailing-slash convention matches ``out_of_scope.paths``, so
-        the two path fields read the same way. Directory entries are what
-        make "this whole subtree **plus** these specific headers"
-        expressible: a port cluster often spans a tree it does not own,
-        because the structs its code implements are declared in headers
-        that live elsewhere.
-
-      - **Directory walk** — otherwise, recursively walk ``target`` and
-        take every source/header file not excluded by ``out_of_scope``.
-
-    Either way the result is only the *candidate* set; the T1 tables
-    (via ``_port_entities`` / ``_contributing_files``) decide which of
+    The result is only the *candidate* set; the T1 tables decide which of
     these actually compiled under the build configuration — so naming a
     file that the build never compiled is harmless, not an error.
     """
     out_of_scope = list(config.get("out_of_scope", {}).get("paths", []))
+    entries = (config.get("files") or {}).get(which) or []
 
-    explicit = config.get("port_files")
-    if explicit:
-        files: list[str] = []
-        for entry in explicit:
-            if entry.endswith("/"):
-                files.extend(_walk_dir(entry, repo_root, out_of_scope))
-            elif not _is_out_of_scope(entry, out_of_scope):
-                files.append(entry)
-        return sorted(set(files))
-
-    return sorted(set(_walk_dir(config["target"], repo_root, out_of_scope)))
+    files: list[str] = []
+    for entry in entries:
+        if entry.endswith("/"):
+            files.extend(_walk_dir(entry, repo_root, out_of_scope))
+        elif not _is_out_of_scope(entry, out_of_scope):
+            files.append(entry)
+    return sorted(set(files))
 
 
 def _port_entities(t1_dir: Path, candidate_files: set[str]) -> dict[str, list[dict]]:
@@ -238,22 +232,26 @@ def compose(config_path: Path, t1_dir: Path, repo_root: Path | None = None) -> d
     """Emit the v2 port-scope manifest.
 
     `t1_dir` is `<repo_root>/crustify/codeql/t1` — the entity tables
-    produced by `analyze extract-ql`. The filesystem walk gives the candidate
-    universe; the T1 tables decide which files and entities actually
-    compiled under this build configuration.
+    produced by `analyze extract-ql`. Expanding `files.port` gives the
+    candidate universe; the T1 tables decide which files and entities
+    actually compiled under this build configuration.
 
-    `repo_root` is discovered by the caller (the `crustify/` marker dir,
-    per the Layout contract); it is **not** read from `scope-config.json`, so the
-    same in-repo config stays portable across git worktrees. When omitted
-    (e.g. standalone `main()`), it is derived from the canonical
-    `<repo_root>/crustify/codeql/t1` location of `t1_dir`.
+    `repo_root` is the CLI's first positional (per the Layout contract); it is
+    **not** read from `scope-config.json`, so the same in-repo config stays
+    portable across git worktrees. When omitted (e.g. standalone `main()`), it
+    is derived from the canonical `<repo_root>/crustify/codeql/t1` location of
+    `t1_dir`.
+
+    A wrap-only target (`files.port` empty) composes an empty port section:
+    every entity classifies wrap, and the whole surface is anchored by
+    `files.wrap` in the sibling `wrap` section.
     """
     config = json.loads(config_path.read_text())
     if repo_root is None:
         repo_root = t1_dir.resolve().parents[2]
     else:
         repo_root = Path(repo_root).resolve()
-    candidate_files = set(enumerate_port_files(config, repo_root))
+    candidate_files = set(enumerate_files(config, repo_root, "port"))
     entities = _port_entities(t1_dir, candidate_files)
     files = _contributing_files(t1_dir, entities, candidate_files)
     return {

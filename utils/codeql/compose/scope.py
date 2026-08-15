@@ -243,6 +243,33 @@ def load_port_paths(scope_json) -> set[str]:
     return set(port.get("files", []))
 
 
+def load_anchor_paths(scope_json) -> set[str]:
+    """The wrap-scope ANCHOR files — `scope-config.json`'s `files.wrap`,
+    expanded — echoed into the composed manifest as `wrap.anchors`.
+
+    Empty for a port target, where the wrap surface is wholly derived as the
+    import closure of port. Non-empty when the target declares an API surface
+    to wrap directly, which is what makes a wrap-only target expressible: with
+    no port files there is no closure to seed, so the anchors ARE the surface.
+    """
+    return set(_doc(scope_json).get("wrap", {}).get("anchors", []))
+
+
+def is_anchored(def_file: str, decl_files: list[str], anchor_paths: set[str]) -> bool:
+    """Whether an entity is anchored into wrap scope by `files.wrap`.
+
+    DECLARATION-site membership, not reachability. `files.wrap` names public
+    headers, and the bodies of what they declare live in `.c` files nothing in
+    scope calls — so the port-reachability gates the closure uses answer the
+    wrong question here. "Wrap the API these headers declare" is a membership
+    test, and a definition in an anchor file (a header-defined value struct,
+    an inline function) counts the same way.
+    """
+    if not anchor_paths:
+        return False
+    return def_file in anchor_paths or any(d in anchor_paths for d in decl_files)
+
+
 def load_port_entities(scope_json, kind: str) -> set[tuple[str, str]]:
     """Return the v2 port-scope entity set for `kind`
     (``"functions"`` | ``"globals"`` | ``"macros"`` | ``"types"``) as a
@@ -260,12 +287,12 @@ def load_port_entities(scope_json, kind: str) -> set[tuple[str, str]]:
 
 def load_wrap_entities(scope_json, kind: str) -> set[tuple[str, str]]:
     """Wrap-scope entity set for `kind` as ``(name, def_file)`` keys — the
-    closure :func:`compose_wrap` derived. Mirror of :func:`load_port_entities`
-    for the ``wrap`` section, whose entries key the tag on ``type`` (types) /
-    ``name`` (syms) and the file on ``defined_in``."""
+    surface :func:`compose_wrap` composed. Mirror of :func:`load_port_entities`
+    for the ``wrap`` section. The tag is read through :func:`entry_tag`, the
+    same accessor :func:`scope_membership` uses, so both agree on a section
+    whose entries key the identifier on ``name``."""
     wrap = _doc(scope_json).get("wrap", {})
-    tagk = "type" if kind == "types" else "name"
-    return {(e.get(tagk), e.get("defined_in") or "") for e in wrap.get(kind, [])}
+    return {(entry_tag(e), e.get("defined_in") or "") for e in wrap.get(kind, [])}
 
 
 _SCOPE_KINDS = ("functions", "globals", "macros", "types")

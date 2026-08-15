@@ -2,7 +2,7 @@
 
 Field meaning for `<repo_root>/crustify/crates.json` — the whole-repo
 crate/module decomposition and the placement oracle. Layout example:
-[`templates/crates.json`](../../templates/crates.json).
+[`specs/crates.json`](../../specs/crates.json).
 
 Target-agnostic and cumulative: "which unique Rust `.rs` homes this C entity",
 independent of porting progress. Port/wrap status and per-target scope live in

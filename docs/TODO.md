@@ -364,14 +364,16 @@ caller?** No -> over-emission, remove; yes -> gate gap, wrap.
 `config.json` is *not* redundant, but two of its fields duplicate the CLI args
 and the rest could live closer to where it's consumed:
 
-- `repo_root` -- DEAD. Never read; `repo_root` is the CLI's first positional
-  (pinned via `set_repo_root`, `layout.py`). Drop it (the on-disk value already
-  drifted stale -- some targets point at a `/root/git/openssl` that no longer
-  exists).
-- `target` -- CLI-duplicate, but currently *read* at `scope_manifest.py:96`
-  (`config["target"]` -> `target_dir`). Rewire that to take the target from the
-  pinned layout / the `targets/<target>/` dir path, then drop it.
-- `port_files` + `out_of_scope.paths` -- authored *scope* inputs. Could move into
+- `repo_root` -- DONE (2026-08-15). Dropped; it was never read. `repo_root` is
+  the CLI's first positional, pinned via `set_repo_root` (`layout.py`).
+- `target` -- DONE (2026-08-15). Dropped. Its one reader was the implicit walk
+  in `scope_manifest.enumerate_port_files`, which is gone with it: `files` is
+  always explicit, so there is nothing left to walk and no way to silently
+  under-scope a target by omission.
+- `port_files` -- DONE (2026-08-15), as `files.port`, beside a new `files.wrap`
+  that anchors an API surface into wrap scope directly. That is what makes a
+  wrap-only target expressible; see `specs/scope-config.json`.
+- `out_of_scope.paths` -- authored *scope* input. Could move into
   an authored section of `scope.json` -- but `scope.json` is a computed output
   (`analyze scope` regenerates it), so the composer must **merge-preserve** the
   authored section on every regen (input + output share one file: a regen bug
@@ -607,7 +609,7 @@ so an orchestrator following it verbatim authors files nothing reads:
 |---|---|
 | `crustify/config.json` (L22) | **`cli-config.json`** (`layout.py:146`) |
 | `crustify/targets/<target>/config.json` (L44) | **`scope-config.json`** (`layout.py:172`) |
-| `config.json.port_files` (L46) | `scope-config.json.port_files` |
+| `config.json.port_files` (L46) | `scope-config.json.files.port` |
 | "`config.json` when all files are port-scope" (L48) | same |
 
 The irony is that `layout.py:143-145` documents *exactly* this trap in the

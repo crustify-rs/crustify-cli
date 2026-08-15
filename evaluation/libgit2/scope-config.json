@@ -5,14 +5,10 @@
     "src/util), the CLI (src/cli), and the public headers under include/."
   ],
 
-  "repo_root": "/root/Workspace/git/crustify-libgit2",
-
-  "target": "src",
-
-  "_comment_port_files": [
-    "Non-empty, so this REPLACES the implicit walk of `target` and must name",
-    "everything the port scope contains - hence `src/` is listed explicitly",
-    "alongside `include/` rather than being inherited.",
+  "_comment_files": [
+    "`files.port` names everything the port scope contains - there is no",
+    "implicit directory walk, so `src/` is listed alongside `include/` rather",
+    "than being inherited from the target id.",
     "",
     "Both entries are directories because every file beneath them is",
     "port-scope, which orchestrator.md prefers over enumerating files.",
@@ -41,12 +37,20 @@
     "are not in the CodeQL database at all.",
     "",
     "Also not listed: tests/ and deps/clar. The traced build sets",
-    "BUILD_TESTS=OFF, so they contribute no entities to the database."
+    "BUILD_TESTS=OFF, so they contribute no entities to the database.",
+    "",
+    "`files.wrap` is empty: every FFI dependency this port reaches is derived",
+    "as the import closure of `files.port`. It would name public headers to",
+    "wrap outright, which is what a wrap-only target consists of."
   ],
-  "port_files": [
-    "src/",
-    "include/"
-  ],
+  "files": {
+    "port": [
+      "src/",
+      "include/"
+    ],
+    "wrap": [
+    ]
+  },
 
   "_comment_out_of_scope": [
     "`paths` is empty on purpose. The candidates one might reflexively list",

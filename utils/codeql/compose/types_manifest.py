@@ -424,9 +424,23 @@ def _type_keys_for(name: str, def_file: str, by_name: dict[str, dict]) -> list[t
 def _wrap_port_reachable(
     reach: Reach, struct_name: str, struct_def_file: str,
     by_name: dict[str, dict], port_paths: set[str],
+    anchor_paths: set[str] | None = None,
 ) -> bool:
-    """7-scenario reach gate — a wrap type is included iff any fires."""
+    """7-scenario reach gate — a wrap type is included iff any fires.
+
+    Plus the anchor short-circuit: a type declared or defined in a
+    `files.wrap` file is in the surface outright, no reach needed. Every
+    scenario below asks "does port code touch this", which on a wrap-only
+    target nothing does — the config named the header instead.
+    """
     type_keys = _type_keys_for(struct_name, struct_def_file, by_name)
+    if anchor_paths:
+        for tname, tdef in type_keys:
+            row = by_name.get(tname)
+            decls = scope.parse_decl_files(row.get("decl_files") or "") if row else []
+            if scope.is_anchored(tdef or (row or {}).get("def_file") or "",
+                                 decls, anchor_paths):
+                return True
     if reach.port_field_access_files(struct_name, struct_def_file):
         return True
     for tname, tdef in type_keys:
@@ -569,6 +583,28 @@ def compose(
         scope.load_port_entities(filter_spec.scope_json_path, "types")
         if filter_spec.scope_json_path is not None else set()
     )
+    # Wrap-scope anchors (`files.wrap`) — the second seed `_wrap_port_reachable`
+    # admits on, and the only one a wrap-only target has.
+    anchor_paths = (
+        scope.load_anchor_paths(filter_spec.scope_json_path)
+        if filter_spec.scope_json_path is not None else set()
+    )
+    # The composed wrap surface, as an admission floor. `_wrap_port_reachable`
+    # asks its seven questions of the CodeQL edges directly; the wrap closure
+    # ALSO admits a type through the transitive field-walk (a public struct's
+    # field whose type is private), which no scenario there covers when nothing
+    # is port-reachable. A scope.json entry with no manifest record is
+    # unschedulable, so the surface is authoritative: whatever it lists gets a
+    # record. Empty when scope.json is absent.
+    wrap_types_set = (
+        scope.load_wrap_entities(filter_spec.scope_json_path, "types")
+        if filter_spec.scope_json_path is not None else set()
+    )
+
+    def _in_wrap_surface(c: dict) -> bool:
+        return (c["name"], c["def_file"] or "") in wrap_types_set or \
+            _wrap_port_reachable(reach, c["name"], c["def_file"], by_name,
+                                 port_paths, anchor_paths)
 
     types_rows = scope.load_csv(csv_dir_t1 / "types.csv")
     by_name = scope.build_types_index(types_rows)
@@ -701,7 +737,7 @@ def compose(
             # intent as the filter-mode branch below), so an explicitly named
             # type that no port file reaches is still emitted.
             if scope_enabled and not filter_spec.unscoped and not c["is_port"]:
-                if not _wrap_port_reachable(reach, c["name"], c["def_file"], by_name, port_paths):
+                if not _in_wrap_surface(c):
                     continue
             seed_keys.add(c["key"])
         # Transitive field-type closure. Seeded from port-scope seeds
@@ -738,7 +774,7 @@ def compose(
                 emit_keys.add(c["key"])
             elif c["is_port"]:
                 emit_keys.add(c["key"])
-            elif _wrap_port_reachable(reach, c["name"], c["def_file"], by_name, port_paths):
+            elif _in_wrap_surface(c):
                 emit_keys.add(c["key"])
 
     # ---- Pass 4: emit, applying --port-only / --wrap-only ----

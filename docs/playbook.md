@@ -24,7 +24,7 @@ Repo-tier describes the whole repository and is target-agnostic. Target-tier is
 scoped to one `crustify-cli <repo_root> <target> …` invocation. A repo can carry
 several targets over one repo-tier set.
 
-Every authored file has a commented example under `templates/`. Read the
+Every authored file has a commented example under `specs/`. Read the
 template before authoring — the `_comment_*` keys carry the field semantics and
 are the only complete spec.
 
@@ -50,11 +50,11 @@ On macOS arm64 the CodeQL bundle needs Rosetta.
 
 ```bash
 mkdir -p <repo>/crustify
-cp templates/gitignore <repo>/crustify/.gitignore
+cp specs/gitignore <repo>/crustify/.gitignore
 git -C <repo> checkout -b crustify/<target>
 ```
 
-Author `<repo>/crustify/cli-config.json` from `templates/cli-config.json`:
+Author `<repo>/crustify/cli-config.json` from `specs/cli-config.json`:
 
 | block | holds |
 |---|---|
@@ -67,7 +67,7 @@ gitignored — it reaches a worktree through `worktree.link_shared`, not git.
 
 ### 3. `build.json`
 
-Author from `templates/build.json`. Downstream stages treat it as authoritative
+Author from `specs/build.json`. Downstream stages treat it as authoritative
 for library partitioning, link topology and build invocation, so it must be
 accurate before anything else runs. All paths repo-root-relative.
 
@@ -113,27 +113,41 @@ database changes.
 ### 6. Scope a target
 
 Author `crustify/targets/<target>/scope-config.json` from
-`templates/scope-config.json`.
+`specs/scope-config.json`.
 
-By default every source file under `<repo_root>/<target>/` is port scope.
-**`port_files`, when non-empty, REPLACES that implicit walk — it does not add to
-it.** If you list anything, you must list everything the port scope contains.
-This is the single easiest way to silently under-scope a target.
+`files` names the target's file sets, keyed by scope. **There is no implicit
+directory walk — whichever key you populate must name everything that scope
+contains.** The repo root and the target id are CLI positionals and are not
+restated in the file.
 
 Entries are a file (`include/internal/statem.h`) or a directory with a trailing
 slash (`ssl/`), which expands to every source and header beneath it. Prefer
-directory entries when a whole subtree is port-scope; use a bare file list when
-the port cluster is a logical subset of a directory. Naming a file the build
-never compiled is harmless — T1 anchoring drops uncompiled candidates.
+directory entries when a whole subtree is in scope; use a bare file list when
+the cluster is a logical subset of a directory. Naming a file the build never
+compiled is harmless — T1 anchoring drops uncompiled candidates.
+
+**`files.port`** — translated to native Rust. Its FFI dependencies reach wrap
+scope on their own, as the import closure of what port code touches.
 
 **Headers outside the target tree are never discovered automatically.** A header
 that exports structs, enums or unions implemented by code in the target must be
-added to `port_files` by hand. Add it only if its **implementors** are
+added to `files.port` by hand. Add it only if its **implementors** are
 port-scope — distinguish implementors from consumers and referencers. A header
 whose types are merely *used* by the target belongs in wrap scope, and gets
-there on its own through the import closure.
+there on its own through the closure.
 
-`out_of_scope.paths` refines what to skip inside the target;
+**`files.wrap`** — wrapped in safe Rust, no port. This is how a whole public API
+becomes the target: list its headers, and every function, global and type they
+declare is anchored into wrap scope directly, whether or not port code reaches
+it. A struct **defined** in an anchor header is a value type whose fields are
+the API, so its field types are walked in full; one merely forward-declared
+there is an opaque handle, and bindgen owns the layout.
+
+Both keys may be populated at once — port a cluster *and* wrap an API surface
+around it. Anchors union with the derived closure, so an item that is both is
+one entry.
+
+`out_of_scope.paths` refines what a directory entry expands to;
 `out_of_scope.features` is documentation only, for the same reason as
 `build.json`'s `features`.
 
@@ -148,7 +162,7 @@ crustify-oracle <repo_root> <target> query files --wrap-only
 
 Author `crustify/crates.json` — the whole-repo crate/module decomposition and
 the placement oracle. Schema: `docs/schemas/crates.md`; layout example:
-`templates/crates.json`.
+`specs/crates.json`.
 
 Crate names ARE the link-unit keys: they match `build.json`'s `libraries` and
 `executables`, and bindgen uses them as the library identity. `depends_on` comes
