@@ -19,7 +19,8 @@ from pathlib import Path
 #: Bump when a composer's OUTPUT changes for unchanged inputs.
 #:  1 — pair-keyed type nodes; `deps.types` carries `defined_in`.
 #:  3 — `wrap.anchors`; anonymous tags dropped from `wrap.types`.
-_VERSION = 3
+#:  4 — dag keeps every field of an anchor-DEFINED wrap struct.
+_VERSION = 4
 
 
 def fingerprint(layout, target) -> dict:

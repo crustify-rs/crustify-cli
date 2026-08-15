@@ -284,7 +284,8 @@ def _collect(analysis_root: Path,
              port_syms: set | None = None,
              port_fields: dict[str, set[str]] | None = None,
              codeql_dir: Path | None = None,
-             in_scope_types: set | None = None):
+             in_scope_types: set | None = None,
+             anchor_paths: set[str] | None = None):
     """Collect nodes/edges from the analysis tree, narrowed to one target.
 
     The tree is scope-agnostic and ACCUMULATES across targets: an entry that
@@ -305,10 +306,13 @@ def _collect(analysis_root: Path,
         this target and must not order its work.
 
     ``port_syms`` of None disables narrowing (whole-tree graph, the old
-    behaviour) — used by callers with no scope in hand.
+    behaviour) — used by callers with no scope in hand. ``anchor_paths``
+    (`scope.json`'s `wrap.anchors`) exempts a struct DEFINED in one of those
+    files from the wrap-struct field narrowing.
     """
     types: dict[str, TypeNode] = {}
     syms: dict[SymKey, SymNode] = {}
+    anchor_paths = anchor_paths or set()
 
     tmeta, tedges, tcasts, talias, tgen = (collect_types_csv(codeql_dir) if codeql_dir
                                      else ({}, {}, {}, {}, {}))
@@ -344,7 +348,16 @@ def _collect(analysis_root: Path,
         # is keyed by TAG (it comes from `depends_on.types[].fields`, which
         # names no file), so a colliding tag pools both entities' touched sets
         # -- which can only over-keep a field, never drop one.
-        keep = None if port_fields is None else port_fields.get(tag, set())
+        #
+        # Except when the struct's DEFINITION sits in an anchor file: a visible
+        # definition in a header the config named makes the fields the API, so
+        # every one of them orders real work and the narrowing would drop the
+        # whole layout. Same rule the wrap closure's field-walk applies, for
+        # the same reason -- and load-bearing on a wrap-only target, where an
+        # empty port scope makes `port_fields` empty and would otherwise leave
+        # every wrap struct a dependency leaf.
+        keep = (None if port_fields is None or (df and df in anchor_paths)
+                else port_fields.get(tag, set()))
         for fname, tname, tdf in tedges.get(key, ()):
             if keep is not None and fname not in keep:
                 continue
@@ -1034,7 +1047,9 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
         codeql_dir = Path(analysis_root).parent / "codeql"
     types, syms, talias = _collect(analysis_root, port_syms, port_fields,
                                    codeql_dir=codeql_dir,
-                                   in_scope_types=in_scope_types)
+                                   in_scope_types=in_scope_types,
+                                   anchor_paths=(_scope.load_anchor_paths(scope_json)
+                                                 if scope_json is not None else None))
     _populate_nfields(codeql_dir, types)
     # A generator macro is already a symbol node; hang its family off it rather
     # than minting a synthetic type, which would collide with this very node on
