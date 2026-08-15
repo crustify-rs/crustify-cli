@@ -39,6 +39,8 @@ def query(
     files: list[str] | None = None,
     wrap_only: bool = False,
     port_only: bool = False,
+    out_of_tree: bool = False,
+    in_tree: bool = False,
     fields: bool = False,
     ops: bool = False,
     methods: bool = False,
@@ -106,7 +108,8 @@ def query(
                     wrap_only=wrap_only, port_only=port_only)
     else:
         _enumerate(target, kind=kind, files=files,
-                   wrap_only=wrap_only, port_only=port_only)
+                   wrap_only=wrap_only, port_only=port_only,
+                   out_of_tree=out_of_tree, in_tree=in_tree)
 
 
 # A type SPEC is a struct tag / typedef, or one of two keywords naming an
@@ -392,10 +395,19 @@ def _lifetime_for(target: Path, type_name: str, array_only: bool = False) -> Non
 
 def _enumerate(
     target: Path, *, kind: str, files, wrap_only, port_only,
+    out_of_tree: bool = False, in_tree: bool = False,
 ) -> None:
     """List the (filtered) type/symbol entries straight from the manifest — one
     ``name<TAB>defined_in<TAB>declared_in`` line each (the placement provenance),
-    or whole records with ``--with-details``."""
+    or whole records with ``--with-details``.
+
+    ``out_of_tree`` / ``in_tree`` cut the ORIGIN axis, which is independent of
+    scope: whether the entity's home is outside this repository. Wrap scope
+    pools two populations a single flag cannot separate — a system or
+    toolchain header that will never be portable, and first-party code that is
+    wrapped only because THIS target does not port it. ``--wrap-only
+    --in-tree`` is the second, i.e. the remaining port backlog; ``--wrap-only
+    --out-of-tree`` is the permanent FFI floor."""
     from compose import scope
     from crustify.layout import Layout
 
@@ -445,6 +457,20 @@ def _enumerate(
             if port_only and not any(
                     scope.origin_key(c, d, decls) in port_keys for c in cands):
                 continue
+            # Origin: the entity's home path. CodeQL emits an ABSOLUTE path for
+            # anything outside the source root and a repo-relative one for
+            # everything inside, so containment is the whole test — no config
+            # to consult and nothing to drift. (build.json's system
+            # `include_dirs` cannot stand in: they are shared between libraries
+            # and go stale against the arch the database was extracted on.)
+            if out_of_tree or in_tree:
+                home = d or (scope.canonical_decl(
+                    decls if isinstance(decls, list) else [decls] if decls else []) or "")
+                outside = home.startswith("/")
+                if out_of_tree and not outside:
+                    continue
+                if in_tree and outside:
+                    continue
             if file_set and d not in file_set:
                 continue
             rows.append(e)

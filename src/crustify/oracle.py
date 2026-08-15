@@ -77,6 +77,17 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
                          "--ops/--methods → port-scope functions; --fields/--field-touchers "
                          "→ fields touched by port-scope code. (Facets are complete "
                          "by default.)")
+    og = p.add_mutually_exclusive_group()
+    og.add_argument("--out-of-tree", action="store_true", dest="out_of_tree",
+                    help="Enumeration only. Keep entries whose home is OUTSIDE the "
+                         "repository (system / toolchain headers). Combines with the "
+                         "scope flags: `--wrap-only --out-of-tree` is the permanent FFI "
+                         "floor — code that can never move to port scope.")
+    og.add_argument("--in-tree", action="store_true", dest="in_tree",
+                    help="Enumeration only. Keep entries whose home is INSIDE the "
+                         "repository. `--wrap-only --in-tree` is first-party code "
+                         "wrapped only because this target does not port it — the "
+                         "remaining port backlog.")
     p.add_argument("--name", nargs="+", action="extend", default=None, metavar="NAME",
                    help="No --name → enumerate; one → introspect; several → batch records.")
     p.add_argument("--file", nargs="+", default=None, metavar="FILE",
@@ -324,6 +335,8 @@ def _dispatch_query(args: argparse.Namespace, target: Path) -> None:
         files=getattr(args, "files", None),
         wrap_only=bool(getattr(args, "wrap_only", False)),
         port_only=bool(getattr(args, "port_only", False)),
+        out_of_tree=bool(getattr(args, "out_of_tree", False)),
+        in_tree=bool(getattr(args, "in_tree", False)),
         fields=bool(getattr(args, "fields", False)),
         ops=bool(getattr(args, "ops", False)),
         methods=bool(getattr(args, "methods", False)),

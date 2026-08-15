@@ -158,6 +158,20 @@ crustify-oracle <repo_root> <target> query files --port-only
 crustify-oracle <repo_root> <target> query files --wrap-only
 ```
 
+Wrap scope pools two populations that scope alone cannot separate.
+`--out-of-tree` / `--in-tree` cut the independent ORIGIN axis — whether the
+entity's home lies outside this repository:
+
+```bash
+# the permanent FFI floor
+crustify-oracle <repo_root> <target> query types --wrap-only --out-of-tree
+# the remaining port backlog
+crustify-oracle <repo_root> <target> query types --wrap-only --in-tree
+```
+
+The first can never move to port scope; the second is first-party code wrapped
+only because this target does not port it.
+
 ### 7. Crate placement and scaffold
 
 Author `crustify/crates.json` — the whole-repo crate/module decomposition and
