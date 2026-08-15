@@ -68,11 +68,11 @@ crustify-prim primitive usage. Emits a different JSON shape:
 ```json
 {"crate":"libgit2",
  "types":{"CType":118,"CBox":58,"SelfPtr":55,"CVec":38,...},   // struct refs in type positions
- "trait_impls":{"CCell":113,"CValued":27,"CFreed":20,...},      // impl <crustify trait> for T
- "macros":{"define_type":112,"impl_cvalued":23,"impl_freed":18,...},  // distinct invocations
+ "trait_impls":{"CCell":113,"CValued":27,"CDropped":20,...},      // impl <crustify trait> for T
+ "macros":{"define_ctype":112,"impl_cvalued":23,"impl_dropped":18,...},  // distinct invocations
  "ffi_calls":{"libgit2_sys::git__free":48,"libc::close":6,...},   // per-crate::symbol counts
  "ffi_call_sites":{"libgit2_sys::git__free":{"free_fn":[{"file":"...","count":2,"lines":[804,805]}],
-                                             "trait_impl:CLenFreed":[...]}, ...}}
+                                             "trait_impl:CLenDropped":[...]}, ...}}
 ```
 - `types` — references to the smart-pointer/cell **structs** in type positions
   (fn signatures, struct/enum/union fields), counted by resolved `DefId` (crate == `crustify`).
@@ -89,7 +89,7 @@ crustify-prim primitive usage. Emits a different JSON shape:
 - `ffi_call_sites` — the same calls grouped `{crate::symbol: {region: [{file,count,lines}]}}`,
   where `region` is the **enclosing body's** kind: `free_fn`, `inherent_impl`, or
   `trait_impl:<Trait>`. This separates a sanctioned wrapper chokepoint (a `git__free` inside
-  `trait_impl:CFreed` / `trait_impl:CLenFreed`) from port-body smell (`free_fn` /
+  `trait_impl:CDropped` / `trait_impl:CLenDropped`) from port-body smell (`free_fn` /
   `inherent_impl`), making the actionable subset a filter rather than a judgement. Pair with
   the symbol to triage manual `git__malloc` / `git__free` / `git__*array` uses vs. their safe
   `CVec` / `CBox` / `CVoidBox` wrappers.

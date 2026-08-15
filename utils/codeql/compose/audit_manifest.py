@@ -142,7 +142,7 @@ _RE_TRAIT_HEAD = re.compile(r"\btrait\s+\w+[^{;]*\{")
 
 _RE_DEFINE_TYPE = re.compile(r"define_ctype!\s*[({](.*?)[)}]", re.DOTALL)
 # Any wrapper-binding macro — `define_*ctype!` plus the lifecycle binders
-# (`impl_dropped!` / `impl_cloned!` / `impl_cloned_upref!` / …),
+# (`impl_dropped!` / `impl_cloned!` / `impl_cvalued!` / …),
 # each of which takes `ffi::T` as a binding argument. Those `ffi::T` mentions are bindings,
 # not business-logic smells, so they are excluded from `ffi_self_smell`.
 _RE_BIND_MACRO = re.compile(

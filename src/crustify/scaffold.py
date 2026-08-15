@@ -421,7 +421,7 @@ def _materialize_manifests(layout, doc: dict) -> str:
     workspace member, idempotently — so the wrap/port output is a real compilable
     package (``cargo check``-able), not a manifest-less module tree the agent has
     to invent. A wrapper crate depends on its ``-sys`` FFI crate, the ``crustify``
-    support crate (the ``define_type!`` / ``C*`` API), and the wrapper crates of
+    support crate (the ``define_ctype!`` / ``C*`` API), and the wrapper crates of
     its ``crates.json`` ``depends_on``. The ``// SAFETY:`` discipline is enforced
     by denying ``clippy::undocumented_unsafe_blocks`` workspace-wide, inherited
     via ``[lints] workspace = true`` (the ``-sys`` crates don't opt in, keeping

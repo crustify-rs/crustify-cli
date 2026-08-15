@@ -22,7 +22,7 @@ The deterministic scheduler chose which symbols and in which order.
 
 - `{target}`: dir path to the port-scope elements targeted by this session.
 
-- `{workspace_root}`: shared Cargo workspace (crustify/rust), homing modules and
+- `{workspace_root}`: shared Cargo workspace, homing modules and
 translations across multiple port sessions.
 
 - `{build_json}`: the build manifest -- libraries, link deps, build / test

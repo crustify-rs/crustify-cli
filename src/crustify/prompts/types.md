@@ -21,7 +21,7 @@ set or already wrapped on disk, except fallback edges due to cut SCCs.
   target dir may include several files, only a subset of them may be port-scope. Use the
   `crustify-oracle` skill to obtain the port and wrap closures relevant for your session.
 
-- `{workspace_root}`: shared Cargo workspace (crustify/rust), homing modules and
+- `{workspace_root}`: shared Cargo workspace, homing modules and
   translations across multiple port sessions.
 
 - `{build_json}`: the build manifest -- libraries, link deps, build / test commands,

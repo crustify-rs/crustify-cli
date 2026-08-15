@@ -947,7 +947,7 @@ def _populate_nfields(codeql_dir: Path, types: dict[str, TypeNode]) -> None:
     T1 ``fields.csv`` (``<crustify>/codeql/t1/fields.csv``, a sibling of the
     analysis tree). This is the whole struct, NOT the port-accessed subset that
     ``types.json``'s ``fields[]`` narrows to — a struct's translated surface
-    (``define_type!`` + accessors) scales with its field layout, so a type's
+    (``define_ctype!`` + accessors) scales with its field layout, so a type's
     own LoC is its field count. fields.csv attributes anonymous-struct fields to
     the naming typedef, so ``struct_name`` matches the type tag. Missing CSV →
     every ``nfields`` stays 0 (still deterministic, no CodeQL)."""

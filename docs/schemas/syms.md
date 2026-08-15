@@ -185,7 +185,8 @@ acts on is named in `for`.
 - **`is_cloner`** -- `null`, or `{deep, upref}`: the symbol produces a copy of
   the arg. `deep` = a fresh allocation -> `Clone for CBox` on a type with no
   refcount, else a plain method (a refcounted type's `Clone` is its up_ref).
-  `upref` = a refcount bump -> also `Clone for CBox`, via `impl_cloned_upref!`.
+  `upref` = a refcount bump -> also `Clone for CBox`, via
+  `impl_cloned!(N, c, up_ref = …)`.
   Both MAY be set: a body that branches between the two, or a `void *` whose
   concrete element decides at runtime. Requires the arg to be `borrowed` (it
   reads the source to copy it).

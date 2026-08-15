@@ -31,6 +31,8 @@ Rust consumers use the safe type's API, never raw pointers or `unsafe` blocks.
 
 ### The three types
 
+Based on primitives from `crustify-prim`.
+
 `define_ctype!(Foo, FooRef, FooMut, ffi::foo_st)` emits, per wrapped C type:
 
 | Type | Size | Role |
@@ -82,11 +84,11 @@ ownership semantics, cardinality, etc.
 
 ## Functions, callbacks, and inline function pointers
 
- **Wrap-scope** functions, callbacks, and inline function pointers get one or more safe
+ Wrap-scope functions, callbacks, and inline function pointers get one or more safe
   wrappers that serialize wrapped references before calling their `ffi::` variant,
   and deserialize results back to safe wrappers upon return.
  
- **Port-scope** ones are translated to native Rust and call the safe API when
+ Port-scope ones are translated to native Rust and call the safe API when
  needing FFI dependencies.
 
 ---

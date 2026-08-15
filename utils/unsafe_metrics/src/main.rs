@@ -471,7 +471,7 @@ fn count_ty(tcx: TyCtxt<'_>, t: Ty<'_>, m: &mut std::collections::BTreeMap<Strin
 ///    this is the crate-wide unsafe-FFI-call surface.
 ///  - `ffi_call_sites`: those calls grouped `{crate::symbol: {region: [{file,count,lines}]}}`
 ///    where region is `free_fn` / `inherent_impl` / `trait_impl:<Trait>` — so a
-///    `git__free` in `trait_impl:CFreed` (a sanctioned wrapper dtor) is separable
+///    `git__free` in `trait_impl:CDropped` (a sanctioned wrapper dtor) is separable
 ///    from one in a `free_fn` port body (actionable smell)
 fn usage_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
     use std::collections::BTreeMap;
@@ -488,7 +488,7 @@ fn usage_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
     let mut ffi_calls: BTreeMap<String, u64> = BTreeMap::new();
     // crate::symbol -> region ("free_fn" | "inherent_impl" | "trait_impl:<Trait>")
     // -> sites. The region separates wrapper-teardown chokepoints (a `git__free`
-    // in `trait_impl:CFreed` / `:CLenFreed`) from port-body smell (`free_fn` /
+    // in `trait_impl:CDropped` / `:CLenDropped`) from port-body smell (`free_fn` /
     // `inherent_impl`), so the actionable subset is a filter, not a judgement.
     let mut ffi_sites: BTreeMap<String, BTreeMap<String, Vec<(String, usize)>>> = BTreeMap::new();
     for owner in tcx.hir_body_owners() {
@@ -642,7 +642,7 @@ fn enclosing_impl_self(tcx: TyCtxt<'_>, mut did: DefId) -> Option<DefId> {
 
 /// Classify a body owner's enclosing region, for grouping ffi-call sites:
 /// `trait_impl:<Trait>` (a call inside `impl Trait for T` — e.g. the
-/// `CFreed` / `CLenFreed` wrapper-teardown chokepoints), `inherent_impl`
+/// `CDropped` / `CLenDropped` wrapper-teardown chokepoints), `inherent_impl`
 /// (a method in `impl T { .. }`), or `free_fn` (a free function or any
 /// other body not in an impl).
 fn call_region(tcx: TyCtxt<'_>, mut did: DefId) -> String {

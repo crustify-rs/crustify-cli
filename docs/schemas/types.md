@@ -107,9 +107,7 @@ Three agent-fillable keys ride on a field record:
   (the datum an up_ref bumps and a down-ref decrements), `false`/absent
   otherwise. Any field kind: a refcount is a by-value member, not a pointer. It
   decides which ROUTINE backs the type's `CDropped` / `CCloned` impl (down-ref
-  and up_ref vs `*_free` and `*_dup`); the wrapper is `CBox` either way. It also
-  names the field a generated shim reads when the type carries a refcount but
-  exposes no up_ref routine.
+  and up_ref vs `*_free` and `*_dup`); the wrapper is `CBox` either way.
 - **`locked_by`** -- the concurrency binding on ANY field (pointer or not) that
   is accessed under a lock: `null`, or `{lock, lock_op, unlock_op}`. `lock` names
   the type's field or global variable storing the lock object that guards this field; `lock_op` is

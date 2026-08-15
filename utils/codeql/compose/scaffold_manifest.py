@@ -468,7 +468,7 @@ def _file_stub(st: FileStub) -> str:
 # captured name runs to the first whitespace, so a filled anchor — which appends
 # its defining file and sometimes a gloss — reads identically to an unfilled one.
 # Leading whitespace is allowed: a *filled* anchor is routinely an indented
-# ``///`` doc comment inside an ``impl`` / ``define_type!`` block, not a column-0
+# ``///`` doc comment inside an ``impl`` / ``define_ctype!`` block, not a column-0
 # line — missing those would make the reconcile pass re-append a duplicate stub
 # for already-done work.
 #
