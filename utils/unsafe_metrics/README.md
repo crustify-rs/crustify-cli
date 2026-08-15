@@ -17,8 +17,8 @@ the regex pass in `audit.py` for the subset of properties below.
 ### Region attribution of unsafe blocks
 | field | meaning |
 |---|---|
-| `unsafe_blocks_wrapper_impl` | unsafe blocks inside `impl T` / `impl Tr for T` where `T` is a `define_type!` wrapper |
-| `wrapper_impl_macro` | ...of which macro-generated (the `define_type!` `get`/`get_mut`/CCell accessors) |
+| `unsafe_blocks_wrapper_impl` | unsafe blocks inside `impl T` / `impl Tr for T` where `T` is a `define_*ctype!` wrapper |
+| `wrapper_impl_macro` | ...of which macro-generated (the `define_*ctype!` seam accessors) |
 | `wrapper_impl_handwritten` | ...of which hand-written wrapper methods |
 | `unsafe_blocks_ffi_export` | unsafe blocks inside a `mod ffi_export` (the sanctioned C-ABI re-export seam) |
 
@@ -26,11 +26,11 @@ the regex pass in `audit.py` for the subset of properties below.
 | field | meaning |
 |---|---|
 | `rp_wrap_nonseam_args` / `_rets` | raw-ptr args / returns in wrapper-impl methods that are NOT seam methods |
-| `rp_wrap_nonseam_wrapped` | ...of those, pointee is a type that has a `define_type!` wrapper (a safe alternative exists) |
+| `rp_wrap_nonseam_wrapped` | ...of those, pointee is a type that has a `define_*ctype!` wrapper (a safe alternative exists) |
 | `rp_outside_args` / `_rets` | raw-ptr args / returns in fns outside wrapper impls AND outside `mod ffi_export` |
-| `rp_outside_wrapped` | ...of those, pointee has a `define_type!` wrapper available |
-| `mut_borrow_wrapper` | `&mut W` in signatures (incl. `&mut self`) where `W` is a `define_type!` wrapper — a discipline smell (wrappers interior-mutate via `&self`); should be 0 |
-| `field_proj_wrapped` | `(*p).field` (incl. `addr_of!((*p).field)`) where `p: *C` and `C` has a `define_type!` wrapper |
+| `rp_outside_wrapped` | ...of those, pointee has a `define_*ctype!` wrapper available |
+| `mut_borrow_wrapper` | `&mut W` in signatures (incl. `&mut self`) where `W` is an **aliased** wrapper (`CAliasedCell`) — a discipline smell, since C may write through a pointer it retains and the write path is `&self` + interior mutability; should be 0. A `CCell` wrapper claims nothing outside Rust points at it, so `&mut` there is the intended spelling and is not counted |
+| `field_proj_wrapped` | `(*p).field` (incl. `addr_of!((*p).field)`) where `p: *C` and `C` has a `define_*ctype!` wrapper |
 | `field_proj_outside_impl` | ...of those, the subset outside any impl/trait body — the smell (a port body bypassing the accessor instead of calling it); inside-impl projections are accessor definitions (sanctioned) |
 | `void_ptr_sanctioned` / `void_ptr_smell` | `*const/*mut c_void` in signatures, split: sanctioned (seam method / `mod ffi_export`) vs smell (ordinary signatures, where a typed pointer/wrapper is preferred). Signature-scoped; `as *mut c_void` casts not counted |
 
@@ -42,9 +42,13 @@ the regex pass in `audit.py` for the subset of properties below.
 | `total_stmts` | `hir::Stmt` nodes crate-wide (denominator) |
 
 ## Classification model (all resolution-based, not textual)
-- **wrapper type `T`** — a struct whose def-span carries a `*::define_type!`
-  macro-expansion context (bare `define_type!` or path-qualified
-  `crustify::define_type!`). Its `CType<C>` field maps `C` -> "has a wrapper".
+- **wrapper type `T`** — a struct implementing a seam trait, i.e. carrying the
+  `type C` associated item (`CLayout`, or the pre-split `CCell`). `C` then maps
+  to "has a wrapper". Keying on the trait rather than the macro covers the
+  generic and lifetime-carrying wrappers the macros cannot express.
+- **aliased wrapper** — the subset implementing `CAliasedCell`, i.e. wrapping
+  `CAliasedType<C>`: C may hold a pointer and write through it. The set for
+  which `&mut` is a smell.
 - **wrapper impl** — an `impl` whose self-type (HIR path-resolved) is a wrapper `T`.
 - **seam method** — fn named `as_ptr`/`as_mut_ptr`/`as_c_ptr`/`as_raw`/`from_ptr`/
   `from_raw`/`to_ptr`/`to_raw`/`into_raw` (raw ptrs there are the expected boundary).
@@ -90,7 +94,7 @@ crustify-prim primitive usage. Emits a different JSON shape:
   `inherent_impl`), making the actionable subset a filter rather than a judgement. Pair with
   the symbol to triage manual `git__malloc` / `git__free` / `git__*array` uses vs. their safe
   `CVec` / `CBox` / `CVoidBox` wrappers.
-- Cross-checks: `CType` refs ~= `define_type!` ~= `CCell` impls; trait-impl counts > macro
+- Cross-checks: cell refs ~= `define_*ctype!` ~= seam-trait impls; trait-impl counts > macro
   counts where lifecycle impls are hand-written rather than macro-generated.
 - Not counted: `COut` (a type alias -> typeck-transparent).
 
@@ -100,7 +104,7 @@ UM_MODE=usage  RUSTC=.../unsafe_metrics ... cargo +nightly build
 
 ## Seed mode (`UM_MODE=seed`)
 Per-seed audit metrics (like `audit.py`'s seed model), scoped to each seed's
-region, plus a `naked` footprint. A **seed** is a **type** (a `define_type!`
+region, plus a `naked` footprint. A **seed** is a **type** (a `define_*ctype!`
 wrapper) or a **function**; selectors union:
 
 | env filter | resolves to |
@@ -151,7 +155,7 @@ RUSTC=.../unsafe_metrics/target/debug/unsafe_metrics SYSROOT=$NS LD_LIBRARY_PATH
 wrapper detection).
 
 ## Example (libgit2 crustify workspace, non-sys crates)
-3072 unsafe blocks: 54% in `define_type!` wrapper impls (526 macro + 1145 hand),
+3072 unsafe blocks: 54% in `define_*ctype!` wrapper impls (526 macro + 1145 hand),
 18% in `mod ffi_export`, 27% other. Signature raw ptrs: 164 in wrapper non-seam
 methods (81% have a wrapper available), 91 outside excl. ffi_export (24% do).
 1485 type-confirmed raw-ptr derefs.

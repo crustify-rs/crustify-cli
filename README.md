@@ -248,7 +248,7 @@ decide when a type is ready to be nativized.
 **Safety Audit.** Crustify ships a deterministic pass over the compiled Rust's `HIR` and `typeck`
 that counts the number of unsafe lines/statements/blocks and the number of raw pointers, flagging
 FFI types/symbols that already have a safe wrapper or Rust-native shape, as well as the number of
-`&mut` mutable borrows and field projections outside `impl` blocks. The translator agents are
+`&mut` mutable borrows on aliased wrappers and field projections outside `impl` blocks. The translator agents are
 instructed to use the audit pass to collect unsafe and potentially-UB sites, and to fix them unless
 justified.
 

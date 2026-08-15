@@ -8,10 +8,10 @@ global. For each seed the audit reports:
     (signature args) / ``raw_ptr_body`` (every other raw ptr `*mut`/`*const` in
     the body — casts, ``let x: *T``, turbofish, field/`static` decls),
     ``borrow_mut`` (items taking the wrapper as ``&mut self`` / ``&mut <Wrapper>``
-    — a §8 smell, since the `UnsafeCell`-backed wrapper interior-mutates through
+    — a §8 smell for an ALIASED wrapper, which interior-mutates through
     ``&self``), ``ffi_self`` (raw ``ffi::T`` use *inside* its own impl),
     ``ffi_self_smell`` (the subset of ``ffi_self`` that is NEITHER the
-    ``define_type!`` binding NOR inside an FFI-seam routine — with ``self`` in
+    ``define_*ctype!`` binding NOR inside an FFI-seam routine — with ``self`` in
     scope there is no reason to name ``ffi::T``), ``raw_ptr_void`` (the
     ``*mut/const c_void`` subset of the raw-ptr counts), and ``raw_ptr_seam``
     (raw ptrs inside seam routines — expected plumbing, subtract to isolate
@@ -20,7 +20,7 @@ global. For each seed the audit reports:
     re-export; a wrap body legitimately uses raw ptrs at the FFI seam),
     measured over its impl region **minus** its `mod ffi_export` C-ABI shim
     (whose raw ptrs / `ffi::` are legitimate marshalling, not a smell):
-      * **type** ``T`` (wrapper ``W``) — its ``define_type!(…, ffi::T)`` plus
+      * **type** ``T`` (wrapper ``W``) — its ``define_*ctype!(…, ffi::T)`` plus
         every ``impl W`` / ``impl … for W`` / ``impl_*!(W, …)`` block;
       * **symbol** ``S`` — the ``/// Replaces: S`` idiomatic fn plus its
         ``mod ffi_export`` re-export.
@@ -30,7 +30,7 @@ global. For each seed the audit reports:
     anywhere in the tree (the wrapper being bypassed). With per-site file + line
     list.
 
-A seed with no wrapper (no ``define_type!`` / ``/// Replaces:``) is reported
+A seed with no wrapper (no ``define_*ctype!`` / ``/// Replaces:``) is reported
 with ``wrapper: null`` and just its naked footprint, so unwrapped-but-used
 entities surface.
 
@@ -38,7 +38,7 @@ Alongside the per-seed entries, a seed-independent **`global`** section
 (``_global_scan``) reports tree-wide smells the seed model can't: raw-ptr
 signatures **outside** every impl/``ffi_export``/seam region (``outside_impl``),
 the ``ffi::Ident`` type surface partitioned into ``wrapped_bypass`` (a
-``define_type!`` exists and was bypassed) vs ``unwrapped`` (``ffi_type_surface``),
+``define_*ctype!`` exists and was bypassed) vs ``unwrapped`` (``ffi_type_surface``),
 a ``*c_void`` filter split into sanctioned vs smell (``void_ptr``), and a
 **raw-field-projection** filter (``raw_field_proj``) — ``(*x.as_ptr()).field`` /
 ``addr_of!((*p).field)`` sites split into sanctioned (accessor definitions, in an
@@ -85,7 +85,7 @@ from pathlib import Path
 #         # raw_ptr_body_smell / ffi_self_smell fire only for port symbols.
 #         "naked": 0, "naked_sites": []
 #       }
-#       # an unwrapped seed (no define_type!/Replaces found) reports just its
+#       # an unwrapped seed (no define_*ctype!/Replaces found) reports just its
 #       # footprint: {"wrapper": null, "home": null, "own": null, "naked": N, ...}
 #     ],
 #     # seed-independent, tree-wide — always present, identical for any selector:
@@ -140,15 +140,20 @@ _RE_RAW_FIELD_PROJ = re.compile(
     r"|(?<!addr_of!)(?<!addr_of_mut!)\(\s*\*\s*[\w.]+\.as_(?:mut_)?ptr\s*\(\s*\)\s*\)\s*\.\w")
 _RE_TRAIT_HEAD = re.compile(r"\btrait\s+\w+[^{;]*\{")
 
-_RE_DEFINE_TYPE = re.compile(r"define_type!\s*[({](.*?)[)}]", re.DOTALL)
-# Any wrapper-binding macro — `define_type!` plus the lifecycle binders
+_RE_DEFINE_TYPE = re.compile(
+    r"define_(?:aliased_|uninit_)?ctype!\s*[({](.*?)[)}]", re.DOTALL)
+# Any wrapper-binding macro — `define_*ctype!` plus the lifecycle binders
 # (`impl_dropped!` / `impl_cloned!` / `impl_cloned_upref!` / …),
 # each of which takes `ffi::T` as a binding argument. Those `ffi::T` mentions are bindings,
 # not business-logic smells, so they are excluded from `ffi_self_smell`.
 _RE_BIND_MACRO = re.compile(
-    r"\b(?:define_type|impl_[a-z_]+)!\s*[({](.*?)[)}]", re.DOTALL)
+    r"\b(?:define_(?:aliased_|uninit_)?ctype|impl_[a-z_]+)!\s*[({](.*?)[)}]",
+    re.DOTALL)
 _RE_DT_NAMES = re.compile(r"(\w+)\s*,\s*ffi::(\w+)")
-_RE_CTYPE = re.compile(r"\bCType\s*<\s*ffi::(\w+)")
+# The three cells a wrapper may be `#[repr(transparent)]` over: `CAliasedType`
+# (C may write through a pointer it retains), `CType` (nothing outside Rust
+# points at it), `CUninitType` (the construction window).
+_RE_CTYPE = re.compile(r"\bC(?:Aliased|Uninit)?Type\s*<\s*ffi::(\w+)")
 _RE_REPLACES = re.compile(r"//+\s*(?:Replaces|Wraps):\s*(\w+)")
 _RE_MOD_FFI_EXPORT = re.compile(r"\bmod\s+ffi_export\b")
 
@@ -186,7 +191,7 @@ def _re_ffi_bare_type(tag: str) -> re.Pattern:
 # **explicitly by name** (no `c_*` / `*_t` wildcard) so genuine wrappable C
 # types that merely share a prefix (e.g. `git_object_t`, `git_oid_t`) are never
 # misclassified as scalars. `ffi_type_surface` buckets these separately from the
-# actionable `unwrapped` (real C types still lacking a `define_type!`).
+# actionable `unwrapped` (real C types still lacking a `define_*ctype!`).
 _FFI_SCALAR_ALIASES = frozenset({
     # core::ffi primitives
     "c_void", "c_char", "c_schar", "c_uchar", "c_short", "c_ushort",
@@ -400,7 +405,7 @@ def load_tree(rust_root: Path) -> tuple[dict[str, str], dict[str, str]]:
 
 
 def build_index(raw: dict[str, str], clean: dict[str, str]):
-    """``types[c_tag] = (home_rel, wrapper_name)`` from ``define_type!`` /
+    """``types[c_tag] = (home_rel, wrapper_name)`` from ``define_*ctype!`` /
     ``CType<ffi::T>``; ``syms[c_fn] = home_rel`` from ``/// Replaces:``."""
     types: dict[str, tuple[str, str]] = {}
     syms: dict[str, str] = {}
@@ -426,7 +431,7 @@ def build_index(raw: dict[str, str], clean: dict[str, str]):
 # --------------------------------------------------------------------------- #
 def _type_impl_region(clean: str, wrapper: str | None) -> list[tuple[int, int]]:
     """Spans of a type's own implementation in its home file: every
-    ``define_type!`` / ``impl … <wrapper> … {}`` / ``impl_*!(… <wrapper> …)``."""
+    ``define_*ctype!`` / ``impl … <wrapper> … {}`` / ``impl_*!(… <wrapper> …)``."""
     spans: list[tuple[int, int]] = []
     for m in _RE_DEFINE_TYPE.finditer(clean):
         spans.append((m.start(), m.end()))
@@ -503,8 +508,13 @@ def _own_counts(clean: str, spans: list[tuple[int, int]], c_tag: str,
     call ``ffi::S`` (it claims to replace C); a WRAP body legitimately does both.
 
     ``borrow_mut`` — items that take the wrapper as ``&mut`` (``&mut self`` or
-    ``&mut <Wrapper>``). Wrappers are `UnsafeCell`-backed (interior mutability),
-    so methods should take ``&self``; a ``&mut`` borrow is a §8 discipline smell."""
+    ``&mut <Wrapper>``). A smell for the ALIASED representation only: C may hold
+    a pointer to a `CAliasedType` wrapper and write through it, so ``&mut``
+    would assert a ``noalias`` the seam cannot honour and the write path is
+    ``&self`` + interior mutability. A `CType` wrapper claims the opposite —
+    nothing outside Rust points at it — so ``&mut`` there is the intended
+    spelling. This textual pass cannot tell them apart; the resolution-aware
+    ``utils/unsafe_metrics`` keys on the seam trait and is authoritative."""
     ffx = ffx or []
 
     def smell(pos):
@@ -512,7 +522,7 @@ def _own_counts(clean: str, spans: list[tuple[int, int]], c_tag: str,
         return _in_spans(pos, spans) and not _in_spans(pos, ffx)
 
     seam = _seam_spans(clean)
-    # binding-macro spans (define_type! + impl_*! lifecycle binders): the `ffi::T`
+    # binding-macro spans (define_*ctype! + impl_*! lifecycle binders): the `ffi::T`
     # they name is the wrapper binding, not a smell.
     decl = [(m.start(), m.end()) for m in _RE_BIND_MACRO.finditer(clean)]
     # `ffi_self` — raw `ffi::<tag>` inside the entity's own idiomatic impl. For a
@@ -523,7 +533,7 @@ def _own_counts(clean: str, spans: list[tuple[int, int]], c_tag: str,
     ffi_self = sum(1 for m in ffi_re.finditer(clean) if smell(m.start()))
     if is_type:
         # ffi_self_smell — `ffi::T` in a TYPE's own impl that is NEITHER the
-        # `define_type!`/`impl_*!` binding NOR inside an FFI-seam routine: with
+        # `define_*ctype!`/`impl_*!` binding NOR inside an FFI-seam routine: with
         # `self` (→ `self.as_ptr()`) in scope there is no reason to name `ffi::T`.
         ffi_self_smell = sum(
             1 for m in ffi_re.finditer(clean)
@@ -633,8 +643,8 @@ def _global_scan(clean_files, types_idx, ffx_spans) -> dict:
       - **seam** — raw-ptr returns/args inside seam routines (``as_ptr`` etc.);
         the *expected* pointer plumbing, reported for reference / subtraction.
       - **ffi_type_surface** — every ``ffi::Ident`` in type position that is
-        naked (outside any impl / ``define_type!`` / ``ffi_export``), partitioned
-        by whether ``Ident`` has a ``define_type!`` wrapper (``wrapped_bypass`` —
+        naked (outside any impl / ``define_*ctype!`` / ``ffi_export``), partitioned
+        by whether ``Ident`` has a ``define_*ctype!`` wrapper (``wrapped_bypass`` —
         the wrapper exists and was bypassed), is a named scalar/primitive alias
         (``scalar`` — ``_FFI_SCALAR_ALIASES``, not wrappable), or is a real C type
         still lacking a wrapper (``unwrapped``; ``unwrapped_tags`` by frequency).
@@ -688,7 +698,7 @@ def _global_scan(clean_files, types_idx, ffx_spans) -> dict:
             g["outside_impl"]["sites"].append(
                 {"file": rel, "count": len(lines), "lines": lines})
 
-        # naked ffi::Ident type uses, partitioned by has-define_type!
+        # naked ffi::Ident type uses, partitioned by has-define_*ctype!
         for m in _RE_FFI_TYPE_USE.finditer(c):
             pos = m.start()
             if (_in_spans(pos, impl_spans) or _in_spans(pos, decl_spans)

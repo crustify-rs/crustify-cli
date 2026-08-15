@@ -166,27 +166,85 @@ under a lock, so a plain Rust read/write of those bytes is a DATA RACE, which
 `UnsafeCell` does not address. Delegate to `X_up_ref` / `X_free`, or expose it
 as a real atomic.
 
-**Proposed shape.** Three object-level states, not two families, with the
-conversion direction carrying the structure -- widening always sound, narrowing
-carrying one obligation each:
+### DONE -- both axes (2026-08-14)
+
+Implemented in `crustify-prim` on branch `uninit-split`. Per-field cells stay
+open, below.
+
+```rust
+CAliasedType<T> = UnsafeCell<T>              + PhantomPinned  // C may alias it
+CType<T>        = T                          + PhantomPinned  // nothing does
+CUninitType<T>  = UnsafeCell<MaybeUninit<T>> + PhantomPinned  // construction
+
+unsafe trait CLayout      { type C; }                                  // shared: repr contract
+unsafe trait CAliasedCell : CLayout                                    // as_ptr(&self) -> *mut C
+unsafe trait CCell        : CLayout                                    // as_ptr -> *const C, as_mut_ptr(&mut self)
+unsafe trait CUninitCell  { type C; type Init: CLayout<C = Self::C>; }
+unsafe trait COwnedExcl   : CCell                                      // no second Rust handle
+unsafe trait CElem                                                     // &[Self] is a sound view
+```
+
+Conversions: widening free on the init axis (`as_uninit`), obligated on both
+directions of the aliasing axis, since the aliased cell's write-through-`&self`
+capability cannot be derived from a `readonly` reference:
 
 ```
-COwned<T>  ->  CInit<T>  ->  CType<T>      safe, free, repr-compatible
-CType<T>   ->  CInit<T>  ->  COwned<T>     unsafe: assume_init / assume_exclusive
+&CAliasedType<T>  ->  &CUninitType<T>    safe   (as_uninit)
+&CUninitType<T>   ->  &CAliasedType<T>   unsafe (assume_init_ref)
+&mut CType<T>     ->  &CAliasedType<T>   safe   (as_aliased)
+&CAliasedType<T>  ->  &CType<T>          unsafe (assume_exclusive)
 ```
 
 An agent that cannot establish exclusivity simply does not call the narrowing
-constructor, so the automated judgement fails closed. Name by the invariant
-asserted (`CShared`/`CExclusive`, `CAliased`/`COwned`) rather than
-safe/unsafe: both are safe to USE, and the conservative one asserts LESS, so it
-is the safer one to be wrong about.
+constructor, so the automated judgement fails closed. `CAliasedType` keeps the
+default and the pre-split API byte-for-byte.
 
-**Cheapest first move, no new machinery:** add `CInit<T>` alone
-(`UnsafeCell<T>` + `PhantomPinned`, no `MaybeUninit`) with a safe widening to
-`CType` and an `unsafe assume_init`. That drops the validity ceremony on every
-already-constructed object, which is most of them -- one type, one obligation.
+`CAliasedCell` and `CCell` are DISJOINT, which is what keeps `&mut`
+structurally unreachable for an aliased type. `&mut` also needs a second fact
+`CCell` does not carry -- no second *Rust* handle, since a `CBox` is equally the
+refcount share -- so it is `COwnedExcl` + `CBox::get_mut`, a named method rather
+than `DerefMut` on any handle.
 
-**Costs to price before committing.**
+On the init axis both cells keep `UnsafeCell` and neither hands out `&mut`:
+there is nothing to optimize in the construction window, and `&mut` would assert
+a well-formedness that is exactly what does not hold there. So no accessor set
+changes,
+`CBoxUninit`'s `Deref -> &T` survives, and construction keeps the `&self` +
+`as_ptr` + `addr_of_mut!` path a formed object uses. `as_mut_ptr(&mut self)`
+stays -- that is `&mut` on the handle, not on the pointee.
+
+Naming follows the crate's convention (`CBox`/`CBoxUninit`,
+`CDropped`/`CDroppedUninit`, `from_raw`/`from_raw_uninit`): plain name for the
+normal case, `Uninit` suffix for the construction variant.
+
+`CBoxUninit<T: CUninitCell + CDroppedUninit>::assume_init(self) -> CBox<T::Init>`.
+The `Init` binding is what stops `CBoxUninit<FooUninit>` promoting to
+`CBox<Bar>`. Every other handle stays on `CCell`. `define_type!` is unchanged; a
+new `define_uninit_type!(FooUninit, Foo, ffi::foo_st)` emits the twin -- for the
+13 openssl types that implement `CDroppedUninit`, not all 123.
+
+`zeroed()` stays on `CCell` and stays safe. Across the three sys crates: 265
+bindgen structs, 0 `pub enum`, 0 `NonNull`, 0 reference fields, 0 `bool` fields
+-- C headers have no niche types and bindgen emits enums as integer consts, so
+all-zero is a valid bit pattern for every wrapped struct. `uninit()` moves to
+`CUninitCell`; it produces genuinely invalid bytes.
+
+Migration measured on the openssl tree:
+
+| site | count | action |
+|---|---|---|
+| `define_type!` | 123 | unchanged |
+| `zeroed()` | 470 | unchanged |
+| `uninit()` | 51 | twin, or switch to `zeroed()` -- breaks loudly |
+
+What the compiler does NOT catch: `CType` keeps its name and changes meaning, so
+the 718 `from_ptr` / `from_raw` sites still compile while now asserting a fully
+valid pointee. `uninit()` covers the construction path; it does not cover C
+handing back an object mid-teardown or mid-reset (`SSL_clear`, a partially freed
+parent, a destructor callback receiving `self`). Targeted pass over the callback
+and teardown seams, not a blanket audit.
+
+**Costs to price before committing (per-field cells).**
 
 - Per-field cells require emitting a `#[repr(C)]` MIRROR struct with a layout
   assertion, not wrapping bindgen's opaque `ffi::T` as today. Highest value,
