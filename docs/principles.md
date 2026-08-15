@@ -1,45 +1,82 @@
-# crustify C→Rust port: always-on principles
+# Crustify Principles for Migrating C to Rust
 
-The non-negotiable core every porting/wrapping agent must hold in context at all
-times.
+Crustify translator agents must follow these to guide their work.
 
 ---
 
 ## Core translation philosophy
 
-Based on interior mutability: types stay layout-compatible with C, wrapped in
-safe abstraction so that Rust consumers can use them without trading safety.
-FFI functions and callbacks are also wrapped in safe function wrappers with
-signatures that use the safe type wrappers. Unsafe footprint reduced to a
-minimal, auditable surface inside type implementations for accessing raw fields
-and safe FFI function wrappers for making FFI calls.
+Types stay layout-compatible with C, wrapped in safe abstraction so that Rust
+consumers can use them safely with Rust-native features (RAII, lifetimes, bounds
+checking, type-safety) without introducing undefined behavior hazards. FFI
+functions and callbacks are wrapped likewise, with signatures that use the safe
+type wrappers. Unsafe footprint reduced to a minimal, auditable surface: field
+accessors on the type handles, and safe FFI wrappers for making FFI calls.
 
 ---
 
-## Types
+## Scope policy
 
- Both **port- and wrap-scope** types stay layout-compatible with C until they can be
- opacified, which is mainly applicable to port-scope structs. The types that must stay
- interoperable with C have their definition wrapped in newtypes and field accessors
- placed in `impl` blocks on the type.
- 
- Rust consumers of types use the safe type's API instead of raw pointers or
- `unsafe` blocks.
+Wrap-scope types stay layout-compatible with C.
 
-**Pointer fields.** Every in-scope field that is an owned reference, gets at least:
- 
- - a setter that moves ownership into `self`, dropping the old reference
-   and setting the new one using `addr_of_mut!(...)`
- 
- - two getters: one which transfers ownership out from `self`, leaving
-   the field valid, and one which borrows the field's shared reference `&T`.
- 
- - fields that are embedded by value get a borrow projecting
-   getter `&T` over `addr_of(...)`; the caller reads through
-   `T`'s own `self` accessors.
+Port-scope types initially do too, and get opacified once the C side no longer
+accesses their fields. They also get fully nativized: storage allocation and
+free become owned by Rust.
 
-   A field may have multiple accessor variants, depending on its type resolution,
-   ownership semantics, cardinality, etc.
+Rust consumers use the safe type's API, never raw pointers or `unsafe` blocks.
+
+---
+
+## Representation
+
+### The three types
+
+`define_ctype!(Foo, FooRef, FooMut, ffi::foo_st)` emits, per wrapped C type:
+
+| Type | Size | Role |
+|---|---|---|
+| `Foo` | the C struct's | layout; embeds by value in a `#[repr(C)]` mirror; what an owning handle points at |
+| `FooRef<'a>` | one pointer, `Copy` | shared borrow; **getters**, `&self` |
+| `FooMut<'a>` | one pointer | exclusive borrow; derefs to `FooRef`; **setters**, `&mut self` |
+
+No aliasing is asserted on the bytes of `Foo`, since C may reach them — no
+`&Foo` / `&mut Foo` is taken, in a signature or a body. The handles wrap a
+pointer, so a reference to one covers Rust-owned storage: `&mut FooMut` is
+ordinary, and reborrows implicitly.
+
+Owning handles (`CBox<Foo>`, `CVal<Foo>`, `CBoxWith<Foo, D>`) yield handles via
+`as_ref()` / `as_mut()`, not `Deref`.
+
+### Field access
+
+Project fields with `addr_of!` / `addr_of_mut!` (equivalently `&raw const` /
+`&raw mut`), which yield raw pointers without forming a reference to the field,
+and never take `&(*p).field` / `&mut (*p).field`. A field-level reference is a
+reference over memory C may write — the same rule that keeps `&Foo` out, applied
+one level down. It is also the only form that is sound on a field C has not yet
+written: naming the place loads nothing, where reading it would produce an
+invalid value.
+
+The pointer comes from the handle: reads off `FooRef::as_ptr` (`*const`), writes
+off `FooMut::as_mut_ptr` (`*mut`).
+
+### Accessor contract
+
+Every in-scope field that is an owned reference gets at least:
+
+- a setter on `FooMut` that moves ownership into `self`, dropping the old
+  reference and setting the new one;
+
+- two getters: one on `FooMut` that transfers ownership out of `self`, leaving
+  the field valid, and one on `FooRef` that borrows it as the field type's own
+  `TRef<'_>` handle;
+
+- a field embedded by value gets a projecting getter returning `TRef<'_>` /
+  `TMut<'_>` over `addr_of!` / `addr_of_mut!`; the caller reads through `T`'s own
+  handle accessors.
+
+A field may have multiple accessor variants, depending on its type resolution,
+ownership semantics, cardinality, etc.
 
 ---
 
@@ -75,14 +112,14 @@ to our conventions.
 
 ---
 
-## Pointers
+## Ownership analysis
 
 To leverage idiomatic Rust features, we express each pointer argument,
 return, field, and variable based on ownership facets submitted through the
 `crustify-oracle` skill via the smart pointers and traits from the
 `crustify-prim` skill.
 
-### Ownership analyis
+### Footprint
 
 For struct fields, pointer args and return (both functions and function pointers)
 analysis is codebase-wide, unscoped, to catch the complete usage footprint of the
@@ -121,43 +158,25 @@ fully-checked Rust. This is load-bearing - the steps assume it.
     idiomatic `pub(crate) fn` (its `super::` sibling).
     
 - **Inner-module `unsafe` blocks are ONLY allowed in the following cases:**
-    (1) inside `impl T` blocks for reaching a wrapped type's state through its
-    accessors (the accessors own the `addr_of!` / `addr_of_mut!`); you never
-    access a types field's outside the accessors, you use the accessors instead.
+    (1) inside `impl FooRef` / `impl FooMut` blocks, for reaching a wrapped
+    type's state through its accessors; you never access a type's fields outside
+    the accessors, you use the accessors instead.
     
     (2) calling an `ffi::` routine inside its own safe wrapper or inside Rust-native
     functions if the `ffi::` routine does not have a safe wrapper yet (e.g. SCC cut cycles
     of the DAG).
 
     (3) calling Rust-native functions declared unsafe. The allowed cases are:
-    - calling an unsafe setter that passess a borrowed reference, which requires
-    declaring the setter unsafe, is also allowed.
-    - calling `assume_init` to promote a partially initialized reference to a
-    fully initialized one.
+    - calling an unsafe setter that passes a borrowed reference, which requires
+    declaring the setter unsafe;
+    - calling `CBoxWith::into_box` to promote a construction-phase handle, held
+    under a storage-only dropper, to the formed `CBox`.
  
 - **Inner-module `raw pointers` are ONLY allowed in the following cases:**
     (1) the above scenarios where `unsafe` blocks are allowed.
 
 - **Every `unsafe` block** carries a specific, falsifiable `// SAFETY:` stating the
     safety contract and discipline.
-
-### Reference borrows
-
-- Never instantiate a `&mut` to a wrapped type (in a function's signature
-or body). Always write through `&self` setters - the principle of interior 
-mutability.
-
-### Field accesses
-
-Always read and write through `addr_of!` / `addr_of_mut!`, never through a bare
-`(*ptr).field` place expression. These are the only forms permitted for field access through a raw
-pointer. The constructs that synthesise a borrow are forbidden.
-
-| Construct | Synthesises a borrow? | Use? |
-|---|---|---|
-| `addr_of!((*ptr).field).read()` | **No** — pointer to place + byte-copy load | ✅ **mandatory read form** |
-| `addr_of_mut!((*ptr).field).write(v)` | **No** — pointer to place + byte-copy store | ✅ **mandatory write form** |
-| `addr_of!((*ptr).field)` / `addr_of_mut!((*ptr).field)` | **No** | ✅ for taking inner references |
 
 ---
 
