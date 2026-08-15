@@ -903,33 +903,17 @@ def _shape_by_ref_element_errors(label: str, slot, name: str) -> list[str]:
     return []
 
 
-#: `string` normally excludes `scalar`/`array` -- a NUL-terminated pointer is
-#: terminator-delimited, so it is not also a counted buffer or a lone pointee.
-#: The exception is a `void` subject: an erased allocation carries no element
-#: type, so the same pointer legitimately reaches C as raw bytes AND as a
-#: string, and both facets are true of it.
-def _erased(type_str: str | None) -> bool:
-    import re as _re
-    return bool(_re.search(r"\bvoid\b", type_str or ""))
-
-
-def _string_shape_errors(label: str, ptr: dict, type_str: str | None) -> list[str]:
-    if not ptr.get("string") or _erased(type_str):
-        return []
-    e = []
-    if ptr.get("array") is not None:
-        e.append(f"{label}: string and array both set (only a `void` subject may be both)")
-    if ptr.get("scalar") is not None:
-        e.append(f"{label}: string and scalar both set (only a `void` subject may be both)")
-    return e
-
-
 def _ptr_invariant_errors(field: str, ptr: dict, field_type: str) -> list[str]:
     """Hard-reject the IMPOSSIBLE / inconsistent shapes in one field's `ptr`
     block. Ownership *dependencies* are STRUCTURAL (unrepresentable otherwise):
     `lifetime` nests under `borrowed`, element-ownership under `array.by_ref` —
-    so only shape validity, the string/array mutex, borrowed-requires-lifetime,
-    and const/mutable remain.
+    so only shape validity, borrowed-requires-lifetime, and const/mutable
+    remain.
+
+    `scalar`, `array` and `string` are three INDEPENDENT path-existential
+    questions ("is there any execution path where..."), so any combination is
+    legal: a `char *` that is a counted buffer when a length is passed and a
+    NUL-terminated string when it is -1 sets both.
 
     Dual ownership is allowed: `owned` and `borrowed` may BOTH be set
     (runtime-conditional), likewise `array.by_ref.owned`+`.borrowed`."""
@@ -941,7 +925,6 @@ def _ptr_invariant_errors(field: str, ptr: dict, field_type: str) -> list[str]:
     # _shape_slot_errors): scalar points at ONE pointee, array at a buffer.
     e += _shape_slot_errors(flabel, scalar, "scalar")
     e += _shape_slot_errors(flabel, array, "array")
-    e += _string_shape_errors(flabel, ptr, field_type)
     # `string` is the one remaining explicit-bool discriminant (scalar/array are
     # now shape objects) -- reject a null left where false was meant.
     if not isinstance(ptr.get("string"), bool):
@@ -1136,8 +1119,7 @@ def _borrow_arg_ref_errors(label: str, borrowed, valid_args) -> list[str]:
 
 
 def _sym_ptr_invariant_errors(label: str, blk: dict, const: bool,
-                              is_ret: bool, arg_names=None,
-                              type_str: str | None = None) -> list[str]:
+                              is_ret: bool, arg_names=None) -> list[str]:
     """Hard-reject the IMPOSSIBLE shapes in one symbol `ptr_args[*].ptr` /
     `ptr_ret.ptr` (or a global `ptr`) block. These are the SAME structural
     invariants a struct field's `ptr` obeys (see check_types_consistency):
@@ -1158,7 +1140,6 @@ def _sym_ptr_invariant_errors(label: str, blk: dict, const: bool,
     array = blk.get("array")
     e += _shape_slot_errors(label, scalar, "scalar")
     e += _shape_slot_errors(label, array, "array")
-    e += _string_shape_errors(label, blk, type_str)
     if not isinstance(blk.get("string"), bool):
         e.append(f"{label}: string must be an explicit boolean (true/false, not null)")
     if not (scalar is not None or array is not None or blk.get("string")):
@@ -1408,8 +1389,7 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                     errors.append(f"ptr: unknown key(s) {sorted(bad)}")
                 errors.extend(_sym_ptr_invariant_errors(
                     "ptr", gptr, "const" in (entry.get("type") or ""),
-                    is_ret=False, arg_names=set(),
-                    type_str=entry.get("type")))
+                    is_ret=False, arg_names=set()))
         if "locked_by" in f and f["locked_by"] is not None:
             if not is_global:
                 errors.append(
@@ -1479,8 +1459,7 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                 errors.extend(_sym_ptr_invariant_errors(
                     f"{where}ptr_args[{pos}].ptr", blk,
                     bool(arg_by_pos[str(pos)].get("const")), is_ret=False,
-                    arg_names=valid_args,
-                    type_str=arg_by_pos[str(pos)].get("type")))
+                    arg_names=valid_args))
             if ret_f is not None:
                 if not isinstance(ret_f, dict):
                     errors.append(f"{where}ptr_ret: must be an object")
@@ -1500,8 +1479,7 @@ def _update_sym(layout, target, name: str, defined_in: str | None,
                         errors.extend(_sym_ptr_invariant_errors(
                             f"{where}ptr_ret.ptr", blk,
                             bool(entry["ptr_ret"].get("const")), is_ret=True,
-                            arg_names=valid_args,
-                            type_str=entry["ptr_ret"].get("type")))
+                            arg_names=valid_args))
                     elif blk is not None:
                         errors.append(f"{where}ptr_ret.ptr: must be an object")
 
