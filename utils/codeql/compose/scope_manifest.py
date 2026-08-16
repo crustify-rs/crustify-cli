@@ -14,7 +14,7 @@ Rule:
      any entry in `config.out_of_scope.paths` (entries ending with `/`
      match recursively; otherwise exact-file match).
   3. Everything an in-scope entity REACHES but that `config.files` does
-     not name is an import, derived by `wrap_closure.py` into the sibling
+     not name is an import, derived by `import_closure.py` into the sibling
      `import` section.
 
 The section says what the target COVERS, never what will be done with it:
@@ -176,7 +176,7 @@ def _target_entities(t1_dir: Path, candidate_files: set[str]) -> dict[str, list[
             tgt_macros.append(_ent(r))
     # Types split: a callback is a function-pointer typedef — symbol-shaped, not
     # a layout type — so it is bucketed with `functions` (untagged), matching how
-    # wrap_closure emits wrap-scope callbacks. Everything else is a real type.
+    # import_closure emits import-side callbacks. Everything else is a real type.
     tgt_types = []
     for r in types_rows:
         if _scope.classify_type(r, by_name, candidate_files) != _scope.TARGET:

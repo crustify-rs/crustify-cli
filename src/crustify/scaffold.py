@@ -171,7 +171,7 @@ def _port_touched(layout, target) -> dict[str, set] | None:
     scope cannot be resolved (then every field is anchored, as before).
 
     Delegates to the oracle rather than re-deriving from the CSVs: the same
-    answer `query types --fields --port-only` gives, so an anchor set and the
+    answer `query types --fields --target-only` gives, so an anchor set and the
     field workset an agent is handed can never disagree. `scope_touched_index`
     is one pass over both access edges, cached — the per-type
     `_scope_touched_fields` would rescan them once per type.

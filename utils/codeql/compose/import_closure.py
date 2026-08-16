@@ -99,7 +99,7 @@ class _Index:
         # name (external linkage ⇒ unique program-wide; a same-named static only
         # over-includes, which add_type then re-filters to wrap aggregates).
         self.sig_types: dict[str, set[str]] = {}
-        # Reach object — exposed so compose_wrap can use its query API
+        # Reach object — exposed so compose_import can use its query API
         # (e.g. functions_using_type / is_function_port_reachable) for the
         # callback walk that runs after build_index returns.
         self.reach = None
@@ -497,7 +497,7 @@ def compose_import(
                     # class/struct/union)`) is a synthetic placeholder CodeQL
                     # reuses for every anonymous definition in the DB, so dozens
                     # of distinct types collide on the one string and it is not
-                    # a name anything can reference or place. `_port_entities`
+                    # a name anything can reference or place. `_target_entities`
                     # drops them from the port section for the same reason, and
                     # the analysis tree carries none — so an entry here would
                     # match no record and be unschedulable. Their FIELDS are not
@@ -750,7 +750,7 @@ def compose_import(
             "The IMPORT section: everything the TARGET reaches that "
             "`scope-config.json`'s `files` does not name — the FFI frontier. "
             "DERIVED and regenerable from `target`; recompute when it changes. "
-            "Computed by compose/wrap_closure.py by expanding each target "
+            "Computed by compose/import_closure.py by expanding each target "
             "symbol's `depends_on` edges and walking the CodeQL field-type "
             "graph. `declared_in` is narrowed to the header(s) the importing "
             "target TU actually #includes (build-resolved), or to one "

@@ -439,7 +439,7 @@ def collect_types_csv(codeql_dir: Path):
     ``def_file`` are declaration-only and cannot disagree about identity, so
     they fold into every definition of that name; a name with no definition
     anywhere keeps its lone ``(name, "")`` entity. Same rule as
-    ``wrap_closure.build_type_meta`` -- and deliberately so: two identity
+    ``import_closure.build_type_meta`` -- and deliberately so: two identity
     resolvers that drift are how the first collision survived a fix.
     """
     t1, t2 = codeql_dir / "t1", codeql_dir / "t2"
@@ -517,7 +517,7 @@ def _alias_map(analysis_root: Path, types: dict,
     # bare tag -> entity. A tag naming several entities resolves to the one a
     # foreign TU could actually reach: a struct defined inside a `.c` has no
     # linkage past that TU, so a header definition wins. Same rule as
-    # `wrap_closure.resolve` -- the alternative is picking by CSV order, which
+    # `import_closure.resolve` -- the alternative is picking by CSV order, which
     # is how `ossl_record_layer_st` came to mean the 10-field QUIC struct.
     by_tag: dict[str, list] = collections.defaultdict(list)
     for k in types:

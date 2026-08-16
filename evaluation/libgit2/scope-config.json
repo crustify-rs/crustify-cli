@@ -5,7 +5,7 @@
     "src/util), the CLI (src/cli), and the public headers under include/."
   ],
   "_comment_files": [
-    "`files.port` names everything the port scope contains - there is no",
+    "`files` names everything this target covers - there is no",
     "implicit directory walk, so `src/` is listed alongside `include/` rather",
     "than being inherited from the target id.",
     "",
@@ -38,9 +38,7 @@
     "Also not listed: tests/ and deps/clar. The traced build sets",
     "BUILD_TESTS=OFF, so they contribute no entities to the database.",
     "",
-    "`files.wrap` is empty: every FFI dependency this port reaches is derived",
-    "as the import closure of `files.port`. It would name public headers to",
-    "wrap outright, which is what a wrap-only target consists of."
+    "as the import closure of `files`."
   ],
   "files": [
     "src/",

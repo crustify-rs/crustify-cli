@@ -7,7 +7,7 @@ their ``--name``. Pure read — no side effects.
 
 Output modes:
   * plain (default): one bare ``id`` per line, deduped, sorted by ``(layer, id)``
-    — xargs-ready (``crustify <t> query types --wrap-only | xargs crustify <t> translate --name``).
+    — xargs-ready (``crustify <t> query types --import-only | xargs crustify <t> translate --name``).
     Name collisions (same-named statics in different TUs, or a type/symbol tag
     clash) print the id once; use ``--file`` to target one, or ``--json`` to see
     the multiplicity.
@@ -414,8 +414,8 @@ def _enumerate(
     scope: whether the entity's home is outside this repository. Wrap scope
     pools two populations a single flag cannot separate — a system or
     toolchain header that will never be portable, and first-party code that is
-    wrapped only because THIS target does not port it. ``--wrap-only
-    --in-tree`` is the second, i.e. the remaining port backlog; ``--wrap-only
+    wrapped only because THIS target does not port it. ``--import-only
+    --in-tree`` is the second, i.e. the remaining backlog; ``--import-only
     --out-of-tree`` is the permanent FFI floor."""
     from compose import scope
     from crustify.layout import Layout
@@ -431,7 +431,7 @@ def _enumerate(
     # classification over the whole analysis tree. Keyed by origin
     # (defined_in or canonical_decl(declared_in)). This excludes out-of-closure
     # files (test/) and collapses null-def extern twins (only the real def is in
-    # scope.json). Empty when scope.json is absent, so --port-only/--wrap-only
+    # scope.json). Empty when scope.json is absent, so --target-only/--import-only
     # yield nothing for a scope-less target (e.g. ".") rather than mislabeling.
     # Synthetic types (string/array clusters) are NOT in scope.json — they are
     # *always* wrap-scope, classified by kind here.
@@ -540,7 +540,7 @@ def _introspect(
             # The type's COMPLETE footprint: opaque_in ∪ non_opaque_in — every
             # function tree-wide that touches the type (as a handle or a field).
             # Returned whole by default (the footprint spans the whole codebase,
-            # not just the target's scope). --port-only / --wrap-only intersect
+            # not just the target's scope). --target-only / --import-only intersect
             # with that scope's functions (scope.json membership). Schema-agnostic
             # — the agent never opens the manifest.
             entry = _load_type_entry(layout, target, node.id, node.defined_in) or {}
@@ -560,7 +560,7 @@ def _introspect(
             return
         if field_touchers:
             # {field: [touchers]} — the type's fields (ALL declared by default;
-            # --port-only/--wrap-only narrow to fields touched by that scope's
+            # --target-only/--import-only narrow to fields touched by that scope's
             # code) mapped to the COMPLETE, UNfiltered set of functions that
             # touch each field (raw t2/field_accesses.csv). The toucher set is
             # never scope-filtered: a field touched in-scope via raw `obj->field`
@@ -573,7 +573,7 @@ def _introspect(
         if fields:
             entry = _load_type_entry(layout, target, node.id, node.defined_in)
             objs = (entry.get("fields") if entry else None) or [{"name": f} for f in flds]
-            # ALL declared fields by default; --port-only/--wrap-only narrow to
+            # ALL declared fields by default; --target-only/--import-only narrow to
             # fields touched by that scope's code (raw field_accesses ∩ scope.json
             # membership).
             keep = _field_keep_set(layout, target, node.id, node.defined_in,
@@ -696,7 +696,7 @@ def _field_touchers(layout, target, tag: str, defined_in: str | None, *,
                target_only: bool = False) -> None:
     """``{field: [touchers]}`` for the type's fields.
 
-    ALL declared fields by default; --port-only/--wrap-only narrow the FIELD set
+    ALL declared fields by default; --target-only/--import-only narrow the FIELD set
     to the ones touched by that scope's code. Each field's toucher set is the
     COMPLETE, UNfiltered set of functions that access it — read straight from the
     raw ``t2/field_accesses`` edge, NOT the port-scope ``depends_on`` inversion.
@@ -1880,7 +1880,7 @@ def _dag_loc(by_key, by_name, names, files, layer, as_json, keep=None,
 
 
 def _scope_predicate(layout, target, import_only: bool, target_only: bool):
-    """A node-keeping predicate for `--wrap-only` / `--port-only`, or None when
+    """A node-keeping predicate for `--import-only` / `--target-only`, or None when
     neither is set. The dag is scope-agnostic; scope is read from scope.json on
     demand. `origin_key(id, defined_in)` is exactly the node's serialized origin
     (`Node.origin()`), so dag nodes and scope entries collide on the same key."""
@@ -2066,11 +2066,11 @@ def query_files(
     """Read-only oracle over the target's scope **files** (one path per line,
     sorted).
 
-      - ``--port-only`` — the port-scope file set (``scope.json.port``).
-      - ``--wrap-only`` — the wrap closure: the import-header surface the port
+      - ``--target-only`` — the target's own file set (``scope.json.target``).
+      - ``--import-only`` — the closure: the import-header surface the target
         TUs reach through their ``depends_on`` edges. Read from the cached
         ``scope.json.wrap`` section (the single source of truth, written by
-        ``analyze scope --wrap-only``); errors if that section is absent —
+        the composer); errors if that section is absent —
         consumers never recompute the closure themselves.
       - neither flag — both, printed as two labeled lists (``# port`` then
         ``# wrap``). The single-flag forms print a bare list (xargs-friendly).

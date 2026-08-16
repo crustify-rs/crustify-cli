@@ -4,7 +4,7 @@ Each stem group lists every symbol (function, macro, global, or callback — a
 function-pointer typedef) defined or declared in its file(s).
 
 **Scope gates EMISSION, never CONTENT.** Which records are emitted (and
-how they're tagged / post-filtered by `--port-only` / `--wrap-only`) is a
+how they're tagged / post-filtered by `--target-only` / `--import-only`) is a
 scope decision; every record that IS emitted carries its full
 codebase-wide composition. This mirrors the type manifest, whose
 `opaque_in` / `non_opaque_in` footprints are COMPLETE for port AND wrap.
@@ -750,7 +750,7 @@ def compose(
         seed flags): emit every reachable entry. Port-scope entries
         emit with port additions; wrap-scope entries emit as base.
 
-    `--port-only` / `--wrap-only` post-filters apply in every mode
+    `--target-only` / `--import-only` post-filters apply in every mode
     (they're emitted-shape filters).
     """
     if filter_spec is None:
@@ -1006,7 +1006,7 @@ def compose(
             # Filter mode: emit all candidates passing wrap-reach.
             emit_port_shape = c["in_target"]
 
-        # --port-only / --wrap-only post-filters.
+        # --target-only / --import-only post-filters.
         if filter_spec.port_only and not emit_port_shape:
             continue
         if filter_spec.wrap_only and emit_port_shape:
@@ -1015,7 +1015,7 @@ def compose(
         entry = dict(c["base"])
         # No port/wrap shape fork: an emitted record always carries its
         # codebase-wide composition. `emit_port_shape` below survives only as
-        # the SCOPE classification -- it drives the --port-only/--wrap-only
+        # the SCOPE classification -- it drives the --target-only/--import-only
         # post-filters and the dir_scope tag, never the content.
         if c["port_add"] is not None:
             entry.update(c["port_add"])

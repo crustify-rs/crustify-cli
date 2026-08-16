@@ -36,8 +36,8 @@ from pathlib import Path
 
 def collect_port_paths(scope_json: Path) -> list[str]:
     """Read scope.json's `port.files` and return the sorted unique path
-    list. Schema (v2): ``{"port": {"files": ["a/b.c", ...], ...}}`` —
-    mirrors ``compose.scope.load_port_paths``. Defensively also accepts
+    list. Schema: ``{"target": {"files": ["a/b.c", ...], ...}}`` —
+    mirrors ``compose.scope.load_target_paths``. Defensively also accepts
     a list of ``{"path": ...}`` entries or bare strings under `files`."""
     data = json.loads(scope_json.read_text())
     port = data.get("port", {}) if isinstance(data, dict) else {}
@@ -117,7 +117,7 @@ def main() -> None:
     scope_json = args.scope_json
     if not scope_json.exists():
         print(f"error: {scope_json} not found. Run "
-              f"`crustify <repo> <target> analyze scope --port-only` first.",
+              f"the scope composer first (`crustify.scope.build`).",
               file=sys.stderr)
         sys.exit(1)
 

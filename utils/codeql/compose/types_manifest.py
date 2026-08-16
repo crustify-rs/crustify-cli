@@ -441,7 +441,7 @@ def _import_reachable(
         for fn_name, fn_def_file in reach.functions_using_type(tname, tdef):
             if fn_def_file not in target_paths and reach.is_function_port_reachable(fn_name, fn_def_file):
                 return True
-        # Body usage by a port-REACHABLE (non-port-file) function. wrap_closure
+        # Body usage by a target-REACHABLE (non-target-file) function. import_closure
         # pulls these in via depends_on.types (field_access_index over the
         # body), so WITHOUT this the per-type gate diverges from the wrap
         # surface and the type lands in wrap.types with no record
@@ -758,7 +758,7 @@ def compose(
             elif _in_import_surface(c):
                 emit_keys.add(c["key"])
 
-    # ---- Pass 4: emit, applying --port-only / --wrap-only ----
+    # ---- Pass 4: emit, applying --target-only / --import-only ----
     # Per-dir section is tracked alongside emission: a dir is TARGET if
     # any of its emitted entries belongs to it, else IMPORT. This
     # mirrors the convention used by syms_manifest.compose() and is

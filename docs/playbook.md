@@ -115,14 +115,10 @@ database changes.
 Author `crustify/targets/<target>/scope-config.json` from
 `specs/scope-config.json`.
 
-`files` names everything the target covers. There is no implicit directory walk,
-so it must name everything in scope. The repo root and the
-target id are CLI positionals and are not restated in the file.
+`files` names everything the target covers.
 
 Entries are a file (`include/internal/statem.h`) or a directory with a trailing
-slash (`ssl/`), which expands to every source and header beneath it. Naming a
-file the build never compiled is harmless — T1 anchoring drops uncompiled
-candidates.
+slash (`ssl/`), which expands to every source and header beneath it.
 
 **Scope says what the target contains, not what will be done with it.** Port or
 wrap is `translate --objective`, chosen per unit by the orchestrator — an item

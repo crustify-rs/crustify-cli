@@ -127,7 +127,7 @@ def _translate_eligible_pred(scope_json):
     Scope no longer routes: a port-scope symbol used to be refused as the port
     stage's, but that stage is retired, so refusing it left the entity with no
     stage at all. Both halves now reach the same type and symbol agents; scope
-    remains a *filter* the caller opts into (`--port-only` / `--wrap-only`),
+    remains a *filter* the caller opts into (`--target-only` / `--import-only`),
     not a gate the stage imposes."""
     from compose import scope
     is_wrap = scope.in_scope_pred(scope_json, scope.IMPORT)
@@ -147,7 +147,7 @@ def _selection_pred(scope_json, *, files: set[str]):
     two halves merged into one stage: what an agent DOES is the objective, and
     an item's scope is something the agent reads from the oracle to decide how
     to satisfy that objective. A caller who wants to see a layer split by scope
-    asks the oracle (`query dag --layer N --port-only`) and passes the names."""
+    asks the oracle (`query dag --layer N --target-only`) and passes the names."""
     eligible = _translate_eligible_pred(scope_json)
 
     def pred(n) -> bool:  # n: _schedule.Node
