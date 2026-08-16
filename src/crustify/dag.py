@@ -63,7 +63,7 @@ class Node:
         return self.node_kind == "symbol" and self.subkind == "symbol"
 
 
-def build(layout, target: Path, *, stage: str, objective: str = "port") -> dict:
+def build(layout, target: Path, *, stage: str) -> dict:
     """Compose this target's DAG **in memory** and return it.
 
     There is no on-disk `deps-dag.json` in the read path any more. The graph is
@@ -88,9 +88,8 @@ def build(layout, target: Path, *, stage: str, objective: str = "port") -> dict:
     # composes, not just the layering — 5.8s down to a 4.7 MB parse. Its
     # fingerprint is the same input set, since the graph is a function of the
     # CodeQL tables and scope alone (an agent submission never moves a layer).
-    fp = dict(_cache.fingerprint(layout, target), objective=objective)
-    path = layout.deps_dag(target, objective)
-    disk = _cache.load(path, fp)
+    fp = _cache.fingerprint(layout, target)
+    disk = _cache.load(layout.deps_dag(target), fp)
     if disk is not None:
         return disk
 
@@ -99,9 +98,8 @@ def build(layout, target: Path, *, stage: str, objective: str = "port") -> dict:
          _manifests.entries(layout, target, "symbols", stage=stage)),
         _scope.build(layout, target, stage=stage),
         codeql_dir=layout.codeql,
-        objective=objective,
     )
-    return _cache.store(path, dag, fp)
+    return _cache.store(layout.deps_dag(target), dag, fp)
 
 
 def load_nodes(dag: dict) -> tuple[dict[SymKey, Node], dict[str, list[SymKey]]]:

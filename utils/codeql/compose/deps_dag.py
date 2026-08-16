@@ -285,8 +285,7 @@ def _collect(analysis_root: Path,
              port_fields: dict[str, set[str]] | None = None,
              codeql_dir: Path | None = None,
              in_scope_types: set | None = None,
-             target_paths: set[str] | None = None,
-             objective: str = "port"):
+             target_paths: set[str] | None = None):
     """Collect nodes/edges from the analysis tree, narrowed to one target.
 
     The tree is scope-agnostic and ACCUMULATES across targets: an entry that
@@ -297,23 +296,14 @@ def _collect(analysis_root: Path,
 
     So edges are narrowed per node against THIS target's scope:
 
-      - **symbol being PORTED** — every edge. Its body is translated, so its
-        callees and field-derived type uses are real dependencies. A symbol
-        qualifies only when the objective is ``port`` AND it is in the TARGET
-        section: an import-section item is never portable, so it can never
-        earn body edges under any objective.
-      - **every other symbol** — signature only. A binding is emitted from the
+      - **port-scope symbol** — every edge. Its body is translated, so its
+        callees and field-derived type uses are real dependencies.
+      - **wrap-scope symbol** — signature only. A binding is emitted from the
         signature alone: callee edges are dropped outright, and type edges
-        keep only signature/opaque uses (``fields: []``). This covers an
-        import-section symbol under any objective, AND a target-section one
-        under ``--objective wrap`` — wrapping emits from the signature, so the
-        body orders nothing and its edges would only deepen the layering for
-        work this wave never does.
-      - **import struct** — only fields the target actually touches
+        keep only signature/opaque uses (``fields: []``).
+      - **wrap-scope struct** — only fields the port scope actually touches
         (``port_fields``); the rest of the layout is never reached through
-        this target and must not order its work. Objective-INDEPENDENT: a
-        struct's layout is needed in full to wrap its accessors just as much
-        as to port it, so only the SYMBOL side consults the objective.
+        this target and must not order its work.
 
     ``port_syms`` of None disables narrowing (whole-tree graph, the old
     behaviour) — used by callers with no scope in hand. ``anchor_paths``
@@ -401,12 +391,7 @@ def _collect(analysis_root: Path,
                 # `depends_on` is only ever emitted for an entry that was
                 # port-scope for SOME target; whether it is port-scope for
                 # THIS one decides how much of it applies.
-                # Body edges are earned by a unit that will actually be
-                # translated: `port` objective AND target-section membership.
-                # With `objective="port"` this is exactly the old predicate,
-                # so a port wave layers identically to before.
-                is_port = port_syms is None or (
-                    objective == "port" and key in port_syms)
+                is_port = port_syms is None or key in port_syms
                 for d in dep.get("types") or []:
                     if not d.get("type"):
                         continue
@@ -1019,12 +1004,10 @@ def port_touched_fields(analysis_root: Path, port_syms: set) -> dict[str, set[st
     return touched
 
 
-def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None,
-            objective: str = "port") -> dict[str, Any]:
+def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
+            ) -> dict[str, Any]:
     """Build the layered DAG. With ``scope_json``, narrowed to that target
-    (see :func:`_collect`); without it, unnarrowed. ``objective`` decides
-    whether a target-section symbol earns its body edges (`port`) or only its
-    signature ones (`wrap`); the default reproduces the pre-objective graph.
+    (see :func:`_collect`); without it, unnarrowed.
 
     ``analysis_root`` is the composed ``(types, syms)`` pair, or -- for this
     module's own CLI -- a legacy analysis-root path. ``codeql_dir`` must be
@@ -1066,8 +1049,7 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None,
                                    codeql_dir=codeql_dir,
                                    in_scope_types=in_scope_types,
                                    target_paths=(_scope.load_target_paths(scope_json)
-                                                 if scope_json is not None else None),
-                                   objective=objective)
+                                                 if scope_json is not None else None))
     _populate_nfields(codeql_dir, types)
     # A generator macro is already a symbol node; hang its family off it rather
     # than minting a synthetic type, which would collide with this very node on

@@ -141,20 +141,14 @@ class Layout:
         (:mod:`crustify.cache`)."""
         return self.target_dir(target) / "scope.json"
 
-    def deps_dag(self, target: Path, objective: str = "port") -> Path:
+    def deps_dag(self, target: Path) -> Path:
         """The layered dependency graph, beside scope.json — a fingerprinted
         cache (:mod:`crustify.cache`).
-
-        Keyed by OBJECTIVE, because the graph differs by it: a unit being
-        ported orders on its body's callees, one being wrapped only on its
-        signature. Two files rather than one fingerprint, so alternating
-        between a port wave and a wrap wave does not thrash a single cache.
 
         Target-tier because the graph is: its edges are narrowed by scope, so a
         wrap-scope node contributes only its signature and the layering differs
         per target."""
-        stem = "deps-dag" if objective == "port" else f"deps-dag-{objective}"
-        return self.target_dir(target) / f"{stem}.json"
+        return self.target_dir(target) / "deps-dag.json"
 
     def logs(self, target: Path) -> Path:
         return self.target_dir(target) / "logs"
