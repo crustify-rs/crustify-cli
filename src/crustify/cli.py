@@ -45,10 +45,10 @@ def _lifetime_tier(s: str) -> str:
 
 def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
     """Selection flags for the unified `translate` command (types + free symbols,
-    no subject split). Selection is **scope-blind**: a named entity is
-    translated regardless of port/wrap scope, and `--objective` says what to DO
-    with it. There is no scope filter here — `crustify-oracle` carries
-    `--port-only` / `--wrap-only` for inspecting a slice by scope. `--file`
+    no subject split). Selection is **section-blind**: a named entity is
+    translated whichever scope.json section it sits in, and `--objective` says
+    what to DO with it. There is no section filter here — `crustify-oracle`
+    carries `--target-only` / `--import-only` for inspecting a slice. `--file`
     restricts to a defining file (disambiguating a `--name` collision).
 
     A per-agent **effort budget** (`--max-syms` / `--max-loc`) caps each unit's
@@ -57,7 +57,7 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
     """
     p.add_argument(
         "--name", nargs="+", action="extend", metavar="NAME", default=None,
-        help="Select unit(s) by name (any scope). Pass all names as a "
+        help="Select unit(s) by name (either section). Pass all names as a "
              "space-separated list after a single --name (e.g. "
              "`--name T1 sym2 sym3`) to batch them; repeating the flag keeps "
              "only the last group. A type name brings its in-scope ops; a "
@@ -98,10 +98,10 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--dag-layer", type=int, default=None, metavar="N", dest="dag_layer",
         help="Select EVERY in-scope unit at dag layer N — types AND symbols, "
-             "port- or wrap-scope alike. Scope is no longer a selector here: "
-             "the OBJECTIVE says what to do and the agent reads an item's scope "
-             "from the oracle. Use `crustify-oracle query dag --layer N "
-             "--port-only` to inspect a slice by scope. "
+             "from either section. The section is not a selector here: the "
+             "OBJECTIVE says what to do, and one run carries one objective. "
+             "Use `crustify-oracle query dag --layer N --target-only` to "
+             "inspect a slice by section. "
              "Lifecycle ops that fold into a type are excluded (they ride with "
              "the type). Combines with --name; e2e driver mode.",
     )
@@ -134,9 +134,10 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
              "`raw`, is not selectable here and is not overridable either: it "
              "is the discovery arm of a lifetime tier, set automatically by "
              "--lifetime-for, whose marker the arm is gated on. NOTE: this "
-             "is the objective, NOT a scope filter — `translate` has none; "
-             "use `crustify-oracle query … --port-only` to inspect a slice by "
-             "scope.",
+             "is the objective, NOT a section filter — `translate` has none; "
+             "use `crustify-oracle query … --target-only` to inspect a slice "
+             "by section. It is taken as given: nothing downstream substitutes "
+             "a per-unit verb.",
     )
     p.add_argument(
         "--dry-run", action="store_true", dest="dry_run",
@@ -377,20 +378,21 @@ def main() -> None:
     )
 
     # -- translate ---------------------------------------------------------
-    # The SCOPE keeps its own name: wrap-scope / port-scope is the dichotomy in
-    # scope.json (and crustify-oracle's `--wrap-only` / `--port-only`),
-    # orthogonal to which stage runs. Only the stage is called `translate`.
+    # SCOPE and OBJECTIVE are orthogonal and named apart. scope.json's sections
+    # are `target` / `import` (crustify-oracle's `--target-only` /
+    # `--import-only`) and say what the target COVERS; the objective says what
+    # to do with a selection. Only the stage is called `translate`.
     _translate_blurb = (
         "Translate stage: emit Rust wrappers for the selected in-scope "
-        "units (types AND free symbols, port- or wrap-scope) in "
+        "units (types AND free symbols, from either scope.json section) in "
         "dependency-layer order. "
         "Select with --name. One unified scheduler dispatches each unit "
         "to its wrapper (type / symbol); no subject split. Requires the "
         "scaffold + bindgen stages to have run for each library being "
-        "wrapped. What an agent DOES with a selection is --objective; for a "
-        "SYMBOL batch the scheduler overrides it with the unit's scope, so a "
-        "port-scope symbol is ported even under the default `wrap` -- "
-        "--dry-run prints the split.")
+        "wrapped. What an agent DOES with a selection is --objective, "
+        "and it is taken as given: nothing downstream substitutes a per-unit "
+        "verb, so one run carries one objective. Select the units that share "
+        "one, run them, then select the next set. --dry-run prints the plan.")
     wrap_p = sub.add_parser(
         "translate", help=_translate_blurb, description=_translate_blurb,
     )

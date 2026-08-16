@@ -261,15 +261,18 @@ def pack(
     first (a lone symbol heavier than ``max_loc`` still gets its own batch — a
     function is never split).
 
-    ``scope_of`` partitions the pool by SCOPE, and unlike ``syms_by_file`` it is
-    not a policy choice. A symbol's objective is derived from its scope -- a
-    wrap-scope symbol gets a safe FFI view, a port-scope one gets translated --
-    and an agent is handed ONE objective for its whole batch, so a batch mixing
-    the two cannot be given a correct one. The default pool is GLOBAL per layer
-    (`None` key), which makes the mixing routine rather than rare: on the libgit2
-    `src` target, layer 0 carries 250 port-scope symbols beside 101 wrap-scope,
-    and layer 1 carries 321 beside 148. Passing ``scope_of`` splits them; leaving
-    it unset keeps the old single-objective behaviour.
+    ``scope_of`` partitions the pool by SECTION. It was once a correctness
+    requirement -- the objective used to be derived per symbol from its scope,
+    so a batch mixing sections could not be handed one correct verb. That
+    derivation is gone: the orchestrator supplies `--objective` and a run
+    carries one verb throughout, so a mixed batch is now perfectly answerable.
+    What remains is LOCALITY: target and import units are different work
+    (native translation versus a view over the seam), and keeping them in
+    separate batches gives an agent a coherent set. The default pool is GLOBAL
+    per layer (`None` key), and the mixing is routine rather than rare: on the
+    libgit2 `src` target, layer 0 carries 250 target symbols beside 101 import,
+    and layer 1 carries 321 beside 148. Passing ``scope_of`` splits them;
+    leaving it unset pools them together.
     Default ``False``: symbols pool by budget alone, so one agent may carry
     symbols from several sources. The defining file is not a write boundary —
     the scaffolder homes symbols by ``crates.json``, several sources routinely

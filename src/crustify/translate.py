@@ -159,35 +159,27 @@ def _selection_pred(scope_json, *, files: set[str]):
 
 
 def batch_objective(batch, objective: str, scope_of=None) -> str:
-    """One objective per batch, because the prompt has one `{objective}`.
+    """The objective a batch is handed: the CALLER's, always.
 
-    A TYPE takes the caller's: a port-scope type is legitimately either
-    wrapped (layout-compatible while C still reads it) or nativized, and
-    which one depends on the opacification burn-down -- live state only the
-    orchestrator tracks.
+    This used to override it for a SYMBOL batch, substituting the unit's scope
+    on the reasoning that "a wrap-scope symbol can never be ported (it is
+    foreign code) and a port-scope one has no reason to stay wrapped". The
+    first half is false: on the ssl target 1735 of 1805 import-section symbols
+    are first-party code that a later wave will port, not foreign code. The
+    second ignores incremental porting, where a type is legitimately wrapped
+    while C still reads it and nativized once it does not.
 
-    A SYMBOL takes its SCOPE's, and the caller does not get a say: principles.md
-    settles it -- wrap-scope symbols get a safe view over the FFI surface,
-    port-scope ones are translated to native Rust. A wrap-scope symbol can
-    never be ported (it is foreign code) and a port-scope one has no reason
-    to stay wrapped for good, so exposing the choice would only be a way to
-    get it wrong. `_schedule.pack` keys the free-symbol pool by scope so the
-    question has a single answer here.
+    Scope says what the target CONTAINS; the objective says what to DO. Only
+    the orchestrator knows which -- it tracks the opacification burn-down and
+    the wave plan -- so it passes `--objective` and nothing downstream second-
+    guesses it. A run therefore carries one verb: select the units that share
+    an objective, run them, then select the next set.
 
-    `review` crosses both: it is a second visit to emitted work, whatever
-    that work was, so scope has nothing to say about it.
-
-    MODULE-LEVEL, and wired into `Stage.objective_of` as well as the emit seam,
-    so `--dry-run` reports the objective each batch will actually be handed.
-    While this lived inside the emit closure the plan could only print the
-    CALLER's verb, which for a port-scope symbol batch is not what runs: a wave
-    invoked with the default `wrap` showed `About to wrap:` over items the
-    scheduler then ported."""
-    if objective == "review" or not scope_of:
-        return objective
-    if any(u.kind == "type" for u in batch.units):
-        return objective
-    return scope_of(batch.members[0]) if batch.members else objective
+    Kept as a named function (rather than inlined) because `Stage.objective_of`
+    and the emit seam both call it, and `--dry-run` prints what it returns.
+    `scope_of` is accepted and ignored, so the Stage wiring need not change.
+    """
+    return objective
 
 
 def _translate_emit(
@@ -626,14 +618,15 @@ def translate_types(
     _check_bindgen(layout, target,
                    {lib for n in sel_nodes if (lib := _lib_of(n))})
 
-    # `Node -> "wrap" | "port"`, for the free-symbol pool key and the emit
-    # seam's objective. Wrap wins a tie: the one entity in this target that is
-    # in BOTH closures (`git_transport_cb`, a wrap-closure callback declared in
-    # the port header include/git2/transport.h) is reached through a
-    # function-pointer field, which is wrap work.
-    _is_wrap = scope.in_scope_pred(scope_json, scope.IMPORT)
+    # `Node -> scope.IMPORT | scope.TARGET`, the free-symbol pool key. Batching
+    # locality only -- it no longer picks an objective (see `batch_objective`).
+    # IMPORT wins a tie: the one entity in this target that is in BOTH sections
+    # (`git_transport_cb`, an import-side callback declared in the target header
+    # include/git2/transport.h) is reached through a function-pointer field,
+    # which is seam work.
+    _is_import = scope.in_scope_pred(scope_json, scope.IMPORT)
     def scope_of(n) -> str:
-        return "wrap" if _is_wrap(n) else "port"
+        return scope.IMPORT if _is_import(n) else scope.TARGET
 
     # Worktree isolation engages whenever the production emit is in play (a
     # caller-supplied emit_fn, e.g. a test double, opts out).
