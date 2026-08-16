@@ -115,8 +115,8 @@ database changes.
 Author `crustify/targets/<target>/scope-config.json` from
 `specs/scope-config.json`.
 
-`files` names everything the target covers — **one** list. There is no implicit
-directory walk, so it must name everything in scope. The repo root and the
+`files` names everything the target covers. There is no implicit directory walk,
+so it must name everything in scope. The repo root and the
 target id are CLI positionals and are not restated in the file.
 
 Entries are a file (`include/internal/statem.h`) or a directory with a trailing
@@ -128,14 +128,30 @@ candidates.
 wrap is `translate --objective`, chosen per unit by the orchestrator — an item
 can be wrapped now and ported later, and encoding a verb here would freeze that.
 
-**List the implementations, not just the headers.** Classification is
+**Name every file that DEFINES something you want in scope.** Classification is
 *definition-anchored*: an entity is in the target iff its **body** lives in a
-named file (or, for a declaration-only entity, all its declarations do). Listing
-only public headers admits just what they *define* — inline functions, macros,
-value structs — while every function they merely *declare* drops out of scope,
-its body sitting in a `.c` you did not name. To wrap a library's public API,
-name the library. Narrowing to an API surface is a **selection** concern:
-`translate --file include/openssl/ssl.h`.
+named file (or, for a declaration-only entity, all its declarations do). That
+one rule cuts both ways, and missing either half silently drops work:
+
+- **The sources.** A function's body is in a `.c`. Listing only public headers
+  admits just what they *define* — inline functions, macros, value structs —
+  while every function they merely *declare* falls out of scope entirely, its
+  body sitting in a `.c` you did not name. To wrap a library's public API, name
+  the library.
+- **The headers.** A struct, enum or union is *defined* in a header, and headers
+  outside the target tree are **never discovered automatically**. A public value
+  type whose header you did not name is not in your target, however much of its
+  implementation is.
+
+Add a header only if its **implementors** are in the target — distinguish
+implementors from consumers and referencers. A header whose types are merely
+*used* by the target belongs in the import section, and gets there on its own
+through the closure.
+
+Narrowing to an API *surface* is a **selection** concern, not a scope one:
+`translate --file include/openssl/ssl.h`. Keeping the implementations in scope
+is what lets the ownership analysis read free/store/return behaviour off real
+bodies instead of guessing from a signature.
 
 Everything an in-scope entity **reaches** that `files` does not name is an
 *import* — the FFI frontier — derived automatically into `scope.json`'s sibling
