@@ -4,26 +4,26 @@ composer imports.
 The classification rule is the definition-anchored rule documented
 in `utils/codeql/README.md`:
 
-  An entity is port-scope iff EITHER:
+  An entity belongs to the TARGET iff EITHER:
     1. (Primary path) It has a definition in the CodeQL database AND
-       that definition's file is in `scope.json`'s `port.files`, OR
+       that definition's file is in `scope.json`'s `target.files`, OR
     2. (Fallback for entities with no definition in the DB) It has
        no definition in the database AND all its declarations live
-       in port-scope files.
+       in target files.
 
-  Otherwise the entity is wrap-scope.
+  Otherwise the entity is an IMPORT — reached, not named.
 
 For typedefs an additional rule applies: a typedef inherits the
 scope of its terminal underlying user type, walking the `aliases`
 chain emitted by `entities/types.ql`. This avoids the typedef ↔
 struct scope-split that would otherwise classify e.g.
-`SSL_CONNECTION` (typedef in port header) and `ssl_connection_st`
-(struct in wrap header) on opposite sides of the boundary even
+`SSL_CONNECTION` (typedef in a target header) and `ssl_connection_st`
+(struct in a reached header) on opposite sides of the boundary even
 though they represent the same conceptual type.
 
 This module exports the rule as a single classifier function plus
 a typedef-resolution helper. Higher-level orchestration —
-loading the T1 CSVs, building the type index, producing per-scope
+loading the T1 CSVs, building the type index, producing per-section
 splits — happens in the manifest composers (`types_manifest.py`,
 `syms_manifest.py`, etc.) that import from here.
 """
@@ -36,7 +36,7 @@ from pathlib import Path
 
 # ---------------------------------------------------------------- core rule
 
-def classify(def_file: str, decl_files: list[str], port_paths: set[str]) -> str:
+def classify(def_file: str, decl_files: list[str], target_paths: set[str]) -> str:
     """Apply the definition-anchored rule.
 
     Args:
@@ -45,19 +45,18 @@ def classify(def_file: str, decl_files: list[str], port_paths: set[str]) -> str:
       decl_files: list of repository-relative paths of all
         declaration entries (typically the headers carrying
         `extern` / forward declarations). May be empty.
-      port_paths: the port-scope path set (from `scope.json`'s `port.files`).
+      target_paths: the target's file set (`scope.json`'s `target.files`).
 
-    Returns "port" or "wrap".
+    Returns :data:`TARGET` or :data:`IMPORT`.
     """
     if def_file:
-        return "port" if def_file in port_paths else "wrap"
+        return TARGET if def_file in target_paths else IMPORT
     # Fallback: no def in DB, classify by declarations.
     if not decl_files:
-        # No def AND no decls — treat as wrap (unknown origin, safer
-        # to surface as boundary entity than to silently include in
-        # port).
-        return "wrap"
-    return "port" if all(d in port_paths for d in decl_files) else "wrap"
+        # No def AND no decls — treat as an import (unknown origin, safer
+        # to surface as a boundary entity than to silently claim it).
+        return IMPORT
+    return TARGET if all(d in target_paths for d in decl_files) else IMPORT
 
 
 _C_TU_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".cu")
@@ -67,28 +66,28 @@ def entry_scope(
     kind: str,
     def_file: str,
     decl_files: list[str],
-    port_paths: set[str],
+    target_paths: set[str],
 ) -> str:
-    """Per-entry port/wrap classification (the rule consumers apply).
+    """Per-entry section classification (the rule consumers apply).
 
     Identical to `classify` for ordinary entities, with one carve-out
     for macros: a `#define` cannot be re-exported Rust->C, so a macro
-    whose home is a HEADER is *always* wrap (kept as a C define and
-    read through bindgen), regardless of the per-dir scope tag that
-    `analyze` was routed with. Only a TU-local macro defined in a `.c`
-    that is itself in port scope is a port entry (it gets inlined when
-    that translation unit is ported).
+    whose home is a HEADER is *always* an import (kept as a C define and
+    read through bindgen) even when that header is the target's own —
+    anything still in C may `#include` it. Only a TU-local macro defined
+    in a `.c` that is itself in the target belongs to the target: it has
+    no external consumer, and it is inlined when that translation unit
+    is translated.
 
     This is the single source of truth shared by the composer's macro
-    `is_port`, bindgen's surface filter, and the deps-DAG scope query,
-    so the per-dir analysis tag never has to encode it.
+    handling, bindgen's surface filter, and the deps-DAG section query.
     """
     if (kind or "").startswith("macro"):
         home = def_file or (decl_files[0] if decl_files else "")
-        if home.endswith(_C_TU_SUFFIXES) and home in port_paths:
-            return "port"
-        return "wrap"
-    return classify(def_file, decl_files, port_paths)
+        if home.endswith(_C_TU_SUFFIXES) and home in target_paths:
+            return TARGET
+        return IMPORT
+    return classify(def_file, decl_files, target_paths)
 
 
 def parse_decl_files(decl_files_pipe: str) -> list[str]:
@@ -187,7 +186,7 @@ def resolve_typedef(
     return resolve_typedef(alias, by_name, seen)
 
 
-def classify_type(row: dict, by_name: dict[str, dict], port_paths: set[str]) -> str:
+def classify_type(row: dict, by_name: dict[str, dict], target_paths: set[str]) -> str:
     """Classify a type row.
 
     Non-typedef rows classify by their own def_file / decl_files
@@ -201,12 +200,12 @@ def classify_type(row: dict, by_name: dict[str, dict], port_paths: set[str]) -> 
     `typedef enum { … } STATE;`).
     """
     if row["kind"] != "typedef":
-        return classify(row["def_file"], parse_decl_files(row["decl_files"]), port_paths)
+        return classify(row["def_file"], parse_decl_files(row["decl_files"]), target_paths)
     if row["aliases"] and row["aliases"] in by_name:
         base = resolve_typedef(row["aliases"], by_name)
         if base is not None:
-            return classify(base["def_file"], parse_decl_files(base["decl_files"]), port_paths)
-    return classify(row["def_file"], parse_decl_files(row["decl_files"]), port_paths)
+            return classify(base["def_file"], parse_decl_files(base["decl_files"]), target_paths)
+    return classify(row["def_file"], parse_decl_files(row["decl_files"]), target_paths)
 
 
 # ---------------------------------------------------------------- I/O helpers
@@ -225,74 +224,49 @@ def _doc(scope_src) -> dict:
     return json.loads(Path(scope_src).read_text())
 
 
-def load_port_paths(scope_json) -> set[str]:
-    """Read `<target>/.crustify/scope.json` and return its port-scope
-    file-path set.
+#: The two sections of a composed `scope.json`, as constants rather than bare
+#: strings. Both words are already spoken for elsewhere — `target` is the CLI
+#: positional and `build.json`'s output filename, `import` shades into
+#: `#include` — so a literal is ambiguous at a glance where `scope.TARGET` is
+#: not. The pair they replace was worse: `"port"` and `"wrap"` are ALSO
+#: objective values, audit stage labels and scheduler pool keys, so a sweep
+#: over those literals could not tell a section key from a verb.
+TARGET = "target"
+IMPORT = "import"
+SECTIONS = (TARGET, IMPORT)
 
-    The scope manifest is composer-emitted by
-    `compose.scope_manifest.compose()` and is the canonical port-scope
-    file list for a given target invocation. v2 schema (`port` is an
-    object whose `files` list is anchored on the CodeQL T1 tables, so
-    `#ifdef`-elided files are absent):
 
-        {"port": {"files": [...], "functions": [...], ...}}
+def load_target_paths(scope_json) -> set[str]:
+    """The target's own file set — every file `scope-config.json`'s `files`
+    named that the build actually compiled.
 
-    Every other file in the analysis tree is implicitly wrap-scope.
+    Composer-emitted by `compose.scope_manifest.compose()`; the `files` list is
+    anchored on the CodeQL T1 tables, so an `#ifdef`-elided file is absent:
+
+        {"target": {"files": [...], "functions": [...], ...}}
+
+    Every other file an in-scope entity reaches is an IMPORT and lands in the
+    sibling section. Note this says nothing about what will be DONE with those
+    files — port or wrap is the translate stage's objective, not a property of
+    the scope.
     """
-    port = _doc(scope_json).get("port", {})
-    return set(port.get("files", []))
+    return set(_doc(scope_json).get(TARGET, {}).get("files", []))
 
 
-def load_anchor_paths(scope_json) -> set[str]:
-    """The wrap-scope ANCHOR files — `scope-config.json`'s `files.wrap`,
-    expanded — echoed into the composed manifest as `wrap.anchors`.
+def load_entities(scope_json, section: str, kind: str) -> set[tuple[str, str]]:
+    """The entity set of `section` (:data:`TARGET` | :data:`IMPORT`) for `kind`
+    (``"functions"`` | ``"globals"`` | ``"macros"`` | ``"types"``), as
+    ``(name, defined_in)`` keys.
 
-    Empty for a port target, where the wrap surface is wholly derived as the
-    import closure of port. Non-empty when the target declares an API surface
-    to wrap directly, which is what makes a wrap-only target expressible: with
-    no port files there is no closure to seed, so the anchors ARE the surface.
+    Membership-lookup replacement for re-running `classify` / `entry_scope` /
+    `classify_type` over the T1 CSVs: the scope composer classified every
+    entity once — including the header-macro carve-out — so a downstream
+    composer tests membership here instead of deriving scope a second time and
+    risking a different answer. The tag is read through :func:`entry_tag`, the
+    same accessor :func:`scope_membership` uses, so the two agree.
     """
-    return set(_doc(scope_json).get("wrap", {}).get("anchors", []))
-
-
-def is_anchored(def_file: str, decl_files: list[str], anchor_paths: set[str]) -> bool:
-    """Whether an entity is anchored into wrap scope by `files.wrap`.
-
-    DECLARATION-site membership, not reachability. `files.wrap` names public
-    headers, and the bodies of what they declare live in `.c` files nothing in
-    scope calls — so the port-reachability gates the closure uses answer the
-    wrong question here. "Wrap the API these headers declare" is a membership
-    test, and a definition in an anchor file (a header-defined value struct,
-    an inline function) counts the same way.
-    """
-    if not anchor_paths:
-        return False
-    return def_file in anchor_paths or any(d in anchor_paths for d in decl_files)
-
-
-def load_port_entities(scope_json, kind: str) -> set[tuple[str, str]]:
-    """Return the v2 port-scope entity set for `kind`
-    (``"functions"`` | ``"globals"`` | ``"macros"`` | ``"types"``) as a
-    set of ``(name, defined_in)`` keys.
-
-    Membership-lookup replacement for re-running `classify`/
-    `entry_scope`/`classify_type` over the T1 CSVs: the scope composer
-    already classified every entity once (including the header-macro
-    carve-out) and wrote the port subset here, so downstream composers
-    test ``(name, defined_in) in load_port_entities(...)``.
-    """
-    port = _doc(scope_json).get("port", {})
-    return {(e["name"], e.get("defined_in") or "") for e in port.get(kind, [])}
-
-
-def load_wrap_entities(scope_json, kind: str) -> set[tuple[str, str]]:
-    """Wrap-scope entity set for `kind` as ``(name, def_file)`` keys — the
-    surface :func:`compose_wrap` composed. Mirror of :func:`load_port_entities`
-    for the ``wrap`` section. The tag is read through :func:`entry_tag`, the
-    same accessor :func:`scope_membership` uses, so both agree on a section
-    whose entries key the identifier on ``name``."""
-    wrap = _doc(scope_json).get("wrap", {})
-    return {(entry_tag(e), e.get("defined_in") or "") for e in wrap.get(kind, [])}
+    return {(entry_tag(e), e.get("defined_in") or "")
+            for e in _doc(scope_json).get(section, {}).get(kind, [])}
 
 
 _SCOPE_KINDS = ("functions", "globals", "macros", "types")
@@ -312,10 +286,11 @@ def origin_key(name: str, defined_in: str | None, declared_in) -> tuple[str, str
 
 
 def scope_membership(
-    scope_json, which: str, *,
+    scope_json, section: str, *,
     kinds: tuple[str, ...] = _SCOPE_KINDS,
 ) -> set[tuple[str, str]]:
-    """Unified scope-membership key set for ``which`` (``"port"`` | ``"wrap"``):
+    """Unified membership key set for ``section`` (:data:`TARGET` |
+    :data:`IMPORT`):
     ``{(name, origin)}`` via :func:`origin_key`, so a candidate is in scope iff
     its own ``origin_key`` is in the set. Needs both ``defined_in`` and
     ``declared_in`` on every scope entry (the latter is the def_file-empty
@@ -326,7 +301,7 @@ def scope_membership(
     a symbol query the three sym buckets). Every entry is a real C entity: the
     scope sections are anchored on the CodeQL T1 tables, so there is nothing
     synthesized to filter out."""
-    sec = _doc(scope_json).get(which, {})
+    sec = _doc(scope_json).get(section, {})
     keys: set[tuple[str, str]] = set()
     for kind in kinds:
         for e in sec.get(kind, []):
@@ -536,13 +511,12 @@ def type_method_fns(analysis_root: Path, lifecycle=None) -> set[str]:
     return fns
 
 
-def in_scope_pred(scope_json, which: str, **kw):
+def in_scope_pred(scope_json, section: str, **kw):
     """A predicate ``pred(node) -> bool`` over a dag Node, backed by
     :func:`scope_membership`. ``Node.defined_in`` is already the node's
     ``origin()`` (defined_in or canonical decl), so it keys directly. This is
-    the single scope-classification primitive the node-path stages (wrap/port)
-    share."""
-    keys = scope_membership(scope_json, which, **kw)
+    the single section-classification primitive the node-path stages share."""
+    keys = scope_membership(scope_json, section, **kw)
 
     def pred(n) -> bool:
         return (n.id, n.defined_in or "") in keys
@@ -563,25 +537,25 @@ def _selftest(csv_dir: Path, scope_json: Path) -> None:
     for sanity-checking against a known database while developing
     downstream composers.
     """
-    port = load_port_paths(scope_json)
-    print(f"port paths: {len(port)}")
+    tgt = load_target_paths(scope_json)
+    print(f"target paths: {len(tgt)}")
 
     fns = load_csv(csv_dir / "functions.csv")
-    pf = sum(1 for r in fns if classify(r["def_file"], parse_decl_files(r["decl_files"]), port) == "port")
-    print(f"functions: total={len(fns)}  port={pf}  wrap={len(fns) - pf}")
+    pf = sum(1 for r in fns if classify(r["def_file"], parse_decl_files(r["decl_files"]), tgt) == TARGET)
+    print(f"functions: total={len(fns)}  target={pf}  import={len(fns) - pf}")
 
     macs = load_csv(csv_dir / "macros.csv")
-    pm = sum(1 for r in macs if r["def_file"] in port)
-    print(f"macros:    total={len(macs)}  port={pm}  wrap={len(macs) - pm}")
+    pm = sum(1 for r in macs if r["def_file"] in tgt)
+    print(f"macros:    total={len(macs)}  target={pm}  import={len(macs) - pm}")
 
     gls = load_csv(csv_dir / "globals.csv")
-    pg = sum(1 for r in gls if classify(r["def_file"], parse_decl_files(r["decl_files"]), port) == "port")
-    print(f"globals:   total={len(gls)}  port={pg}  wrap={len(gls) - pg}")
+    pg = sum(1 for r in gls if classify(r["def_file"], parse_decl_files(r["decl_files"]), tgt) == TARGET)
+    print(f"globals:   total={len(gls)}  target={pg}  import={len(gls) - pg}")
 
     types = load_csv(csv_dir / "types.csv")
     by_name = build_types_index(types)
-    pt = sum(1 for r in types if classify_type(r, by_name, port) == "port")
-    print(f"types:     total={len(types)}  port={pt}  wrap={len(types) - pt}")
+    pt = sum(1 for r in types if classify_type(r, by_name, tgt) == TARGET)
+    print(f"types:     total={len(types)}  target={pt}  import={len(types) - pt}")
 
 
 if __name__ == "__main__":
@@ -590,6 +564,6 @@ if __name__ == "__main__":
     ap.add_argument("--csv-dir", type=Path, required=True,
                     help="Directory containing T1 CSVs (functions.csv, macros.csv, globals.csv, types.csv).")
     ap.add_argument("--scope-json", type=Path, required=True,
-                    help="Path to the target's scope.json (its `port.files`).")
+                    help="Path to the target's scope.json (its `target.files`).")
     args = ap.parse_args()
     _selftest(args.csv_dir, args.scope_json)

@@ -285,7 +285,7 @@ def _collect(analysis_root: Path,
              port_fields: dict[str, set[str]] | None = None,
              codeql_dir: Path | None = None,
              in_scope_types: set | None = None,
-             anchor_paths: set[str] | None = None):
+             target_paths: set[str] | None = None):
     """Collect nodes/edges from the analysis tree, narrowed to one target.
 
     The tree is scope-agnostic and ACCUMULATES across targets: an entry that
@@ -312,7 +312,7 @@ def _collect(analysis_root: Path,
     """
     types: dict[str, TypeNode] = {}
     syms: dict[SymKey, SymNode] = {}
-    anchor_paths = anchor_paths or set()
+    target_paths = target_paths or set()
 
     tmeta, tedges, tcasts, talias, tgen = (collect_types_csv(codeql_dir) if codeql_dir
                                      else ({}, {}, {}, {}, {}))
@@ -356,7 +356,7 @@ def _collect(analysis_root: Path,
         # the same reason -- and load-bearing on a wrap-only target, where an
         # empty port scope makes `port_fields` empty and would otherwise leave
         # every wrap struct a dependency leaf.
-        keep = (None if port_fields is None or (df and df in anchor_paths)
+        keep = (None if port_fields is None or (df and df in target_paths)
                 else port_fields.get(tag, set()))
         for fname, tname, tdf in tedges.get(key, ()):
             if keep is not None and fname not in keep:
@@ -1019,7 +1019,7 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
         port_syms = set()
         for kind in ("functions", "globals", "macros"):
             try:
-                port_syms |= _scope.load_port_entities(scope_json, kind)
+                port_syms |= _scope.load_entities(scope_json, _scope.TARGET, kind)
             except Exception:
                 pass
         port_fields = port_touched_fields(analysis_root, port_syms)
@@ -1039,7 +1039,7 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
         # `defined_in` to pair with, so it stays name-keyed and the membership
         # test accepts either form.
         in_scope_types = set()
-        for side in ("port", "wrap"):
+        for side in _scope.SECTIONS:
             for e in _sj.get(side, {}).get("types") or []:
                 df = e.get("defined_in")
                 in_scope_types.add((e["name"], df) if df else e["name"])
@@ -1048,7 +1048,7 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
     types, syms, talias = _collect(analysis_root, port_syms, port_fields,
                                    codeql_dir=codeql_dir,
                                    in_scope_types=in_scope_types,
-                                   anchor_paths=(_scope.load_anchor_paths(scope_json)
+                                   target_paths=(_scope.load_target_paths(scope_json)
                                                  if scope_json is not None else None))
     _populate_nfields(codeql_dir, types)
     # A generator macro is already a symbol node; hang its family off it rather

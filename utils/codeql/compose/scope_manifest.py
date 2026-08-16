@@ -1,28 +1,32 @@
-"""Derive `<target>/scope.json`'s `port` section from `scope-config.json`.
+"""Derive `<target>/scope.json`'s `target` section from `scope-config.json`.
 
 Pure filesystem walk + path predicate — no CodeQL, no agent. The
-target-tier scope manifest is the canonical port-scope file list for
-a given target invocation.
+target-tier scope manifest is the canonical file list for a given target
+invocation.
 
-Scope rule:
+Rule:
 
-  1. A file is a *candidate* if `config.files.port` names it — directly,
-     or through a trailing-slash directory entry that expands to every
+  1. A file is a *candidate* if `config.files` names it — directly, or
+     through a trailing-slash directory entry that expands to every
      C/C++ source or header (`.c`, `.cc`, `.cpp`, `.h`, `.hpp`) beneath
      it.
   2. A candidate survives iff its repo-root-relative path does not match
      any entry in `config.out_of_scope.paths` (entries ending with `/`
      match recursively; otherwise exact-file match).
-  3. Everything else is wrap-scope — derived as the import closure of
-     port (`wrap_closure.py`), plus whatever `config.files.wrap` anchors
-     directly. Both live in the sibling `wrap` section.
+  3. Everything an in-scope entity REACHES but that `config.files` does
+     not name is an import, derived by `wrap_closure.py` into the sibling
+     `import` section.
+
+The section says what the target COVERS, never what will be done with it:
+port or wrap is the translate stage's objective, chosen per unit by the
+orchestrator, not a property recorded here.
 
 `scope.json` schema:
 
     {
       "_comment": "...",
-      "port": {"files": [...], "functions": [...], ...},
-      "wrap": {"anchors": [...], "files": [...], "functions": [...], ...}
+      "target": {"files": [...], "functions": [...], ...},
+      "import": {"files": [...], "functions": [...], ...}
     }
 """
 from __future__ import annotations
@@ -41,8 +45,9 @@ _HEADER_EXTS = {".h", ".hpp"}
 _ALL_EXTS = _SOURCE_EXTS | _HEADER_EXTS
 
 _COMMENT = (
-    "Port-scope manifest for this target. The candidate file universe is the "
-    "filesystem walk of `config.target` minus `config.out_of_scope.paths`; the "
+    "The TARGET section: every entity whose home file `scope-config.json`'s "
+    "`files` names. The candidate file universe is that list expanded "
+    "(trailing-slash entries walked) minus `config.out_of_scope.paths`; the "
     "ENTITY sets (functions/globals/macros/types) and the derived `files` list "
     "are then anchored on the CodeQL T1 tables, so they reflect the "
     "#ifdef-resolved (post-preprocessor) view of what the build actually "
@@ -51,12 +56,12 @@ _COMMENT = (
     "by (name, defined_in) because bare names collide (file-local statics). "
     "Classification (`classify`/`entry_scope`/`classify_type`, including the "
     "header-macro carve-out) runs ONCE here; downstream composers read these "
-    "sets via `scope.load_port_entities` instead of re-deriving scope from the "
-    "CSVs. Build-config-dependent by construction. Every "
-    "file listed here has its repo-root analysis entries carrying "
-    "port-scope additions (`used_by`, `depends_on`). Every "
-    "other file in the analysis tree is implicitly wrap-scope (FFI surface "
-    "only). Paths are repo-root-relative."
+    "sets via `scope.load_entities` instead of re-deriving scope from the "
+    "CSVs. Build-config-dependent by construction. This section says what the "
+    "target COVERS, never what will be done with it — port or wrap is the "
+    "translate stage's objective, chosen per unit by the orchestrator. "
+    "Everything an entity here reaches that `files` does not name is an "
+    "IMPORT, in the sibling section. Paths are repo-root-relative."
 )
 
 
@@ -89,13 +94,13 @@ def _walk_dir(rel_dir: str, repo_root: Path, out_of_scope: list[str]) -> list[st
     return files
 
 
-def enumerate_files(config: dict, repo_root: Path, which: str) -> list[str]:
+def enumerate_files(config: dict, repo_root: Path) -> list[str]:
     """Return the repo-root-relative candidate file paths ``config.files``
-    names for scope ``which`` (``"port"`` | ``"wrap"``).
+    names.
 
-    Always an explicit list — there is no implicit directory walk, so the
-    key must name everything its scope contains. Entries are
-    repo-root-relative and may be either:
+    Always an explicit list — there is no implicit directory walk, so it
+    must name everything the target covers. Entries are repo-root-relative
+    and may be either:
 
       * a **file** — ``include/internal/statem.h``
       * a **directory**, written with a trailing slash — ``ssl/`` — which
@@ -113,7 +118,7 @@ def enumerate_files(config: dict, repo_root: Path, which: str) -> list[str]:
     file that the build never compiled is harmless, not an error.
     """
     out_of_scope = list(config.get("out_of_scope", {}).get("paths", []))
-    entries = (config.get("files") or {}).get(which) or []
+    entries = config.get("files") or []
 
     files: list[str] = []
     for entry in entries:
@@ -124,19 +129,20 @@ def enumerate_files(config: dict, repo_root: Path, which: str) -> list[str]:
     return sorted(set(files))
 
 
-def _port_entities(t1_dir: Path, candidate_files: set[str]) -> dict[str, list[dict]]:
-    """Classify every T1 entity against the candidate (filesystem-walk)
-    port-file set and return the port-scope subset per kind.
+def _target_entities(t1_dir: Path, candidate_files: set[str]) -> dict[str, list[dict]]:
+    """Classify every T1 entity against the candidate (config-named) file set
+    and return the TARGET subset per kind.
 
     Reuses the single load-bearing classifier in `scope.py` — this is
-    the ONE place port/wrap classification runs; downstream composers
+    the ONE place section classification runs; downstream composers
     consume the result rather than re-deriving it from the CSVs. The
     rules mirror the per-row call sites exactly:
 
       - functions / globals → `classify` (definition-anchored, decl
         fallback).
       - macros → `entry_scope` with the header-macro carve-out: a
-        `#define` is port only when its home is a port-scope `.c` TU.
+        `#define` belongs to the target only when its home is a target
+        `.c` TU.
       - types → `classify_type` (typedef alias-chain resolution).
 
     Entities are keyed by (name, defined_in); `defined_in` may be empty for
@@ -151,7 +157,7 @@ def _port_entities(t1_dir: Path, candidate_files: set[str]) -> dict[str, list[di
     def _cls(r: dict) -> bool:
         return _scope.classify(
             r["def_file"], _scope.parse_decl_files(r["decl_files"]), candidate_files
-        ) == "port"
+        ) == _scope.TARGET
 
     # Every entry carries BOTH `defined_in` and `declared_in` (the latter the
     # def_file-empty complement: a null-def callback/extern/typedef is keyed by
@@ -161,19 +167,19 @@ def _port_entities(t1_dir: Path, candidate_files: set[str]) -> dict[str, list[di
                 "declared_in": _scope.parse_decl_files(r.get("decl_files", "")),
                 **extra}
 
-    port_funcs = [_ent(r) for r in funcs if _cls(r)]
-    port_globs = [_ent(r) for r in globs if _cls(r)]
-    port_macros = []
+    tgt_funcs = [_ent(r) for r in funcs if _cls(r)]
+    tgt_globs = [_ent(r) for r in globs if _cls(r)]
+    tgt_macros = []
     for r in macros:
         df = r["def_file"] or ""
-        if _scope.entry_scope("macro", df, [df] if df else [], candidate_files) == "port":
-            port_macros.append(_ent(r))
+        if _scope.entry_scope("macro", df, [df] if df else [], candidate_files) == _scope.TARGET:
+            tgt_macros.append(_ent(r))
     # Types split: a callback is a function-pointer typedef — symbol-shaped, not
     # a layout type — so it is bucketed with `functions` (untagged), matching how
     # wrap_closure emits wrap-scope callbacks. Everything else is a real type.
-    port_types = []
+    tgt_types = []
     for r in types_rows:
-        if _scope.classify_type(r, by_name, candidate_files) != "port":
+        if _scope.classify_type(r, by_name, candidate_files) != _scope.TARGET:
             continue
         # An ANONYMOUS tag (`(unnamed enum)`, `(unnamed class/struct/union)`) is
         # a synthetic placeholder CodeQL reuses for every anonymous definition in
@@ -185,15 +191,15 @@ def _port_entities(t1_dir: Path, candidate_files: set[str]) -> dict[str, list[di
         if str(r.get("name") or "").startswith("("):
             continue
         if r.get("unaliased_kind") == "callback":
-            port_funcs.append(_ent(r))
+            tgt_funcs.append(_ent(r))
         else:
-            port_types.append(_ent(r, kind=r["kind"]))
+            tgt_types.append(_ent(r, kind=r["kind"]))
     keyf = lambda e: (e["defined_in"], e["name"])
     return {
-        "functions": sorted(port_funcs, key=keyf),
-        "globals": sorted(port_globs, key=keyf),
-        "macros": sorted(port_macros, key=keyf),
-        "types": sorted(port_types, key=keyf),
+        "functions": sorted(tgt_funcs, key=keyf),
+        "globals": sorted(tgt_globs, key=keyf),
+        "macros": sorted(tgt_macros, key=keyf),
+        "types": sorted(tgt_types, key=keyf),
     }
 
 
@@ -229,10 +235,10 @@ def _contributing_files(
 
 
 def compose(config_path: Path, t1_dir: Path, repo_root: Path | None = None) -> dict:
-    """Emit the v2 port-scope manifest.
+    """Emit the manifest's `target` section.
 
     `t1_dir` is `<repo_root>/crustify/codeql/t1` — the entity tables
-    produced by `analyze extract-ql`. Expanding `files.port` gives the
+    produced by `analyze extract-ql`. Expanding `files` gives the
     candidate universe; the T1 tables decide which files and entities
     actually compiled under this build configuration.
 
@@ -241,22 +247,18 @@ def compose(config_path: Path, t1_dir: Path, repo_root: Path | None = None) -> d
     portable across git worktrees. When omitted (e.g. standalone `main()`), it
     is derived from the canonical `<repo_root>/crustify/codeql/t1` location of
     `t1_dir`.
-
-    A wrap-only target (`files.port` empty) composes an empty port section:
-    every entity classifies wrap, and the whole surface is anchored by
-    `files.wrap` in the sibling `wrap` section.
     """
     config = json.loads(config_path.read_text())
     if repo_root is None:
         repo_root = t1_dir.resolve().parents[2]
     else:
         repo_root = Path(repo_root).resolve()
-    candidate_files = set(enumerate_files(config, repo_root, "port"))
-    entities = _port_entities(t1_dir, candidate_files)
+    candidate_files = set(enumerate_files(config, repo_root))
+    entities = _target_entities(t1_dir, candidate_files)
     files = _contributing_files(t1_dir, entities, candidate_files)
     return {
         "_comment": _COMMENT,
-        "port": {
+        _scope.TARGET: {
             "files": files,
             "functions": entities["functions"],
             "globals": entities["globals"],
@@ -287,9 +289,9 @@ def main() -> None:
     manifest = compose(args.config, args.t1)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(manifest, indent=2) + "\n")
-    p = manifest["port"]
+    p = manifest[_scope.TARGET]
     print(
-        f"scope: {len(p['files'])} files, {len(p['functions'])} fn / "
+        f"target: {len(p['files'])} files, {len(p['functions'])} fn / "
         f"{len(p['globals'])} gv / {len(p['macros'])} mac / "
         f"{len(p['types'])} ty → {args.out}"
     )

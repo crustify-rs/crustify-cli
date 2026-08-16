@@ -5,56 +5,53 @@
     "The deliverable is a safe Rust wrapper over the whole published C API,",
     "so the target is defined by the headers that publish it."
   ],
-
   "_comment_files": [
-    "`files.port` is empty, and that is the point. Every entity classifies",
-    "wrap, no C source is fenced or re-exported, and libxml2 builds",
-    "unmodified - Rust links the existing shared object.",
+    "The target's file set: everything this campaign covers. One explicit",
+    "list - there is no port/wrap split here, because scope says what the",
+    "target CONTAINS, not what will be done with it. Port or wrap is the",
+    "translate stage's objective, chosen per unit by the orchestrator.",
     "",
-    "`files.wrap` anchors the public header directory. Every function,",
-    "global and type declared under include/libxml/ enters the wrap surface",
-    "directly, independent of whether anything in this target reaches it -",
-    "which is the only way in when there is no port scope to seed a closure.",
-    "45 headers, 1416 XMLPUBFUN declarations at this tag.",
+    "Both halves are needed and the reason is easy to get wrong: entity",
+    "classification is DEFINITION-anchored. Listing only include/libxml/",
+    "would admit just what those headers DEFINE - inline functions, macros,",
+    "the public value structs - while every function they merely DECLARE",
+    "(xmlNewDoc, xmlTextWriterStartElement, ...) has its body in a root .c",
+    "and would fall out of scope entirely. The C sources carry the bodies;",
+    "the headers carry the public value types and the declarations.",
     "",
-    "The definitions are all present in the CodeQL database (55 .c files at",
-    "the repo root, one shared object) even though none of them is ported.",
-    "That is what the ownership analysis walks: free / store / return paths",
-    "read off the real implementation rather than guessed from a signature,",
-    "which is the thing a hand-written -sys crate cannot do.",
+    "The API-surface question - wrap the public headers, not the internals -",
+    "is answered at SELECTION time (`--file include/libxml/xmlwriter.h`),",
+    "not by narrowing scope. That keeps the ownership analysis able to walk",
+    "the real implementation of everything it wraps.",
     "",
-    "A struct DEFINED in one of these headers is a value type whose fields",
-    "are the API, so its field types are walked in full. One merely",
-    "forward-declared there stays an opaque handle. libxml2 defines most of",
-    "its tree structs publicly (xmlNode, xmlDoc, xmlAttr), so the value-type",
-    "share here is far higher than in OpenSSL.",
-    "",
-    "NOT anchored, deliberately: the private headers under include/private/",
-    "and the two repo-root headers (libxml.h, timsort.h). They declare",
-    "libxml2's internals, which no consumer includes; anything the public",
-    "API genuinely exposes from them reaches wrap scope through the type",
-    "closure instead, and lands as an opaque handle."
+    "`./` walks the repo root, which is where libxml2's 55 .c files live.",
+    "out_of_scope below removes the non-library trees it would otherwise",
+    "pull in."
   ],
-  "files": {
-    "port": [
-    ],
-    "wrap": [
-      "include/libxml/"
-    ]
-  },
-
+  "files": [
+    "./"
+  ],
   "_comment_out_of_scope": [
-    "`paths` is empty. The candidates are excluded by construction: `files`",
-    "names only include/libxml/, so test/, fuzz/, python/, example/ and the",
-    "xmllint/xmlcatalog programs are outside it and never enter.",
+    "`paths` removes what `files: ['./']` would otherwise sweep in: the test",
+    "harness, the fuzzers, the Python bindings, the examples and the",
+    "generated/vendored build scaffolding. None of it is libxml2's shipped",
+    "library surface.",
     "",
     "`features` is documentation only - no composer reads it. It lists the",
-    "LIBXML2_WITH_* options that are OFF in the configure line recorded in",
-    "build.json, so a body they elide contributes no entities and drops out",
-    "of scope.json on its own."
+    "LIBXML2_WITH_* options OFF in the configure line recorded in build.json,",
+    "so a body they elide contributes no entities and drops out on its own."
   ],
   "out_of_scope": {
     "paths": [
+      "test/",
+      "fuzz/",
+      "python/",
+      "example/",
+      "doc/",
+      "result/",
+      "win32/",
+      "codegen/",
+      "m4/"
     ],
     "features": [
       "LIBXML2_WITH_HTTP",

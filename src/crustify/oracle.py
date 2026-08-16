@@ -67,25 +67,28 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
     (`facets`). The .rs module of an entry is found via
     `crustify-cli <target> scaffold --name <X>`, not here."""
     sc = p.add_mutually_exclusive_group()
-    sc.add_argument("--wrap-only", action="store_true", dest="wrap_only",
-                    help="Narrow to wrap scope: enumeration → wrap-scope entries; "
-                         "--ops/--methods → wrap-scope functions; --fields/--field-touchers "
-                         "→ fields touched by wrap-scope code. (Facets are complete "
+    sc.add_argument("--import-only", action="store_true", dest="import_only",
+                    help="Narrow to the IMPORT section — what the target reaches "
+                         "but does not name: enumeration → import entries; "
+                         "--ops/--methods → import functions; --fields/--field-touchers "
+                         "→ fields touched by import code. (Facets are complete "
                          "by default.)")
-    sc.add_argument("--port-only", action="store_true", dest="port_only",
-                    help="Narrow to port scope: enumeration → port-scope entries; "
-                         "--ops/--methods → port-scope functions; --fields/--field-touchers "
-                         "→ fields touched by port-scope code. (Facets are complete "
-                         "by default.)")
+    sc.add_argument("--target-only", action="store_true", dest="target_only",
+                    help="Narrow to the TARGET section — what "
+                         "`scope-config.json`'s `files` names: enumeration → target "
+                         "entries; --ops/--methods → target functions; "
+                         "--fields/--field-touchers → fields touched by target code. "
+                         "(Facets are complete by default.) Says nothing about what "
+                         "will be DONE with them — that is `translate --objective`.")
     og = p.add_mutually_exclusive_group()
     og.add_argument("--out-of-tree", action="store_true", dest="out_of_tree",
                     help="Enumeration only. Keep entries whose home is OUTSIDE the "
                          "repository (system / toolchain headers). Combines with the "
-                         "scope flags: `--wrap-only --out-of-tree` is the permanent FFI "
+                         "scope flags: `--import-only --out-of-tree` is the permanent FFI "
                          "floor — code that can never move to port scope.")
     og.add_argument("--in-tree", action="store_true", dest="in_tree",
                     help="Enumeration only. Keep entries whose home is INSIDE the "
-                         "repository. `--wrap-only --in-tree` is first-party code "
+                         "repository. `--import-only --in-tree` is first-party code "
                          "wrapped only because this target does not port it — the "
                          "remaining port backlog.")
     p.add_argument("--name", nargs="+", action="extend", default=None, metavar="NAME",
@@ -116,8 +119,8 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
     if facets:
         facet.add_argument("--fields", action="store_true",
                            help="Introspect a type: ALL declared fields with their "
-                                "per-field structural + ptr detail (--port-only/"
-                                "--wrap-only narrow to that scope's touched fields); "
+                                "per-field structural + ptr detail (--target-only/"
+                                "--import-only narrow to that section's touched fields); "
                                 "'[]' if none.")
         facet.add_argument("--ops", action="store_true",
                            help="Introspect a type: its method surface "
@@ -126,12 +129,12 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
                            help="Introspect a type: its COMPLETE footprint — the "
                                 "opaque_in ∪ non_opaque_in functions (every function "
                                 "tree-wide that touches the type, incl. out-of-scope); "
-                                "--port-only/--wrap-only intersect with that scope's "
+                                "--target-only/--import-only intersect with that section's "
                                 "functions; '[]' if none.")
         facet.add_argument("--field-touchers", action="store_true",
                            dest="field_touchers",
                            help="Introspect a type: {field: [touchers]} — ALL "
-                                "declared fields by default (--port-only/--wrap-only "
+                                "declared fields by default (--target-only/--import-only "
                                 "narrow the FIELDS to that scope's touched subset); "
                                 "each field's toucher set is the COMPLETE, unfiltered "
                                 "set of functions that access it.")
@@ -198,7 +201,7 @@ def _add_query_command(sub) -> None:
         "ownership store holds anything for this entity — `lifetime: null` "
         "alone cannot distinguish 'nobody looked' from 'an agent found no "
         "lifecycle role'; `pending` lists the pointer slots with no ownership "
-        "block, counted per scope under --port-only/--wrap-only. "
+        "block, counted per section under --target-only/--import-only. "
         "A type carries no lifecycle of its own: dropped_by / "
         "fields_disposed_by / cloned_by are reverse-derived from the acting "
         "symbols' `lifetime` blocks. "
@@ -229,17 +232,18 @@ def _add_query_command(sub) -> None:
 
     files_q = query_sub.add_parser(
         "files",
-        help="Scope files: --port-only (port set) or --wrap-only (wrap closure).",
+        help="Scope files: --target-only (the target's own set) or "
+             "--import-only (the derived closure).",
     )
     files_sel = files_q.add_mutually_exclusive_group()
     files_sel.add_argument(
-        "--port-only", action="store_true", dest="port_only",
-        help="Print the port-scope file set (scope.json.port).",
+        "--target-only", action="store_true", dest="target_only",
+        help="Print the target's own file set (scope.json.target.files).",
     )
     files_sel.add_argument(
-        "--wrap-only", action="store_true", dest="wrap_only",
-        help="Print the wrap closure — the import-header surface reached from "
-             "port code via depends_on (cached scope.json.wrap, else computed).",
+        "--import-only", action="store_true", dest="import_only",
+        help="Print the import closure — the header surface the target reaches "
+             "through depends_on (scope.json.import.files).",
     )
 
     dag_q = query_sub.add_parser(
@@ -293,14 +297,14 @@ def _add_query_command(sub) -> None:
     )
     dag_scope = dag_q.add_mutually_exclusive_group()
     dag_scope.add_argument(
-        "--wrap-only", action="store_true", dest="wrap_only",
-        help="Restrict the node set (slice / --loc) to wrap-scope entities "
-             "(scope.json wrap closure).",
+        "--import-only", action="store_true", dest="import_only",
+        help="Restrict the node set (slice / --loc) to IMPORT entities "
+             "(scope.json's derived closure).",
     )
     dag_scope.add_argument(
-        "--port-only", action="store_true", dest="port_only",
-        help="Restrict the node set (slice / --loc) to port-scope entities "
-             "(scope.json port closure).",
+        "--target-only", action="store_true", dest="target_only",
+        help="Restrict the node set (slice / --loc) to TARGET entities "
+             "(scope.json's own file set).",
     )
 
 
@@ -309,8 +313,8 @@ def _dispatch_query(args: argparse.Namespace, target: Path) -> None:
         from crustify.query import query_files
         query_files(
             target,
-            port_only=bool(getattr(args, "port_only", False)),
-            wrap_only=bool(getattr(args, "wrap_only", False)),
+            target_only=bool(getattr(args, "target_only", False)),
+            import_only=bool(getattr(args, "import_only", False)),
         )
         return
     if args.subject == "dag":
@@ -323,8 +327,8 @@ def _dispatch_query(args: argparse.Namespace, target: Path) -> None:
             scc=getattr(args, "scc", None),
             layer=getattr(args, "layer", None),
             loc=bool(getattr(args, "loc", False)),
-            wrap_only=bool(getattr(args, "wrap_only", False)),
-            port_only=bool(getattr(args, "port_only", False)),
+            import_only=bool(getattr(args, "import_only", False)),
+            target_only=bool(getattr(args, "target_only", False)),
         )
         return
     from crustify.query import query
@@ -333,8 +337,8 @@ def _dispatch_query(args: argparse.Namespace, target: Path) -> None:
         subject=args.subject,
         names=getattr(args, "name", None),
         files=getattr(args, "files", None),
-        wrap_only=bool(getattr(args, "wrap_only", False)),
-        port_only=bool(getattr(args, "port_only", False)),
+        import_only=bool(getattr(args, "import_only", False)),
+        target_only=bool(getattr(args, "target_only", False)),
         out_of_tree=bool(getattr(args, "out_of_tree", False)),
         in_tree=bool(getattr(args, "in_tree", False)),
         fields=bool(getattr(args, "fields", False)),

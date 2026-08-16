@@ -188,7 +188,7 @@ class TypeMod(NamedTuple):
     stem: str            # snake module name (pre-collision-resolution)
     tag: str             # C type tag (entry["name"])
     typedef: str | None  # public typedef, if any
-    scope: str | None    # "port" / "wrap" / None (unknown)
+    scope: str | None    # scope.TARGET / scope.IMPORT / None (unknown)
     fields: tuple = ()   # field names (each gets a `// Field:` accessor anchor)
 
 
@@ -242,7 +242,7 @@ def _load_wrap_routing(
         doc = scope._doc(scope_json_path)
     except (OSError, ValueError):
         return sym_via, type_via
-    w = doc.get("wrap") or {}
+    w = doc.get(scope.IMPORT) or {}
     for bucket in ("functions", "globals", "macros"):
         for r in w.get(bucket, []):
             via = r.get("declared_in") or []
@@ -261,7 +261,7 @@ def _wrap_home_header(decls: list[str], defined_in: str) -> str:
     return scope.canonical_decl(decls) or defined_in
 
 
-def _classify_symbols(syms_by_dir, port_files, want):
+def _classify_symbols(syms_by_dir, target_files, want):
     """Yield ``(name, defined_in, decls, verb, scope_label)`` for every
     anchorable symbol, routed file-grained. Classification is (``function_*``/``global_*`` →
     ``Replaces``; macros skipped entirely — bindgen owns them); routing is
@@ -287,7 +287,7 @@ def _classify_symbols(syms_by_dir, port_files, want):
                 # which library owns them, but nothing anchors them to a .rs.
                 continue
             if kind.startswith(("function_", "global_")):
-                yield name, df, decls, "Replaces", scope.classify(df, decls, port_files)
+                yield name, df, decls, "Replaces", scope.classify(df, decls, target_files)
 
 
 def _crate_by_mdir(analysis_root: Path | None) -> dict[str, str]:
@@ -324,7 +324,7 @@ def compose_files(
     if filter_spec is None:
         filter_spec = FilterSpec()
     scope_json = filter_spec.scope_json_path
-    port_files = scope.load_port_paths(scope_json) if scope_json else set()
+    target_files = scope.load_target_paths(scope_json) if scope_json else set()
     sym_via, type_via = _load_wrap_routing(scope_json)
     want = set(crate_filter) if crate_filter else None
 
@@ -373,7 +373,7 @@ def compose_files(
         tag = entry.get("name") or entry.get("type")
         if not tag:
             return
-        if scope_label == "wrap":
+        if scope_label == scope.IMPORT:
             st = home(type_via.get(tag) or _wrap_home_header(
                 _decls(entry.get("declared_in")), entry.get("defined_in") or ""))
         else:
@@ -395,11 +395,11 @@ def compose_files(
         if crate in _SKIP_CRATES or (want is not None and crate not in want):
             continue
         for entry in entries:
-            add_type(entry, _entry_scope(entry, port_files) if port_files else "wrap")
+            add_type(entry, _entry_scope(entry, target_files) if target_files else scope.IMPORT)
 
     for name, df, decls, verb, scope_label in _classify_symbols(
-            syms_by_dir, port_files, want):
-        if scope_label == "wrap":
+            syms_by_dir, target_files, want):
+        if scope_label == scope.IMPORT:
             tf = sym_via.get((name, df)) or _wrap_home_header(decls, df)
         else:
             tf = df
@@ -655,7 +655,7 @@ def _op_ownership(
     return owner
 
 
-def _entry_scope(entry: dict[str, Any], port_files: set[str]) -> str:
+def _entry_scope(entry: dict[str, Any], target_files: set[str]) -> str:
     """port iff the type's defining file (or first declaring header) is in
     the port-scope set; else wrap."""
     df = entry.get("defined_in")
@@ -665,7 +665,7 @@ def _entry_scope(entry: dict[str, Any], port_files: set[str]) -> str:
             df = decls[0] if decls else None
         elif isinstance(decls, str):
             df = decls
-    return "port" if df in port_files else "wrap"
+    return scope.TARGET if df in target_files else scope.IMPORT
 
 
 # -------------------------------------------------------------------- writing

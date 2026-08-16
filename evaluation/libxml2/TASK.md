@@ -61,9 +61,9 @@ Playbook toolchain is already installed.
 Before spending on Phase 2, report:
 
 ```
-crustify-oracle /work/libxml2 . query types  --wrap-only
-crustify-oracle /work/libxml2 . query types  --wrap-only --out-of-tree
-crustify-oracle /work/libxml2 . query symbols --wrap-only
+crustify-oracle /work/libxml2 . query types  --target-only
+crustify-oracle /work/libxml2 . query types  --import-only --out-of-tree
+crustify-oracle /work/libxml2 . query symbols --target-only
 crustify-oracle /work/libxml2 . query dag --stats
 ```
 
@@ -80,7 +80,7 @@ Every wave is `--objective wrap`; there is no port stage. Report the plan from
 layer:
 
 ```
-crustify-oracle /work/libxml2 . query dag --layer <L> --wrap-only
+crustify-oracle /work/libxml2 . query dag --layer <L> --import-only
 ```
 
 One layer at a time, lowest first, using `--name`. libxml2 defines most of its

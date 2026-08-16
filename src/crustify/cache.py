@@ -21,7 +21,8 @@ from pathlib import Path
 #:  3 — `wrap.anchors`; anonymous tags dropped from `wrap.types`.
 #:  4 — dag keeps every field of an anchor-DEFINED wrap struct.
 #:  5 — anchored `declared_in` falls back to one canonical header, not all.
-_VERSION = 5
+#:  6 — sections renamed port/wrap -> target/import; anchors removed.
+_VERSION = 6
 
 
 def fingerprint(layout, target) -> dict:

@@ -135,7 +135,7 @@ def _in_scope_names(layout, target: Path) -> set[str]:
     except SystemExit:
         return set()
     names: set[str] = set()
-    for section in (doc.get("port") or {}), (doc.get("wrap") or {}):
+    for section in (doc.get("target") or {}), (doc.get("import") or {}):
         for group in ("functions", "globals", "macros", "types"):
             for e in section.get(group) or []:
                 for key in ("name", "type"):
@@ -145,7 +145,7 @@ def _in_scope_names(layout, target: Path) -> set[str]:
 
 
 def _scope_map(layout, target: Path) -> dict[str, str]:
-    """``name -> "port" | "wrap"`` from scope.json — the anchor-verb selector: a
+    """``name -> scope.TARGET | scope.IMPORT`` from scope.json — the anchor-verb selector: a
     wrap-scope item anchors as ``// Wraps:``, a port-scope one as ``// Replaces:``.
     Types key on ``name`` (port) / ``type`` (wrap); functions/globals on ``name``.
     Port is applied second so it wins on the (rare) overlap. Empty when scope
@@ -156,7 +156,7 @@ def _scope_map(layout, target: Path) -> dict[str, str]:
     except SystemExit:
         return {}
     out: dict[str, str] = {}
-    for sec in ("wrap", "port"):   # port second -> overrides on overlap
+    for sec in ("import", "target"):   # target second -> overrides on overlap
         section = doc.get(sec) or {}
         for group in ("functions", "globals", "types"):
             for e in section.get(group) or []:
@@ -188,7 +188,7 @@ def _port_touched(layout, target) -> dict[str, set] | None:
         _scope_mod.build(layout, target, stage="scaffold")
     except SystemExit:
         return None
-    idx = scope_touched_index(layout, target, "port")
+    idx = scope_touched_index(layout, target, "target")
     return {tag: {f for s in by_file.values() for f in s}
             for tag, by_file in idx.items()} or None
 
@@ -538,7 +538,7 @@ def _merge_anchors(rs_path: Path, e: dict,
             # either verb).
             if not re.search(
                     rf"(?m)^\s*//+\s*(?:Replaces|Wraps):\s*{re.escape(nm)}\b", text):
-                verb = "Wraps" if scope_map.get(nm) == "wrap" else "Replaces"
+                verb = "Wraps" if scope_map.get(nm) == "import" else "Replaces"
                 new += [f"// {verb}: {nm}", _TODO, ""]
                 if kind == "types":
                     for fld in field_map.get(nm, ()):
@@ -633,7 +633,7 @@ def _stub(e: dict, scope_map: dict[str, str] | None = None,
         for nm in m.get(kind) or []:
             if kind == "macros" and nm not in generators:
                 continue
-            verb = "Wraps" if scope_map.get(nm) == "wrap" else "Replaces"
+            verb = "Wraps" if scope_map.get(nm) == "import" else "Replaces"
             lines += [f"// {verb}: {nm}", _TODO, ""]
             if kind == "types":
                 for fld in field_map.get(nm, ()):

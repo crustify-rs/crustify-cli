@@ -9,9 +9,9 @@ graph, and the same fix applies — compose it, don't cache it.
 
 Two halves, both composer-only:
 
-  ``port``  from `scope-config.json` + T1, ~0.12s
-  ``wrap``  the import closure of ``port`` over T1/T2, ~1.4s (dominated by
-            parsing `macro_expansions.csv` and friends)
+  ``target``  from `scope-config.json` + T1, ~0.12s
+  ``import``  the closure of ``target`` over T1/T2, ~1.4s (dominated by
+              parsing `macro_expansions.csv` and friends)
 
 :func:`build` memoizes per `(repo_root, target)` for the life of the process,
 which is what makes the multi-read commands cheap: `deps_dag.compose` alone
@@ -53,11 +53,9 @@ def build(layout: Layout, target: Path, *, stage: str) -> dict:
         _CACHE[ck] = disk
         return disk
 
-    import json
-
-    from compose.scope_manifest import compose as _port_compose, enumerate_files
+    from compose.scope_manifest import compose as _target_compose, enumerate_files
     from compose import scope as _scope
-    from compose.wrap_closure import compose_wrap
+    from compose.import_closure import compose_import
 
     t1, t2 = layout.t1, layout.t2
     if not (t1 / "functions.csv").is_file():
@@ -76,31 +74,26 @@ def build(layout: Layout, target: Path, *, stage: str) -> dict:
             f"{stage}: no includes.csv at {includes_csv}. "
             f"Run `crustify-oracle {target} extract-ql` first.")
 
-    config = json.loads(config_path.read_text())
-    anchor_paths = set(enumerate_files(config, layout.repo_root, "wrap"))
-    manifest = _port_compose(config_path, t1, layout.repo_root)
-    port_paths = _scope.load_port_paths(manifest)
-    # Both file sets empty means the target covers nothing. There is no implicit
+    manifest = _target_compose(config_path, t1, layout.repo_root)
+    target_paths = _scope.load_target_paths(manifest)
+    # An empty file set means the target covers nothing. There is no implicit
     # walk to fall back on, so this is always a config error — a mistyped path
-    # under `files`, or a `files` block that never got filled in — and it would
+    # under `files`, or a `files` list that never got filled in — and it would
     # otherwise compose a well-formed, entirely empty scope that every later
     # stage reports as "nothing to do".
-    if not port_paths and not anchor_paths:
+    if not target_paths:
         raise SystemExit(
-            f"{stage}: {config_path} selects no files. `files.port` and "
-            f"`files.wrap` are both empty or name paths that do not exist "
-            f"under {layout.repo_root} — a port target needs `files.port`, a "
-            f"wrap-only target needs `files.wrap`.")
-    # The wrap half needs the port half, and only the port half — it reads
-    # neither syms.json nor types.json, so scope stands alone ahead of the
-    # manifest composers.
-    manifest["wrap"] = compose_wrap(
+            f"{stage}: {config_path} selects no files. `files` is empty, or "
+            f"names paths that do not exist under {layout.repo_root}.")
+    # The import half needs the target half, and only that — it reads neither
+    # syms.json nor types.json, so scope stands alone ahead of the manifest
+    # composers.
+    manifest[_scope.IMPORT] = compose_import(
         t1, t2, manifest,
         _scope.load_csv(includes_csv),
-        port_paths,
+        target_paths,
         _scope.load_csv(t1 / "types.csv"),
         _scope.load_csv(t2 / "field_type_uses.csv"),
-        anchor_paths,
     )
     manifest = _cache.store(layout.scope(target), manifest, fp)
     _CACHE[ck] = manifest

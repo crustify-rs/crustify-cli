@@ -421,38 +421,25 @@ def _type_keys_for(name: str, def_file: str, by_name: dict[str, dict]) -> list[t
     return keys
 
 
-def _wrap_port_reachable(
+def _import_reachable(
     reach: Reach, struct_name: str, struct_def_file: str,
-    by_name: dict[str, dict], port_paths: set[str],
-    anchor_paths: set[str] | None = None,
+    by_name: dict[str, dict], target_paths: set[str],
 ) -> bool:
-    """7-scenario reach gate — a wrap type is included iff any fires.
-
-    Plus the anchor short-circuit: a type declared or defined in a
-    `files.wrap` file is in the surface outright, no reach needed. Every
-    scenario below asks "does port code touch this", which on a wrap-only
-    target nothing does — the config named the header instead.
-    """
+    """7-scenario reach gate — an out-of-target type is included iff any
+    fires, i.e. iff the target actually touches it."""
     type_keys = _type_keys_for(struct_name, struct_def_file, by_name)
-    if anchor_paths:
-        for tname, tdef in type_keys:
-            row = by_name.get(tname)
-            decls = scope.parse_decl_files(row.get("decl_files") or "") if row else []
-            if scope.is_anchored(tdef or (row or {}).get("def_file") or "",
-                                 decls, anchor_paths):
-                return True
     if reach.port_field_access_files(struct_name, struct_def_file):
         return True
     for tname, tdef in type_keys:
         for _fn, fn_def_file in reach.functions_using_type(tname, tdef):
-            if fn_def_file in port_paths:
+            if fn_def_file in target_paths:
                 return True
         for _fn, fn_def_file in reach.functions_using_type_in_body(tname, tdef):
-            if fn_def_file in port_paths:
+            if fn_def_file in target_paths:
                 return True
     for tname, tdef in type_keys:
         for fn_name, fn_def_file in reach.functions_using_type(tname, tdef):
-            if fn_def_file not in port_paths and reach.is_function_port_reachable(fn_name, fn_def_file):
+            if fn_def_file not in target_paths and reach.is_function_port_reachable(fn_name, fn_def_file):
                 return True
         # Body usage by a port-REACHABLE (non-port-file) function. wrap_closure
         # pulls these in via depends_on.types (field_access_index over the
@@ -465,7 +452,7 @@ def _wrap_port_reachable(
         # type like pthread_mutex_t is already admitted by-value via S5; the
         # scaffolder decides bindgen-vs-record home downstream, not this gate).
         for fn_name, fn_def_file in reach.functions_using_type_in_body(tname, tdef):
-            if fn_def_file not in port_paths and reach.is_function_port_reachable(fn_name, fn_def_file):
+            if fn_def_file not in target_paths and reach.is_function_port_reachable(fn_name, fn_def_file):
                 return True
     port_fields = reach.port_touched_fields()
     for tname, tdef in type_keys:
@@ -511,7 +498,7 @@ def _enum_skeleton(
 def _build_struct_entry(
     reach: Reach, name: str, def_file: str,
     declared_in: str | None, defined_in: str | None,
-    typedefs: list[str], is_port: bool,
+    typedefs: list[str], in_target: bool,
     by_name: dict[str, dict], kind: str = "struct",
 ) -> tuple[dict[str, Any], list[dict[str, Any]], set[str], list[str] | None]:
     """Build a struct-shaped manifest entry, its field-type forward edges, and
@@ -540,7 +527,7 @@ def _build_struct_entry(
     entry["opaque_in"], entry["non_opaque_in"] = _type_consumers(
         reach, name, def_file, by_name, None,
     )
-    touched = None if is_port else _port_touched_field_names(reach, name, def_file)
+    touched = None if in_target else _port_touched_field_names(reach, name, def_file)
     forward = _forward_type_tags(fields, by_name)
     return entry, fields, forward, touched
 
@@ -556,7 +543,7 @@ def compose(
 
       - ``entries_by_dir``: ``{manifest_dir: [entries]}`` ready for the
         merge primitive.
-      - ``dir_scope``: ``{manifest_dir: "port" | "wrap"}`` parallel
+      - ``dir_scope``: ``{manifest_dir: TARGET | IMPORT}`` parallel
         map. Orchestrator consumers (the type wrapper's manifests-list
         input contract) read this to tag each manifest with its scope
         without persisting the tag to disk. Assumes a stem-group
@@ -568,8 +555,8 @@ def compose(
     """
     if filter_spec is None:
         filter_spec = FilterSpec()
-    port_paths = (
-        scope.load_port_paths(filter_spec.scope_json_path)
+    target_paths = (
+        scope.load_target_paths(filter_spec.scope_json_path)
         if filter_spec.scope_json_path is not None else set()
     )
     scope_enabled = filter_spec.scope_json_path is not None
@@ -577,42 +564,36 @@ def compose(
 
     # v2: port type classification is precomputed in scope.json's `types`
     # entity set; membership lookup on (name, def_file) replaces the
-    # per-row classify()/classify_type() pass. port_paths (files) still
+    # per-row classify()/classify_type() pass. target_paths (files) still
     # drives wrap-side reachability.
-    port_types_set = (
-        scope.load_port_entities(filter_spec.scope_json_path, "types")
+    tgt_types = (
+        scope.load_entities(filter_spec.scope_json_path, scope.TARGET, "types")
         if filter_spec.scope_json_path is not None else set()
     )
-    # Wrap-scope anchors (`files.wrap`) — the second seed `_wrap_port_reachable`
-    # admits on, and the only one a wrap-only target has.
-    anchor_paths = (
-        scope.load_anchor_paths(filter_spec.scope_json_path)
-        if filter_spec.scope_json_path is not None else set()
-    )
-    # The composed wrap surface, as an admission floor. `_wrap_port_reachable`
-    # asks its seven questions of the CodeQL edges directly; the wrap closure
-    # ALSO admits a type through the transitive field-walk (a public struct's
-    # field whose type is private), which no scenario there covers when nothing
-    # is port-reachable. A scope.json entry with no manifest record is
-    # unschedulable, so the surface is authoritative: whatever it lists gets a
-    # record. Empty when scope.json is absent.
-    wrap_types_set = (
-        scope.load_wrap_entities(filter_spec.scope_json_path, "types")
+    # The composed IMPORT surface, as an admission floor. `_import_reachable`
+    # asks its seven questions of the CodeQL edges directly; the closure ALSO
+    # admits a type through the transitive field-walk (a target struct's field
+    # whose type is private), which no scenario there covers. A scope.json
+    # entry with no manifest record is unschedulable, so the surface is
+    # authoritative: whatever it lists gets a record. Empty when scope.json is
+    # absent.
+    imtgt_types = (
+        scope.load_entities(filter_spec.scope_json_path, scope.IMPORT, "types")
         if filter_spec.scope_json_path is not None else set()
     )
 
-    def _in_wrap_surface(c: dict) -> bool:
-        return (c["name"], c["def_file"] or "") in wrap_types_set or \
-            _wrap_port_reachable(reach, c["name"], c["def_file"], by_name,
-                                 port_paths, anchor_paths)
+    def _in_import_surface(c: dict) -> bool:
+        return (c["name"], c["def_file"] or "") in imtgt_types or \
+            _import_reachable(reach, c["name"], c["def_file"], by_name,
+                              target_paths)
 
     types_rows = scope.load_csv(csv_dir_t1 / "types.csv")
     by_name = scope.build_types_index(types_rows)
-    reach = Reach(csv_dir_t2, port_paths, csv_dir_t1=csv_dir_t1)
+    reach = Reach(csv_dir_t2, target_paths, csv_dir_t1=csv_dir_t1)
     typedefs_for = _typedef_aliases_by_terminal(types_rows, by_name)
 
     # ---- Pass 1: enumerate candidate entries ----
-    # Each candidate: {entry, is_port, key, name, def_file, forward, target_file}
+    # Each candidate: {entry, in_target, key, name, def_file, forward, target_file}
     candidates: list[dict[str, Any]] = []
     # Deduped by (name, def_file), NOT name alone: a file-local struct
     # (e.g. `struct entry` in indexer.c) must not be masked by a distinct
@@ -621,7 +602,7 @@ def compose(
     seen: set[tuple[str, str]] = set()
 
     def _is_port(r: dict) -> bool:
-        return scope_enabled and (r["name"], r["def_file"]) in port_types_set
+        return scope_enabled and (r["name"], r["def_file"]) in tgt_types
 
     for r in types_rows:
         if r["kind"] not in {"struct", "union", "enum"}:
@@ -646,7 +627,7 @@ def compose(
         # loop's `target_file`.
         declared_in = scope.canonical_decl(decls)
         defined_in = r["def_file"] or None
-        is_port = _is_port(r)
+        in_target = _is_port(r)
 
         # Named struct/union/enum identity comes from the C tag here; the
         # anonymous-typedef loop below mirrors this via the same
@@ -658,12 +639,12 @@ def compose(
         else:
             entry, fields, forward, touched = _build_struct_entry(
                 reach, r["name"], r["def_file"], declared_in, defined_in,
-                typedefs_for.get(r["name"], []), is_port, by_name, r["kind"],
+                typedefs_for.get(r["name"], []), in_target, by_name, r["kind"],
             )
 
         entry["declared_in"] = decls          # full decl list on the stored field
         candidates.append({
-            "entry": entry, "is_port": is_port,
+            "entry": entry, "in_target": in_target,
             "key": (scope.entry_tag(entry), entry.get("defined_in") or ""),
             "name": r["name"], "def_file": r["def_file"],
             "forward": forward,
@@ -684,7 +665,7 @@ def compose(
                            "enum_anonymous"} or r["name"] in seen_td:
             continue
         seen_td.add(r["name"])
-        is_port = scope_enabled and (r["name"], r["def_file"]) in port_types_set
+        in_target = scope_enabled and (r["name"], r["def_file"]) in tgt_types
         decls = scope.parse_decl_files(r["decl_files"])
         # The entry's stored `declared_in` FIELD gets the FULL decl list (set
         # just before append) so the scaffolder reasons over every decl site
@@ -706,14 +687,14 @@ def compose(
         if unalias in {"struct_anonymous", "union_anonymous"}:
             entry, _fields, forward, touched = _build_struct_entry(
                 reach, r["name"], r["def_file"], declared_in, defined_in,
-                identity, is_port, by_name,
+                identity, in_target, by_name,
                 "union" if unalias == "union_anonymous" else "struct",
             )
         else:  # enum_anonymous
             entry = _enum_skeleton(r["name"], declared_in, defined_in, identity)
         entry["declared_in"] = decls          # full decl list on the stored field
         candidates.append({
-            "entry": entry, "is_port": is_port,
+            "entry": entry, "in_target": in_target,
             "key": (scope.entry_tag(entry), entry.get("defined_in") or ""),
             "name": r["name"], "def_file": r["def_file"],
             "forward": forward,
@@ -736,8 +717,8 @@ def compose(
             # from port code per the scope.json. `--unscoped` bypasses it (same
             # intent as the filter-mode branch below), so an explicitly named
             # type that no port file reaches is still emitted.
-            if scope_enabled and not filter_spec.unscoped and not c["is_port"]:
-                if not _in_wrap_surface(c):
+            if scope_enabled and not filter_spec.unscoped and not c["in_target"]:
+                if not _in_import_surface(c):
                     continue
             seed_keys.add(c["key"])
         # Transitive field-type closure. Seeded from port-scope seeds
@@ -750,7 +731,7 @@ def compose(
         # (the named type only, no closure). See FilterSpec.expand_closure.
         closure_keys: set[tuple[str, str]] = set()
         if filter_spec.expand_closure():
-            worklist = [c for c in candidates if c["key"] in seed_keys and c["is_port"]]
+            worklist = [c for c in candidates if c["key"] in seed_keys and c["in_target"]]
             visited_tags: set[str] = set()
             while worklist:
                 c = worklist.pop()
@@ -772,14 +753,14 @@ def compose(
             # classifies port/wrap for the entries that qualify.
             if not scope_enabled or filter_spec.unscoped:
                 emit_keys.add(c["key"])
-            elif c["is_port"]:
+            elif c["in_target"]:
                 emit_keys.add(c["key"])
-            elif _in_wrap_surface(c):
+            elif _in_import_surface(c):
                 emit_keys.add(c["key"])
 
     # ---- Pass 4: emit, applying --port-only / --wrap-only ----
-    # Per-dir scope is tracked alongside emission: a dir is "port" if
-    # any of its emitted entries is port-scope, else "wrap". This
+    # Per-dir section is tracked alongside emission: a dir is TARGET if
+    # any of its emitted entries belongs to it, else IMPORT. This
     # mirrors the convention used by syms_manifest.compose() and is
     # subject to the mixed-scope-in-one-dir limitation tracked in
     # docs/TODO.md.
@@ -792,18 +773,18 @@ def compose(
     for c in candidates:
         if c["key"] not in emit_keys:
             continue
-        if filter_spec.port_only and not c["is_port"]:
+        if filter_spec.port_only and not c["in_target"]:
             continue
-        if filter_spec.wrap_only and c["is_port"]:
+        if filter_spec.wrap_only and c["in_target"]:
             continue
         rel_dir = manifest_dir_for(c["target_file"])
         if rel_dir is None:
             continue
         entries_by_dir[rel_dir].append(c["entry"])
-        if c["is_port"]:
-            dir_scope[rel_dir] = "port"
+        if c["in_target"]:
+            dir_scope[rel_dir] = scope.TARGET
         else:
-            dir_scope.setdefault(rel_dir, "wrap")
+            dir_scope.setdefault(rel_dir, scope.IMPORT)
         if c.get("touched") is not None:
             focus_by_key[(scope.entry_tag(c["entry"]), c["entry"].get("defined_in") or "")] = \
                 c["touched"]
@@ -889,7 +870,7 @@ def main() -> None:
     wrap_dirs = 0
     for rel_dir, entries in sorted(entries_by_dir.items()):
         total += len(entries)
-        if dir_scope.get(rel_dir) == "port":
+        if dir_scope.get(rel_dir) == scope.TARGET:
             port_dirs += 1
         else:
             wrap_dirs += 1

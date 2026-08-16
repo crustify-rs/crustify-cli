@@ -4,7 +4,6 @@
     "Port scope is the whole shipped source tree - the library (src/libgit2,",
     "src/util), the CLI (src/cli), and the public headers under include/."
   ],
-
   "_comment_files": [
     "`files.port` names everything the port scope contains - there is no",
     "implicit directory walk, so `src/` is listed alongside `include/` rather",
@@ -43,15 +42,10 @@
     "as the import closure of `files.port`. It would name public headers to",
     "wrap outright, which is what a wrap-only target consists of."
   ],
-  "files": {
-    "port": [
-      "src/",
-      "include/"
-    ],
-    "wrap": [
-    ]
-  },
-
+  "files": [
+    "src/",
+    "include/"
+  ],
   "_comment_out_of_scope": [
     "`paths` is empty on purpose. The candidates one might reflexively list",
     "here are already excluded by construction: tests/ and deps/clar are not",
@@ -70,8 +64,7 @@
     "is build/gen_headers/git2_features.h."
   ],
   "out_of_scope": {
-    "paths": [
-    ],
+    "paths": [],
     "features": [
       "GIT_SHA256_BUILTIN",
       "GIT_REGEX_BUILTIN",

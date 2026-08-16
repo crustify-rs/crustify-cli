@@ -90,7 +90,7 @@ def _wrap_bound_ops(scope_json, entry_pair) -> dict:
     """
     from crustify.dag import load_type_meta
     wrap_tags = {e["name"]
-                 for e in ((scope_json.get("wrap") or {}).get("types") or [])}
+                 for e in ((scope_json.get(scope.IMPORT) or {}).get("types") or [])}
     out: dict[str, str] = {}
     for tag, (_fields, lifecycle) in load_type_meta(entry_pair).items():
         if tag in wrap_tags:
@@ -130,8 +130,8 @@ def _translate_eligible_pred(scope_json):
     remains a *filter* the caller opts into (`--port-only` / `--wrap-only`),
     not a gate the stage imposes."""
     from compose import scope
-    is_wrap = scope.in_scope_pred(scope_json, "wrap")
-    is_port = scope.in_scope_pred(scope_json, "port")
+    is_wrap = scope.in_scope_pred(scope_json, scope.IMPORT)
+    is_port = scope.in_scope_pred(scope_json, scope.TARGET)
 
     def pred(n) -> bool:
         return is_wrap(n) or is_port(n)
@@ -631,7 +631,7 @@ def translate_types(
     # in BOTH closures (`git_transport_cb`, a wrap-closure callback declared in
     # the port header include/git2/transport.h) is reached through a
     # function-pointer field, which is wrap work.
-    _is_wrap = scope.in_scope_pred(scope_json, "wrap")
+    _is_wrap = scope.in_scope_pred(scope_json, scope.IMPORT)
     def scope_of(n) -> str:
         return "wrap" if _is_wrap(n) else "port"
 

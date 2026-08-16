@@ -115,37 +115,31 @@ database changes.
 Author `crustify/targets/<target>/scope-config.json` from
 `specs/scope-config.json`.
 
-`files` names the target's file sets, keyed by scope. **There is no implicit
-directory walk — whichever key you populate must name everything that scope
-contains.** The repo root and the target id are CLI positionals and are not
-restated in the file.
+`files` names everything the target covers — **one** list. There is no implicit
+directory walk, so it must name everything in scope. The repo root and the
+target id are CLI positionals and are not restated in the file.
 
 Entries are a file (`include/internal/statem.h`) or a directory with a trailing
-slash (`ssl/`), which expands to every source and header beneath it. Prefer
-directory entries when a whole subtree is in scope; use a bare file list when
-the cluster is a logical subset of a directory. Naming a file the build never
-compiled is harmless — T1 anchoring drops uncompiled candidates.
+slash (`ssl/`), which expands to every source and header beneath it. Naming a
+file the build never compiled is harmless — T1 anchoring drops uncompiled
+candidates.
 
-**`files.port`** — translated to native Rust. Its FFI dependencies reach wrap
-scope on their own, as the import closure of what port code touches.
+**Scope says what the target contains, not what will be done with it.** Port or
+wrap is `translate --objective`, chosen per unit by the orchestrator — an item
+can be wrapped now and ported later, and encoding a verb here would freeze that.
 
-**Headers outside the target tree are never discovered automatically.** A header
-that exports structs, enums or unions implemented by code in the target must be
-added to `files.port` by hand. Add it only if its **implementors** are
-port-scope — distinguish implementors from consumers and referencers. A header
-whose types are merely *used* by the target belongs in wrap scope, and gets
-there on its own through the closure.
+**List the implementations, not just the headers.** Classification is
+*definition-anchored*: an entity is in the target iff its **body** lives in a
+named file (or, for a declaration-only entity, all its declarations do). Listing
+only public headers admits just what they *define* — inline functions, macros,
+value structs — while every function they merely *declare* drops out of scope,
+its body sitting in a `.c` you did not name. To wrap a library's public API,
+name the library. Narrowing to an API surface is a **selection** concern:
+`translate --file include/openssl/ssl.h`.
 
-**`files.wrap`** — wrapped in safe Rust, no port. This is how a whole public API
-becomes the target: list its headers, and every function, global and type they
-declare is anchored into wrap scope directly, whether or not port code reaches
-it. A struct **defined** in an anchor header is a value type whose fields are
-the API, so its field types are walked in full; one merely forward-declared
-there is an opaque handle, and bindgen owns the layout.
-
-Both keys may be populated at once — port a cluster *and* wrap an API surface
-around it. Anchors union with the derived closure, so an item that is both is
-one entry.
+Everything an in-scope entity **reaches** that `files` does not name is an
+*import* — the FFI frontier — derived automatically into `scope.json`'s sibling
+`import` section. Nothing needs to name it.
 
 `out_of_scope.paths` refines what a directory entry expands to;
 `out_of_scope.features` is documentation only, for the same reason as
@@ -154,23 +148,23 @@ one entry.
 Verify the result before proceeding:
 
 ```bash
-crustify-oracle <repo_root> <target> query files --port-only
-crustify-oracle <repo_root> <target> query files --wrap-only
+crustify-oracle <repo_root> <target> query files --target-only
+crustify-oracle <repo_root> <target> query files --import-only
 ```
 
-Wrap scope pools two populations that scope alone cannot separate.
-`--out-of-tree` / `--in-tree` cut the independent ORIGIN axis — whether the
-entity's home lies outside this repository:
+The import section pools two populations that the section alone cannot
+separate. `--out-of-tree` / `--in-tree` cut the independent ORIGIN axis —
+whether the entity's home lies outside this repository:
 
 ```bash
 # the permanent FFI floor
-crustify-oracle <repo_root> <target> query types --wrap-only --out-of-tree
-# the remaining port backlog
-crustify-oracle <repo_root> <target> query types --wrap-only --in-tree
+crustify-oracle <repo_root> <target> query types --import-only --out-of-tree
+# first-party code this target reaches but does not cover
+crustify-oracle <repo_root> <target> query types --import-only --in-tree
 ```
 
-The first can never move to port scope; the second is first-party code wrapped
-only because this target does not port it.
+The first can never move into the target; the second could, by naming its
+files.
 
 ### 7. Crate placement and scaffold
 
@@ -187,8 +181,8 @@ Use the oracle for the inventory to home, and `build.json` for the artefact
 hierarchy:
 
 ```bash
-crustify-oracle <repo_root> <target> query types  --port-only
-crustify-oracle <repo_root> <target> query symbols --wrap-only
+crustify-oracle <repo_root> <target> query types  --target-only
+crustify-oracle <repo_root> <target> query symbols --import-only
 ```
 
 Then materialize the tree and gate it:
@@ -230,7 +224,7 @@ promotion is read against.
 |---|---|
 | baseline recorded | `build.json.test_baseline` names pass/total and every disabled test |
 | T1/T2 populated | `crustify/codeql/{t1,t2}/` non-empty |
-| scope is what you meant | `query files --port-only` / `--wrap-only` |
+| scope is what you meant | `query files --target-only` / `--import-only` |
 | placement consistent | `scaffold --validate` exits clean |
 | FFI crates link | `cargo build` + `cargo test` on each `<lib>-sys` |
 | DAG resolves | `query dag --layer 0` returns the leaf set |

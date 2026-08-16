@@ -6,7 +6,6 @@
     "is out of scope. Values below illustrate a run scoped to ssl/statem",
     "inside an openssl checkout; substitute for other projects."
   ],
-
   "_comment_layout": [
     "All crustify artifacts live under a single `crustify/` directory at the",
     "repository root (which also marks the root). REPO-ROOT-tier artifacts are",
@@ -23,11 +22,10 @@
     "under `crustify/targets/<target>/` records the target. Neither is",
     "restated here: a second copy can only drift from the invocation."
   ],
-
   "_comment_files": [
-    "The target's file sets, keyed by scope. Repo-root-relative, always",
-    "explicit - there is no implicit directory walk, so whichever key you",
-    "populate must name everything that scope contains. Entries are either:",
+    "The target's file set - everything this invocation covers. Repo-root-",
+    "relative, always explicit: there is no implicit directory walk, so this",
+    "must name everything the target contains. Entries are either:",
     "  * a FILE      - `include/internal/statem.h`",
     "  * a DIRECTORY, written with a trailing slash - `ssl/` - which expands",
     "    to every source/header file beneath it",
@@ -36,42 +34,35 @@
     "Naming a file the build never compiled is harmless: scope.json is",
     "anchored on the T1 tables, so uncompiled candidates simply drop out.",
     "",
-    "`port` - files whose functions, globals and types are translated to",
-    "native Rust. Their FFI dependencies are pulled into wrap scope",
-    "automatically, as the import closure of what port code reaches, so a",
-    "port target needs no `wrap` key. Use a directory entry when a whole",
-    "subtree is port scope; a bare file list when the port cluster is a",
-    "logical subset of a directory (e.g. libgit2's ODB/pack files inside",
-    "`src/libgit2/`); both when the cluster is a subtree PLUS things outside",
-    "it - typically headers declaring the structs the subtree implements,",
-    "which in most projects do not live beside the code. A header belongs in",
-    "`port` only when the code IMPLEMENTING what it declares is port scope",
-    "too; a header whose types are merely used by the target reaches wrap",
-    "scope on its own through the closure.",
+    "ONE list, deliberately. Scope says what the target CONTAINS; it does",
+    "not say what will be done with it. Port or wrap is the translate",
+    "stage's objective, chosen per unit by the orchestrator - an item can",
+    "legitimately be wrapped now and ported later, and encoding a verb here",
+    "would freeze that choice at scope time.",
     "",
-    "`wrap` - files whose declared API is wrapped in safe Rust with no port.",
-    "This is how you take a whole public API (libcrypto, libssl) as the",
-    "target: list its public headers and every function, global and type",
-    "they declare is anchored into wrap scope directly, independent of",
-    "whether any port code reaches it. Field types of a struct DEFINED in an",
-    "anchor header are walked in full (a visible definition means the fields",
-    "are the API); a struct merely forward-declared there is admitted as an",
-    "opaque handle, since bindgen owns a layout nobody can see.",
+    "LIST THE IMPLEMENTATIONS, not just the headers. Classification is",
+    "DEFINITION-anchored: an entity belongs to the target iff its BODY lives",
+    "in a file named here (or, for a declaration-only entity, all its",
+    "declarations do). Listing only public headers therefore admits just what",
+    "they DEFINE - inline functions, macros, value structs - while every",
+    "function they merely DECLARE falls out of scope, its body being in a .c",
+    "you did not name. To wrap a library's public API, name the library.",
     "",
-    "Both keys may be populated at once: port this cluster AND wrap that API",
-    "surface around it. The two seed the same wrap section - declared anchors",
-    "union with the derived closure - so an anchored item that port code also",
-    "reaches is one entry, not two."
+    "Narrowing to an API SURFACE is a selection concern, not a scope one:",
+    "`translate --file include/openssl/ssl.h` or `--name`. Keeping the",
+    "implementations in scope is what lets the ownership analysis read",
+    "free/store/return behaviour off the real bodies instead of guessing",
+    "from a signature.",
+    "",
+    "Everything an in-scope entity REACHES but that this list does not name",
+    "is an IMPORT - the FFI frontier - derived automatically into",
+    "scope.json's sibling `import` section. Nothing needs to name it."
   ],
-  "files": {
-    "port": [
-      "ssl/statem/",
-      "include/internal/statem.h"
-    ],
-    "wrap": [
-    ]
-  },
-
+  "files": [
+    "ssl/",
+    "include/openssl/ssl.h",
+    "include/internal/statem.h"
+  ],
   "_comment_out_of_scope": [
     "Target-local refinement of what crustify must NOT analyze. `paths` lists",
     "repo-root-relative paths (directories with trailing `/` recurse; entries",
@@ -88,8 +79,7 @@
     "never appears in `files`."
   ],
   "out_of_scope": {
-    "paths": [
-    ],
+    "paths": [],
     "features": [
       "OPENSSL_NO_DEPRECATED_3_0"
     ]
