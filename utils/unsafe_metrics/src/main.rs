@@ -331,6 +331,9 @@ struct Counts {
     // accessor): total, and the subset outside any impl/trait (the smell).
     field_proj_wrapped: u64,
     field_proj_outside_impl: u64,
+    // `&(*p).field` / `&mut (*p).field` where `p: *C` and `C` has a wrapper --
+    // a reference one level down into memory C may write. Should be 0.
+    field_ref_wrapped: u64,
     // `*c_void` in signatures: sanctioned (seam / ffi_export) vs smell (elsewhere)
     void_ptr_sanctioned: u64,
     void_ptr_smell: u64,
@@ -349,6 +352,7 @@ struct Sites {
     raw_ptr: Vec<(String, usize)>,     // raw ptr to a wrapped C type in a signature
     void_ptr: Vec<(String, usize)>,    // `*c_void` smell
     field_proj: Vec<(String, usize)>,  // `(*p).field` bypassing the accessor
+    field_ref: Vec<(String, usize)>,   // `&(*p).field` -- a reference INTO the C object
     raw_deref: Vec<(String, usize)>,   // `*p` (raw ptr) outside any impl/trait body
 }
 
@@ -476,6 +480,25 @@ impl<'a, 'tcx> Visitor<'tcx> for BodyVisitor<'a, 'tcx> {
                             if !self.in_impl {
                                 self.c.field_proj_outside_impl += 1;
                                 self.sites.field_proj.push(span_site(self.tcx, e.span));
+                            }
+                        }
+                    }
+                }
+            }
+            // `&(*p).field` / `&mut (*p).field` where `p: *C` and `C` has a
+            // wrapper: a reference over a FIELD of memory C may write -- the
+            // same rule that keeps `&W` out, one level down. `addr_of!` /
+            // `&raw` lower to `BorrowKind::Raw`, so matching only
+            // `BorrowKind::Ref` is exactly the sanctioned/forbidden split.
+            hir::ExprKind::AddrOf(hir::BorrowKind::Ref, _, operand) => {
+                if let hir::ExprKind::Field(base, _) = operand.kind {
+                    if let hir::ExprKind::Unary(hir::UnOp::Deref, inner) = base.kind {
+                        if let ty::TyKind::RawPtr(pointee, _) =
+                            self.typeck.expr_ty(inner).kind()
+                        {
+                            if pointee_has_wrapper(self.tcx, *pointee, self.wrapped_c) {
+                                self.c.field_ref_wrapped += 1;
+                                self.sites.field_ref.push(span_site(self.tcx, e.span));
                             }
                         }
                     }
@@ -918,10 +941,10 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
         let st = &sites[i];
         let kind = if s.kind == SeedKind::Type { "type" } else { "func" };
         format!(
-            "{{\"name\":\"{}\",\"c_name\":\"{}\",\"kind\":\"{}\",\"region_owners\":{},\"unsafe_blocks\":{},\"unsafe_block_code_lines\":{},\"wrapper_macro\":{},\"wrapper_handwritten\":{},\"raw_ptr_derefs\":{},\"field_proj\":{},\"field_proj_outside_impl\":{},\"ref_to_type_wrapper\":{},\"void_ptr_smell\":{},\"naked\":{},\"naked_sites\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{}}}",
+            "{{\"name\":\"{}\",\"c_name\":\"{}\",\"kind\":\"{}\",\"region_owners\":{},\"unsafe_blocks\":{},\"unsafe_block_code_lines\":{},\"wrapper_macro\":{},\"wrapper_handwritten\":{},\"raw_ptr_derefs\":{},\"field_proj\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"ref_to_type_wrapper\":{},\"void_ptr_smell\":{},\"naked\":{},\"naked_sites\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{}}}",
             s.name, s.c_name, kind, region_owners[i], m.unsafe_blocks, m.unsafe_block_code_lines,
             m.wrapper_impl_macro, m.wrapper_impl_handwritten, m.raw_ptr_derefs,
-            m.field_proj_wrapped, m.field_proj_outside_impl, m.ref_to_type_wrapper,
+            m.field_proj_wrapped, m.field_proj_outside_impl, m.field_ref_wrapped, m.ref_to_type_wrapper,
             m.void_ptr_smell, naked[i],
             sites_json(&st.naked), sites_json(&st.raw_ptr),
             sites_json(&st.void_ptr), sites_json(&st.field_proj),
@@ -1075,9 +1098,9 @@ impl Callbacks for MetricsCallbacks {
             }
         }
         println!(
-            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"rp_wrap_nonseam_args\":{},\"rp_wrap_nonseam_rets\":{},\"rp_wrap_nonseam_wrapped\":{},\"rp_outside_args\":{},\"rp_outside_rets\":{},\"rp_outside_wrapped\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"raw_deref_sites\":{}}}",
-            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.rp_wrap_nonseam_args, c.rp_wrap_nonseam_rets, c.rp_wrap_nonseam_wrapped, c.rp_outside_args, c.rp_outside_rets, c.rp_outside_wrapped, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
-            sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj), sites_json(&sites.raw_deref)
+            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"rp_wrap_nonseam_args\":{},\"rp_wrap_nonseam_rets\":{},\"rp_wrap_nonseam_wrapped\":{},\"rp_outside_args\":{},\"rp_outside_rets\":{},\"rp_outside_wrapped\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
+            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.rp_wrap_nonseam_args, c.rp_wrap_nonseam_rets, c.rp_wrap_nonseam_wrapped, c.rp_outside_args, c.rp_outside_rets, c.rp_outside_wrapped, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
+            sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj), sites_json(&sites.field_ref), sites_json(&sites.raw_deref)
         );
         Compilation::Continue
     }
