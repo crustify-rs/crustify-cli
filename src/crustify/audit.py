@@ -5,8 +5,8 @@ ported Rust tree. Seeds are types/symbols (``--name``) — or every entity homed
 under a ``--file`` / ``--dir`` / ``--crate``, or ``--all``. For each seed it
 reports its own implementation's unsafe/raw-pointer surface and its **naked
 ``ffi::`` footprint** (the wrapper being bypassed elsewhere). Printed to the
-console as JSON — nothing written to disk. See
-``utils/codeql/compose/audit_manifest.py``.
+console as JSON — nothing written to disk. Driven entirely by the
+resolution-aware rustc pass in ``utils/unsafe_metrics``.
 """
 
 from __future__ import annotations
@@ -16,9 +16,6 @@ import sys
 from pathlib import Path
 
 _CRUSTIFY_ROOT = Path(__file__).resolve().parent.parent.parent
-_COMPOSE_PARENT = _CRUSTIFY_ROOT / "utils" / "codeql"
-if str(_COMPOSE_PARENT) not in sys.path:
-    sys.path.insert(0, str(_COMPOSE_PARENT))
 
 
 def audit(

@@ -52,7 +52,6 @@ scalar/aggregate), `includes`.
 | `deps_dag.py` | in-memory unified layered types+symbols DAG (cast-centrality + fallback/back-fill edges); `analyze dag --dump` snapshots it | `analyze dag`, `query dag`, wrap scheduler |
 | `scaffold_manifest.py` | **legacy** — only `sync_workspace` (the shared `rust/` Cargo workspace member list) is still live, called from `bindgen_manifest`. `crates.json` has no producer: it is authored outside the pipeline (see `docs/schemas/crates.md`), and `.rs` stubs come from `crustify.scaffold` | `bindgen` |
 | `bindgen_manifest.py` | `<lib>-sys` crate scaffolds - per-kind allowlists + include closure (no `fn main`, no shims) | `bindgen` |
-| `audit_manifest.py` | JSON to stdout (per-seed own + naked-ffi surface, tree-wide `global` scan, `totals`); nothing written to disk | `audit` |
 | `manifest_merge.py` | union-by-key merge of agent findings into a manifest | `query --update` |
 | `check_types_consistency.py` | consistency gate (every op homed once; acyclic) | standalone (`python -m`, manual) |
 

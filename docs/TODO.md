@@ -821,7 +821,11 @@ macro-expanded sites.
 
 ### The gap
 
-`compose/audit_manifest.py` is a pure-regex scanner over comment/string-stripped
+(RETIRED — `compose/audit_manifest.py` was deleted once `utils/unsafe_metrics`
+became the only backend; `audit.py` imported nothing from it. Kept as the
+rationale for why the resolution-aware pass replaced it.)
+
+`compose/audit_manifest.py` was a pure-regex scanner over comment/string-stripped
 source. It has no notion of scopes, types, or expression structure, so every
 heuristic is a brittle pattern: impl/trait/seam regions are matched by
 brace-balancing on `_strip_noise`d text, and "smells" are regexes (`_RE_RAW_PTR`,
@@ -1556,7 +1560,8 @@ Any residual open work has been pulled up into the sections above.
 ## 2026-06-13 - Deterministic `audit` (entity-seeded, no LLM) -- DONE
 
 `crustify-cli <target> audit` shipped: `src/crustify/audit.py` +
-`utils/codeql/compose/audit_manifest.py`, with a `cli.py` `audit` subparser
+`utils/codeql/compose/audit_manifest.py` (the latter since DELETED — superseded
+by `utils/unsafe_metrics`), with a `cli.py` `audit` subparser
 (`--name/--file/--dir/--mod/--crate/--all`, naked-FFI search always global).
 Replaced the parked CrustifyAuditAgent proposal (`docs/AUDIT_AGENT.md` deleted).
 Still deferred (acceptable): the `own`-surface counts can double-count a shared
