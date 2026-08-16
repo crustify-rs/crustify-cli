@@ -119,8 +119,9 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
     if facets:
         facet.add_argument("--fields", action="store_true",
                            help="Introspect a type: ALL declared fields with their "
-                                "per-field structural + ptr detail (--target-only/"
-                                "--import-only narrow to that section's touched fields); "
+                                "per-field structural + ptr detail; --target-only "
+                                "narrows to the fields THIS TARGET's code reaches "
+                                "(--import-only does not apply here); "
                                 "'[]' if none.")
         facet.add_argument("--ops", action="store_true",
                            help="Introspect a type: its method surface "
@@ -134,8 +135,9 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
         facet.add_argument("--field-touchers", action="store_true",
                            dest="field_touchers",
                            help="Introspect a type: {field: [touchers]} — ALL "
-                                "declared fields by default (--target-only/--import-only "
-                                "narrow the FIELDS to that scope's touched subset); "
+                                "declared fields by default; --target-only "
+                                "narrows the FIELDS to the subset this target's "
+                                "code reaches; --import-only does not apply. "
                                 "each field's toucher set is the COMPLETE, unfiltered "
                                 "set of functions that access it.")
     else:

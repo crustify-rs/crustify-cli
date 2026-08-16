@@ -98,6 +98,15 @@ def query(
     type_facets = fields or ops or methods or field_touchers
     if type_facets and kind != "type":
         raise SystemExit("query symbols: --fields/--ops/--methods/--field-touchers apply to types only.")
+    if import_only and (fields or field_touchers):
+        raise SystemExit(
+            "query types: --import-only does not apply to --fields / "
+            "--field-touchers. The narrowing asks which of a type's fields "
+            "THIS TARGET's code reaches, which is --target-only for either "
+            "kind of type. The import side is empty for a target type, and for "
+            "an import type reports what the foreign library touches "
+            "internally — true, and not what a wrapper is built from. Drop the "
+            "flag for every declared field, or use --target-only.")
     if (type_facets or manifest or update is not None) and len(name_list) != 1:
         raise SystemExit(
             f"query {subject}: facets / --manifest / --update need exactly one --name.")
@@ -557,7 +566,7 @@ def _introspect(
             # never scope-filtered: a field touched in-scope via raw `obj->field`
             # while its real accessor is out of scope still surfaces here.
             _field_touchers(layout, target, node.id, node.defined_in,
-                       import_only=import_only, target_only=target_only)
+                       target_only=target_only)
             return
         meta = D.load_type_meta(_entry_pair(layout, target))
         flds, lifecycle = meta.get(node.id, ([], set()))
@@ -568,7 +577,7 @@ def _introspect(
             # fields touched by that scope's code (raw field_accesses ∩ scope.json
             # membership).
             keep = _field_keep_set(layout, target, node.id, node.defined_in,
-                                   import_only=import_only, target_only=target_only)
+                                   target_only=target_only)
             if keep is not None:
                 objs = [o for o in objs if o.get("name") in keep]
             win = objs
@@ -668,18 +677,23 @@ def _scope_touched_fields(layout, target, tag: str, defined_in: str | None,
 
 
 def _field_keep_set(layout, target, tag: str, defined_in: str | None, *,
-                    import_only: bool, target_only: bool) -> set | None:
-    """Field-name keep-set for the -only narrowing, or None = keep ALL fields.
-    --target-only / --import-only → fields touched by that section's code."""
-    if not (import_only or target_only):
+                    target_only: bool) -> set | None:
+    """Field-name keep-set for ``--target-only``, or None = keep ALL fields.
+
+    TARGET only, deliberately. The import side answers a question nobody asks:
+    for a target struct it is empty (nothing outside the target reaches into
+    the target's own layout), and for an import struct it reports which fields
+    the FOREIGN library touches internally — true, and irrelevant to what this
+    target must wrap. What a caller wants is always "which of this type's
+    fields does MY code reach", which is the target side for either kind."""
+    if not target_only:
         return None
     from compose import scope as _sc
-    which = _sc.IMPORT if import_only else _sc.TARGET
-    return _scope_touched_fields(layout, target, tag, defined_in, which)
+    return _scope_touched_fields(layout, target, tag, defined_in, _sc.TARGET)
 
 
 def _field_touchers(layout, target, tag: str, defined_in: str | None, *,
-               import_only: bool = False, target_only: bool = False) -> None:
+               target_only: bool = False) -> None:
     """``{field: [touchers]}`` for the type's fields.
 
     ALL declared fields by default; --port-only/--wrap-only narrow the FIELD set
@@ -709,7 +723,7 @@ def _field_touchers(layout, target, tag: str, defined_in: str | None, *,
                     complete[fld].add(fn)
 
     keep = _field_keep_set(layout, target, tag, defined_in,
-                           import_only=import_only, target_only=target_only)
+                                   target_only=target_only)
     scoped = set(declared) if keep is None else {f for f in declared if f in keep}
 
     out = {f: sorted(complete.get(f, set())) for f in sorted(scoped)}
@@ -1654,7 +1668,7 @@ def _records(target, kind, names, files, *, import_only=False,
         # work the caller's scope never touches.
         if kind == "type" and (import_only or target_only):
             keep = _field_keep_set(layout, target, node.id, node.defined_in,
-                                   import_only=import_only, target_only=target_only)
+                                   target_only=target_only)
             entry = dict(entry)
             entry["_analysis"] = _m.analysis_state(
                 entry, "types", entry.get("_analysis", {}).get("submitted", False),
