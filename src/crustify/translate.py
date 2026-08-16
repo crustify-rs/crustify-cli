@@ -480,7 +480,11 @@ def translate_types(
     layout = Layout.discover(target)
     scope_json = _preflight(target, layout)
     from crustify import dag as _dag
-    dag = _dag.build(layout, target, stage="wrap")
+    # The graph is objective-shaped: a unit being ported orders on its body's
+    # callees, one being wrapped only on its signature. `review` re-visits
+    # emitted work, so it wants the same layering that produced it — port's.
+    dag = _dag.build(layout, target, stage="wrap",
+                     objective="wrap" if objective == "wrap" else "port")
     print(f"[crustify-cli translate] deps DAG: {dag.get('stats')}")
 
     by_key, by_name = S.load_nodes(dag)

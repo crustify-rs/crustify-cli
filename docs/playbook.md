@@ -122,7 +122,7 @@ slash (`ssl/`), which expands to every source and header beneath it.
 
 **Scope says what the target contains, not what will be done with it.** Port or
 wrap is `translate --objective`, chosen per unit by the orchestrator — an item
-can be wrapped now and ported later, and encoding a verb here would freeze that.
+can be wrapped now and ported later.
 
 **Name every file that DEFINES something you want in scope.** Classification is
 *definition-anchored*: an entity is in the target iff its **body** lives in a
