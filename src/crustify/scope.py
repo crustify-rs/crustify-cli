@@ -74,17 +74,32 @@ def build(layout: Layout, target: Path, *, stage: str) -> dict:
             f"{stage}: no includes.csv at {includes_csv}. "
             f"Run `crustify-oracle {target} extract-ql` first.")
 
+    import json
+    config = json.loads(config_path.read_text())
+    seed_paths = set(enumerate_files(config, layout.repo_root, "import"))
     manifest = _target_compose(config_path, t1, layout.repo_root)
     target_paths = _scope.load_target_paths(manifest)
+    # Mutually exclusive by design. `files.target` names what the target OWNS
+    # and the import section is derived from it; `files.import` names an API to
+    # wrap and IS the section, with no target at all. Populating both would ask
+    # which seeds which, and every answer to that is a precedence rule nobody
+    # can keep straight -- which is what the earlier two-seed union proved.
+    if target_paths and seed_paths:
+        raise SystemExit(
+            f"{stage}: {config_path} sets both `files.target` and "
+            f"`files.import`. They are mutually exclusive: `target` names what "
+            f"this target owns (imports are then derived from it), `import` "
+            f"names an API to wrap (there is no target). Pick one.")
     # An empty file set means the target covers nothing. There is no implicit
     # walk to fall back on, so this is always a config error — a mistyped path
     # under `files`, or a `files` list that never got filled in — and it would
     # otherwise compose a well-formed, entirely empty scope that every later
     # stage reports as "nothing to do".
-    if not target_paths:
+    if not target_paths and not seed_paths:
         raise SystemExit(
-            f"{stage}: {config_path} selects no files. `files` is empty, or "
-            f"names paths that do not exist under {layout.repo_root}.")
+            f"{stage}: {config_path} selects no files. `files.target` and "
+            f"`files.import` are both empty, or name paths that do not exist "
+            f"under {layout.repo_root}.")
     # The import half needs the target half, and only that — it reads neither
     # syms.json nor types.json, so scope stands alone ahead of the manifest
     # composers.
@@ -94,6 +109,7 @@ def build(layout: Layout, target: Path, *, stage: str) -> dict:
         target_paths,
         _scope.load_csv(t1 / "types.csv"),
         _scope.load_csv(t2 / "field_type_uses.csv"),
+        seed_paths,
     )
     manifest = _cache.store(layout.scope(target), manifest, fp)
     _CACHE[ck] = manifest

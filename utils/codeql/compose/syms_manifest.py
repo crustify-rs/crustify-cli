@@ -774,6 +774,20 @@ def compose(
     tgt_funcs = scope.load_entities(_sj, scope.TARGET, "functions") if _sj else set()
     tgt_globals = scope.load_entities(_sj, scope.TARGET, "globals") if _sj else set()
     tgt_macros = scope.load_entities(_sj, scope.TARGET, "macros") if _sj else set()
+    # The composed IMPORT surface, as an admission floor — the same role
+    # `_in_import_surface` plays on the type side. The reach gates below ask
+    # "does target code reach this", which has no answer for a WRAP campaign
+    # (`files.import`): there is no target code, and the surface was seeded off
+    # the named headers instead. A scope.json entry with no manifest record is
+    # unschedulable, so whatever the section lists gets one.
+    imp_keys = (
+        (scope.load_entities(_sj, scope.IMPORT, "functions")
+         | scope.load_entities(_sj, scope.IMPORT, "globals")
+         | scope.load_entities(_sj, scope.IMPORT, "macros"))
+        if _sj else set())
+
+    def _in_import(r: dict) -> bool:
+        return (r.get("name"), r.get("def_file") or "") in imp_keys
 
     funcs = scope.load_csv(csv_dir_t1 / "functions.csv")
     macros = scope.load_csv(csv_dir_t1 / "macros.csv")
@@ -815,8 +829,9 @@ def compose(
         if scope_enabled and not in_target and not unscoped:
             if r["linkage"] in _WRAP_DISALLOWED_FN_KINDS:
                 continue
-            if not seed_mode and not reach.is_function_port_reachable(
-                    r["name"], r["def_file"]):
+            if not seed_mode and not _in_import(r) \
+                    and not reach.is_function_port_reachable(
+                        r["name"], r["def_file"]):
                 continue
         base = _base_function(r, reach)
         # Scope gates EMISSION only: every record we DO emit is composed
@@ -846,8 +861,9 @@ def compose(
         if scope_enabled and not in_target and not unscoped:
             if r["linkage"] in _WRAP_DISALLOWED_GLOBAL_KINDS:
                 continue
-            if not seed_mode and not reach.is_global_port_reachable(
-                    r["name"], r["def_file"]):
+            if not seed_mode and not _in_import(r) \
+                    and not reach.is_global_port_reachable(
+                        r["name"], r["def_file"]):
                 continue
         base = _base_global(r)
         # content: codebase-wide
@@ -877,7 +893,8 @@ def compose(
         # `.c` (etc.) file that's in scope.
         in_target = scope_enabled and (r["name"], r["def_file"]) in tgt_macros
         if scope_enabled and not in_target and not seed_mode and not unscoped:
-            if not reach.is_macro_port_reachable(r["name"], r["def_file"]):
+            if not _in_import(r) and not reach.is_macro_port_reachable(
+                    r["name"], r["def_file"]):
                 continue
         base = _base_macro(r)
         port_add = _port_additions_macro(r, reach)    # content: codebase-wide
@@ -913,8 +930,9 @@ def compose(
         if not name or name.startswith("(") or name in seen_cb:
             continue
         seen_cb.add(name)
-        if scope_enabled and not seed_mode and not _import_reachable(
-                reach, name, "", by_name, target_paths):
+        if scope_enabled and not seed_mode and (name, "") not in imp_keys \
+                and not _import_reachable(
+                    reach, name, "", by_name, target_paths):
             continue
         base = _base_callback(r, reach, by_name)
         candidates.append({

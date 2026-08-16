@@ -40,10 +40,12 @@
     "",
     "as the import closure of `files`."
   ],
-  "files": [
-    "src/",
-    "include/"
-  ],
+  "files": {
+    "target": [
+      "src/",
+      "include/"
+    ]
+  },
   "_comment_out_of_scope": [
     "`paths` is empty on purpose. The candidates one might reflexively list",
     "here are already excluded by construction: tests/ and deps/clar are not",

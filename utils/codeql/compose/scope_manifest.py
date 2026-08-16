@@ -6,16 +6,20 @@ invocation.
 
 Rule:
 
-  1. A file is a *candidate* if `config.files` names it — directly, or
+  1. A file is a *candidate* if `config.files.target` names it — directly, or
      through a trailing-slash directory entry that expands to every
      C/C++ source or header (`.c`, `.cc`, `.cpp`, `.h`, `.hpp`) beneath
      it.
   2. A candidate survives iff its repo-root-relative path does not match
      any entry in `config.out_of_scope.paths` (entries ending with `/`
      match recursively; otherwise exact-file match).
-  3. Everything an in-scope entity REACHES but that `config.files` does
-     not name is an import, derived by `import_closure.py` into the sibling
-     `import` section.
+  3. Everything an in-scope entity REACHES but that `config.files.target`
+     does not name is an import, derived by `import_closure.py` into the
+     sibling `import` section.
+
+A WRAP campaign inverts this: `config.files.import` is set instead, the
+target section composes empty, and `import_closure.py` seeds directly off
+those files. The two keys are mutually exclusive.
 
 The section says what the target COVERS, never what will be done with it:
 port or wrap is the translate stage's objective, chosen per unit by the
@@ -94,12 +98,12 @@ def _walk_dir(rel_dir: str, repo_root: Path, out_of_scope: list[str]) -> list[st
     return files
 
 
-def enumerate_files(config: dict, repo_root: Path) -> list[str]:
-    """Return the repo-root-relative candidate file paths ``config.files``
-    names.
+def enumerate_files(config: dict, repo_root: Path, key: str) -> list[str]:
+    """Return the repo-root-relative candidate file paths ``config.files[key]``
+    names (``"target"`` | ``"import"``).
 
-    Always an explicit list — there is no implicit directory walk, so it
-    must name everything the target covers. Entries are repo-root-relative
+    Always an explicit list — there is no implicit directory walk, so the key
+    must name everything its section covers. Entries are repo-root-relative
     and may be either:
 
       * a **file** — ``include/internal/statem.h``
@@ -118,7 +122,7 @@ def enumerate_files(config: dict, repo_root: Path) -> list[str]:
     file that the build never compiled is harmless, not an error.
     """
     out_of_scope = list(config.get("out_of_scope", {}).get("paths", []))
-    entries = config.get("files") or []
+    entries = (config.get("files") or {}).get(key) or []
 
     files: list[str] = []
     for entry in entries:
@@ -253,7 +257,7 @@ def compose(config_path: Path, t1_dir: Path, repo_root: Path | None = None) -> d
         repo_root = t1_dir.resolve().parents[2]
     else:
         repo_root = Path(repo_root).resolve()
-    candidate_files = set(enumerate_files(config, repo_root))
+    candidate_files = set(enumerate_files(config, repo_root, "target"))
     entities = _target_entities(t1_dir, candidate_files)
     files = _contributing_files(t1_dir, entities, candidate_files)
     return {

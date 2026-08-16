@@ -6,53 +6,47 @@
     "so the target is defined by the headers that publish it."
   ],
   "_comment_files": [
-    "The target's file set: everything this campaign covers. One explicit",
-    "list - there is no port/wrap split here, because scope says what the",
-    "target CONTAINS, not what will be done with it. Port or wrap is the",
-    "translate stage's objective, chosen per unit by the orchestrator.",
+    "A WRAP campaign: `files.import` names the API to wrap, and there is no",
+    "target. The two keys are mutually exclusive - `target` names what this",
+    "target OWNS (imports are then derived from it), `import` names an API to",
+    "wrap (nothing is owned).",
     "",
-    "Both halves are needed and the reason is easy to get wrong: entity",
-    "classification is DEFINITION-anchored. Listing only include/libxml/",
-    "would admit just what those headers DEFINE - inline functions, macros,",
-    "the public value structs - while every function they merely DECLARE",
-    "(xmlNewDoc, xmlTextWriterStartElement, ...) has its body in a root .c",
-    "and would fall out of scope entirely. The C sources carry the bodies;",
-    "the headers carry the public value types and the declarations.",
+    "Seeding off the public headers is what makes this expressible. Entity",
+    "classification is DEFINITION-anchored, so naming these headers under",
+    "`files.target` would admit only what they DEFINE - inline functions,",
+    "macros, value structs - and drop every function they merely DECLARE, whose",
+    "body sits in a root .c. As an IMPORT seed the test is declaration-site",
+    "membership instead, which is the right question for a public header: the",
+    "bodies live in files this campaign does not own, and 'does target code",
+    "reach it' has no answer when there is no target code.",
     "",
-    "The API-surface question - wrap the public headers, not the internals -",
-    "is answered at SELECTION time (`--file include/libxml/xmlwriter.h`),",
-    "not by narrowing scope. That keeps the ownership analysis able to walk",
-    "the real implementation of everything it wraps.",
+    "Consequences that fall out, with no objective flag anywhere: a struct",
+    "DEFINED in one of these headers keeps its full field layout (its fields",
+    "are the API), one merely forward-declared stays an opaque handle, symbols",
+    "order on their signatures rather than their bodies, and --transitive over",
+    "an opaque type pulls nothing it does not need.",
     "",
-    "`./` walks the repo root, which is where libxml2's 55 .c files live.",
-    "out_of_scope below removes the non-library trees it would otherwise",
-    "pull in."
+    "Ownership analysis is unaffected: ptr_args/ptr_ret come from the T2",
+    "tables, which cover the whole database regardless of scope, so the real",
+    "bodies are still what free/store behaviour is read from.",
+    "",
+    "45 headers, 1416 XMLPUBFUN declarations at this tag."
   ],
-  "files": [
-    "./"
-  ],
+  "files": {
+    "import": [
+      "include/libxml/"
+    ]
+  },
   "_comment_out_of_scope": [
-    "`paths` removes what `files: ['./']` would otherwise sweep in: the test",
-    "harness, the fuzzers, the Python bindings, the examples and the",
-    "generated/vendored build scaffolding. None of it is libxml2's shipped",
-    "library surface.",
+    "`paths` is empty: `files.import` names only include/libxml/, so the test",
+    "harness, fuzzers, Python bindings and examples are outside it by",
+    "construction and never enter.",
     "",
     "`features` is documentation only - no composer reads it. It lists the",
-    "LIBXML2_WITH_* options OFF in the configure line recorded in build.json,",
-    "so a body they elide contributes no entities and drops out on its own."
+    "LIBXML2_WITH_* options OFF in the configure line recorded in build.json."
   ],
   "out_of_scope": {
-    "paths": [
-      "test/",
-      "fuzz/",
-      "python/",
-      "example/",
-      "doc/",
-      "result/",
-      "win32/",
-      "codegen/",
-      "m4/"
-    ],
+    "paths": [],
     "features": [
       "LIBXML2_WITH_HTTP",
       "LIBXML2_WITH_ICU",

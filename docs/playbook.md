@@ -115,43 +115,43 @@ database changes.
 Author `crustify/targets/<target>/scope-config.json` from
 `specs/scope-config.json`.
 
-`files` names everything the target covers.
+`files` names the target's file sets, keyed by section, and **the two keys are
+mutually exclusive** — they pick the campaign. Entries are a file
+(`include/internal/statem.h`) or a directory with a trailing slash (`ssl/`),
+which expands to every source and header beneath it. Naming a file the build
+never compiled is harmless — T1 anchoring drops uncompiled candidates.
 
-Entries are a file (`include/internal/statem.h`) or a directory with a trailing
-slash (`ssl/`), which expands to every source and header beneath it.
+**`files.target` — what this target owns.** Classification is
+*definition-anchored*: an entity is in the target iff its **body** lives in a
+named file (or, having no body, all its declarations do). Name the
+implementations **and** the headers that define the types — headers outside the
+target tree are never discovered automatically, and a header-only list drops
+every function it merely *declares*, whose body sits in a `.c` you did not name.
+Add a header only if its **implementors** are in the target; one whose types are
+merely *used* reaches the import section on its own.
+
+**`files.import` — an API to wrap, with nothing owned.** The target section
+composes empty and the import section is seeded off these files directly, on
+**declaration-site** membership. That is the right test for a public header,
+whose declared bodies live in files the campaign does not own — and it is what
+makes "wrap this library" expressible without scoping its whole implementation.
+
+Everything else follows from that one choice, with no per-item flag:
+
+| | named in `files` | not named |
+|---|---|---|
+| struct **defined** there | full field layout — its fields are the API | — |
+| struct only **declared** there | opaque handle | opaque handle |
+| symbol | orders on its body's callees | orders on its signature |
+
+So `--transitive` over an opaque-exported type pulls the type and nothing else.
 
 **Scope says what the target contains, not what will be done with it.** Port or
-wrap is `translate --objective`, chosen per unit by the orchestrator — an item
-can be wrapped now and ported later, and encoding a verb here would freeze that.
-
-**Name every file that DEFINES something you want in scope.** Classification is
-*definition-anchored*: an entity is in the target iff its **body** lives in a
-named file (or, for a declaration-only entity, all its declarations do). That
-one rule cuts both ways, and missing either half silently drops work:
-
-- **The sources.** A function's body is in a `.c`. Listing only public headers
-  admits just what they *define* — inline functions, macros, value structs —
-  while every function they merely *declare* falls out of scope entirely, its
-  body sitting in a `.c` you did not name. To wrap a library's public API, name
-  the library.
-- **The headers.** A struct, enum or union is *defined* in a header, and headers
-  outside the target tree are **never discovered automatically**. A public value
-  type whose header you did not name is not in your target, however much of its
-  implementation is.
-
-Add a header only if its **implementors** are in the target — distinguish
-implementors from consumers and referencers. A header whose types are merely
-*used* by the target belongs in the import section, and gets there on its own
-through the closure.
-
-Narrowing to an API *surface* is a **selection** concern, not a scope one:
-`translate --file include/openssl/ssl.h`. Keeping the implementations in scope
-is what lets the ownership analysis read free/store/return behaviour off real
-bodies instead of guessing from a signature.
-
-Everything an in-scope entity **reaches** that `files` does not name is an
-*import* — the FFI frontier — derived automatically into `scope.json`'s sibling
-`import` section. Nothing needs to name it.
+wrap is `translate --objective`, chosen per wave by the orchestrator. Narrowing
+to an API *surface* is a **selection** concern: `translate --file
+include/openssl/ssl.h`. Ownership analysis is unaffected either way —
+`ptr_args`/`ptr_ret` come from the T2 tables, which cover the whole database
+regardless of scope.
 
 `out_of_scope.paths` refines what a directory entry expands to;
 `out_of_scope.features` is documentation only, for the same reason as

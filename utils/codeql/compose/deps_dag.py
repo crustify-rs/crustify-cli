@@ -285,7 +285,8 @@ def _collect(analysis_root: Path,
              port_fields: dict[str, set[str]] | None = None,
              codeql_dir: Path | None = None,
              in_scope_types: set | None = None,
-             target_paths: set[str] | None = None):
+             target_paths: set[str] | None = None,
+             seed_paths: set[str] | None = None):
     """Collect nodes/edges from the analysis tree, narrowed to one target.
 
     The tree is scope-agnostic and ACCUMULATES across targets: an entry that
@@ -313,6 +314,7 @@ def _collect(analysis_root: Path,
     types: dict[str, TypeNode] = {}
     syms: dict[SymKey, SymNode] = {}
     target_paths = target_paths or set()
+    seed_paths = seed_paths or set()
 
     tmeta, tedges, tcasts, talias, tgen = (collect_types_csv(codeql_dir) if codeql_dir
                                      else ({}, {}, {}, {}, {}))
@@ -356,7 +358,14 @@ def _collect(analysis_root: Path,
         # the same reason -- and load-bearing on a wrap-only target, where an
         # empty port scope makes `port_fields` empty and would otherwise leave
         # every wrap struct a dependency leaf.
-        keep = (None if port_fields is None or (df and df in target_paths)
+        # A struct whose definition is in a file the config NAMED keeps every
+        # field edge: for a target it is the layout being reimplemented, for a
+        # `files.import` seed it is a public value type whose fields ARE the
+        # API. Everything else orders only through what target code touches --
+        # which for a wrap campaign (no target) is nothing, so an opaque handle
+        # correctly orders no work at all.
+        keep = (None if port_fields is None
+                or (df and (df in target_paths or df in seed_paths))
                 else port_fields.get(tag, set()))
         for fname, tname, tdf in tedges.get(key, ()):
             if keep is not None and fname not in keep:
@@ -1049,7 +1058,9 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
                                    codeql_dir=codeql_dir,
                                    in_scope_types=in_scope_types,
                                    target_paths=(_scope.load_target_paths(scope_json)
-                                                 if scope_json is not None else None))
+                                                 if scope_json is not None else None),
+                                   seed_paths=(_scope.load_seed_paths(scope_json)
+                                               if scope_json is not None else None))
     _populate_nfields(codeql_dir, types)
     # A generator macro is already a symbol node; hang its family off it rather
     # than minting a synthetic type, which would collide with this very node on

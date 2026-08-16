@@ -117,6 +117,7 @@ def build_index(
     csv_dir_t2: Path,
     target_paths: set[str],
     scope_json_path,
+    seed_paths: set[str] | None = None,
 ) -> _Index:
     """Build the closure index DIRECTLY from CodeQL T1/T2 — no ``syms.json``.
 
@@ -140,6 +141,8 @@ def build_index(
     """
     from . import syms_manifest as sm
     from .reach import Reach
+
+    seed_paths = seed_paths or set()
 
     funcs = scope.load_csv(csv_dir_t1 / "functions.csv")
     globals_ = scope.load_csv(csv_dir_t1 / "globals.csv")
@@ -183,7 +186,10 @@ def build_index(
             # `normalize_options`, but blame.c/describe.c also define
             # `normalize_options`, leaking git_blame/describe_options into
             # the import surface.
-            if not in_target and not gate(r):
+            seeded = bool(seed_paths) and (
+                def_file in seed_paths
+                or any(d in seed_paths for d in decls_of(r)))
+            if not in_target and not seeded and not gate(r):
                 continue
             dep_types = sm._compose_dep_types(
                 reach, name, def_file, by_name,
@@ -372,6 +378,7 @@ def compose_import(
     target_paths: set[str],
     type_rows: list[dict],
     field_type_rows: list[dict],
+    seed_paths: set[str] | None = None,
 ) -> dict:
     """Build the ``import`` section:
     ``{files, functions, globals, macros, types}``.
@@ -394,12 +401,29 @@ def compose_import(
         is what pulls a by-value-embedded external type like
         ``pthread_mutex_t`` (``git_odb.lock``) into the surface.
 
+    ``seed_paths`` inverts the seeding for a WRAP campaign
+    (`scope-config.json`'s `files.import`). The target section is empty, so
+    there is nothing to expand from; instead every entity those files DECLARE
+    or DEFINE is an import outright, and the same two walks run from there.
+    Declaration-site membership is the right test precisely because these are
+    public headers: the bodies of what they declare sit in `.c` files this
+    target does not name, and asking "does target code reach it" has no answer
+    when there is no target code.
+
     Nothing here decides what will be DONE with an item; port or wrap is the
     translate stage's objective. An import is simply something the target
-    reaches but does not name.
+    does not own.
     """
+    seed_paths = seed_paths or set()
+
+    def _seeded(df: str, decls: list[str]) -> bool:
+        """Is this entity named by `files.import`? Definition OR any
+        declaration site — see the class docstring."""
+        return bool(seed_paths) and (
+            df in seed_paths or any(d in seed_paths for d in decls))
     closure = build_include_closure(includes_rows)
-    idx = build_index(csv_dir_t1, csv_dir_t2, target_paths, scope_json_path)
+    idx = build_index(csv_dir_t1, csv_dir_t2, target_paths, scope_json_path,
+                      seed_paths)
     type_meta = build_type_meta(type_rows)
     field_edges = build_field_edges(field_type_rows)
 
@@ -431,7 +455,7 @@ def compose_import(
         header and sends scaffold to home the item under it. Such an item has
         one honest home, so return one: `canonical_decl`'s ranking (in-repo
         header > in-repo source > external, generated deprioritised)."""
-        clo = target_paths if tu is None else closure(tu)
+        clo = (seed_paths or target_paths) if tu is None else closure(tu)
         hit = [d for d in decls if d in clo]
         if hit:
             return hit
@@ -478,7 +502,7 @@ def compose_import(
         keys = [(tag, df) for df in dfs]
         if len(keys) == 1:
             return keys
-        clo = target_paths if tu is None else closure(tu)
+        clo = (seed_paths or target_paths) if tu is None else closure(tu)
         hit = [k for k in keys if any(d in clo for d in type_meta[k]["decls"])]
         if hit:
             return hit
@@ -576,13 +600,18 @@ def compose_import(
         edges = field_edges.get(key, [])
         if cls == scope.IMPORT:
             add_type_key(key, tu)
-            # `target_touched` stays keyed by tag: it comes from the target
-            # symbols' `depends_on.types[].fields`, which name a tag and not a
-            # def_file. On a colliding tag that pools both structs' touched
-            # sets, which can only over-walk (a field name one struct lacks
-            # matches no edge).
-            touched = target_touched.get(key[0], set())
-            edges = [e for e in edges if e[0] in touched]
+            # A struct whose DEFINITION is in a file the config named is a
+            # public value type: its fields are the API, so every field type is
+            # a real dep and the walk is full. One only forward-declared there
+            # stays opaque — bindgen owns a layout nobody can see and there are
+            # no accessors to write. Otherwise narrow to what target code
+            # touches; `target_touched` stays keyed by tag (it comes from the
+            # target symbols' `depends_on.types[].fields`, which name a tag and
+            # not a def_file), so a colliding tag pools both structs' touched
+            # sets — which can only over-walk, never drop.
+            if meta["def_file"] not in seed_paths:
+                touched = target_touched.get(key[0], set())
+                edges = [e for e in edges if e[0] in touched]
         for _field, ftype, ftype_df in edges:
             if ftype_df and (ftype, ftype_df) in type_meta:
                 walk_type((ftype, ftype_df), tu)   # exact edge target
@@ -593,6 +622,21 @@ def compose_import(
     for key, meta in type_meta.items():
         if meta["def_file"] in target_paths:
             walk_type(key, meta["def_file"])
+
+    # SEEDED walk (`files.import`). Every entity those files name enters the
+    # section outright, and its signature / field types follow. `tu=None`: a
+    # seed has no importing TU, so narrow() resolves against the seed set —
+    # which for a public header set is exactly what a consumer #includes.
+    if seed_paths:
+        for (name, df), meta in list(idx.sym.items()):
+            if not _seeded(df, meta["declared_in"]):
+                continue
+            add_sym(name, df, meta["declared_in"], None)
+            for st in idx.sig_types.get(name, ()):
+                add_type(st, None)
+        for key, meta in list(type_meta.items()):
+            if _seeded(key[1], meta["decls"]):
+                walk_type(key, None)
 
     # Callback typedefs (unaliased_kind == "callback" in types.csv): function-
     # pointer typedefs that are wrap-scope. They are excluded from add_type (not
@@ -619,7 +663,8 @@ def compose_import(
         # A callback declared in a TARGET file needs no reachability: the
         # config named the header, so the API it is a parameter of is in scope
         # whether or not anything calls through it.
-        in_target = bool(df in target_paths or any(d in target_paths for d in decls))
+        in_target = bool(df in target_paths or any(d in target_paths for d in decls)
+                         or _seeded(df, decls))
         reach_ = idx.reach
         if not in_target:
             # Try both the real def_file and "" (callback typedefs often have
@@ -686,7 +731,7 @@ def compose_import(
             for tag, df in _fam["members"])
         if not _reached:
             continue
-        if _df not in target_paths and not any(
+        if _df not in target_paths and _df not in seed_paths and not any(
                 _df in closure(p) for p in target_paths):
             continue
         rec = sym_items.setdefault((_macro, _df), {
@@ -746,6 +791,7 @@ def compose_import(
             **({"reexport": True} if len(via) > 1 else {})})
 
     return {
+        "seeds": sorted(seed_paths),
         "_comment": (
             "The IMPORT section: everything the TARGET reaches that "
             "`scope-config.json`'s `files` does not name — the FFI frontier. "
@@ -757,7 +803,11 @@ def compose_import(
             "canonical header when the seed is not a TU. `reexport: true` "
             "marks an item imported through >1 header. Membership here says "
             "the target does not OWN the item, not what will be done with it: "
-            "port or wrap is the translate stage's objective."
+            "port or wrap is the translate stage's objective. `seeds` is "
+            "non-empty for a WRAP campaign (`files.import`): the section is "
+            "then seeded off those files directly rather than expanded from a "
+            "target, and a struct DEFINED in one of them keeps its full field "
+            "layout while a forward-declared one stays opaque."
         ),
         "files": sorted(files),
         "functions": sorted(buckets["functions"], key=lambda r: (r["name"], r["defined_in"])),

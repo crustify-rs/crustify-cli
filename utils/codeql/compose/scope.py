@@ -253,6 +253,17 @@ def load_target_paths(scope_json) -> set[str]:
     return set(_doc(scope_json).get(TARGET, {}).get("files", []))
 
 
+def load_seed_paths(scope_json) -> set[str]:
+    """The files `scope-config.json`'s `files.import` named, expanded — echoed
+    into the manifest as `import.seeds`.
+
+    Empty for a target campaign, where the import section is DERIVED from the
+    target. Non-empty for a wrap campaign, where those files ARE the section's
+    seed: it is what tells a consumer that a struct defined in one of them is a
+    public value type (full field layout) rather than an opaque handle."""
+    return set(_doc(scope_json).get(IMPORT, {}).get("seeds", []))
+
+
 def load_entities(scope_json, section: str, kind: str) -> set[tuple[str, str]]:
     """The entity set of `section` (:data:`TARGET` | :data:`IMPORT`) for `kind`
     (``"functions"`` | ``"globals"`` | ``"macros"`` | ``"types"``), as
