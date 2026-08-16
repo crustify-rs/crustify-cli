@@ -519,11 +519,11 @@ def _merge_anchors(rs_path: Path, e: dict,
                    scope_map: dict[str, str] | None = None,
                    field_map: dict[str, list[str]] | None = None,
                    generators: set[str] | None = None) -> int:
-    """Add anchors missing from the existing managed `.rs`: for each member, its
-    item anchor by scope (`// Wraps:` wrap / `// Replaces:` port) + todo (macros
-    are anchored only when they are template generators), plus a type's `// Field:` accessor anchors. Idempotent
-    (skips anchors already present, filled `///` or not). Returns the number of
-    anchors added."""
+    """Add anchors missing from the existing managed `.rs`: one
+    ``// crustify:todo: <item>`` line per member (macros are anchored only when
+    they are template generators), plus a type's owner-qualified field anchors.
+    Idempotent — skips anchors already present in any form, neutral or verbed,
+    filled `///` or not. Returns the number of anchors added."""
     scope_map = scope_map or {}
     field_map = field_map or {}
     text = rs_path.read_text()
@@ -534,15 +534,13 @@ def _merge_anchors(rs_path: Path, e: dict,
             # Only a template generator among macros — see `_stub`.
             if kind == "macros" and nm not in (generators or set()):
                 continue
-            # Verb-agnostic match (won't duplicate a fresh-composed anchor of
-            # either verb).
-            if not re.search(
-                    rf"(?m)^\s*//+\s*(?:Replaces|Wraps):\s*{re.escape(nm)}\b", text):
-                verb = "Wraps" if scope_map.get(nm) == "import" else "Replaces"
-                new += [f"// {verb}: {nm}", _TODO, ""]
+            # Form-agnostic match (won't duplicate an anchor already present,
+            # neutral or verbed, filled or not).
+            if not _anchor_re(nm).search(text):
+                new += [_todo_anchor(nm), ""]
                 if kind == "types":
                     for fld in field_map.get(nm, ()):
-                        new += [f"// Field: {nm}.{fld}", _TODO, ""]
+                        new += [_todo_anchor(f"{nm}.{fld}"), ""]
                 added += 1
             elif kind == "types" and field_map.get(nm):
                 # The type is already anchored, but a field can ENTER port scope
@@ -577,6 +575,30 @@ def _merge_anchors(rs_path: Path, e: dict,
 
 _TODO = "// crustify:todo"  # matches _schedule._TODO; a surviving one = pending
 
+#: The unfilled item anchor. ONE line naming the item, with no verb: scaffold
+#: runs before translate, so it cannot know whether the agent will wrap the item
+#: or replace it -- that is `--objective`, and the orchestrator picks it per
+#: wave. The agent promotes this to `/// Wraps: <item>` or `/// Replaces: <item>`
+#: according to what it actually did, which is the only moment the verb is
+#: knowable. The item is OWNER-QUALIFIED for a field (`Type.field`): a
+#: file-grained module holds many types, and two of them with a `data` field
+#: would otherwise collide on one line. A C identifier cannot contain a dot, so
+#: the dot also discriminates a field anchor from a symbol one.
+def _todo_anchor(item: str) -> str:
+    return f"{_TODO}: {item}"
+
+
+#: Matches an item anchor in EITHER form — the neutral todo scaffold now emits,
+#: or a `Wraps:`/`Replaces:` line at any comment depth (`//` unfilled from an
+#: older scaffold, `///` once an agent has filled it). Readers must accept both:
+#: a tree scaffolded before the neutral form carries thousands of the old shape,
+#: and re-emitting anchors over filled work would be destructive.
+def _anchor_re(nm: str) -> "re.Pattern[str]":
+    q = re.escape(nm)
+    return re.compile(
+        rf"(?m)^\s*(?://+\s*(?:Replaces|Wraps):\s*{q}\b"
+        rf"|{re.escape(_TODO)}:\s*{q}\s*$)")
+
 def _has_field_anchor(text: str, tag: str, fld: str) -> bool:
     """Is ``<tag>.<fld>`` already anchored in ``text``, filled or not?
 
@@ -592,17 +614,21 @@ def _has_field_anchor(text: str, tag: str, fld: str) -> bool:
     ``.``, so ``ssl_session_st.ext`` would match ``ssl_session_st.ext.hostname``
     and a genuinely missing anchor would be skipped.
     """
+    q = rf"{re.escape(tag)}\.{re.escape(fld)}"
     return re.search(
-        rf"(?m)^\s*//+\s*Field:\s*{re.escape(tag)}\.{re.escape(fld)}(?:\s|$)",
+        rf"(?m)^\s*(?://+\s*(?:Field|Wraps|Replaces):\s*{q}(?:\s|$)"
+        rf"|{re.escape(_TODO)}:\s*{q}\s*$)",
         text) is not None
 
 
 def _stub(e: dict, scope_map: dict[str, str] | None = None,
           field_map: dict[str, list[str]] | None = None,
           generators: set[str] | None = None) -> str:
-    # Each member is laid as an item anchor whose verb is its scope — `// Wraps:`
-    # for a wrap-scope item, `// Replaces:` for a port-scope one (a native Rust
-    # item: type / function / global) — followed by a `crustify:todo` placeholder.
+    # Each member is laid as one neutral `// crustify:todo: <item>` line. The
+    # verb is not knowable here — scaffold runs before translate, and whether an
+    # item is wrapped or replaced is `--objective`, chosen per wave by the
+    # orchestrator. The agent promotes the line to `/// Wraps:` or
+    # `/// Replaces:` according to what it did.
     # Macros are NOT anchored: bindgen owns their `ffi::` bindings /
     # `crustify_<NAME>` shims and the C `#define` stays, so the port/wrap stages
     # never fill a macro -- with one exception. A TEMPLATE GENERATOR expands to a
@@ -633,11 +659,10 @@ def _stub(e: dict, scope_map: dict[str, str] | None = None,
         for nm in m.get(kind) or []:
             if kind == "macros" and nm not in generators:
                 continue
-            verb = "Wraps" if scope_map.get(nm) == "import" else "Replaces"
-            lines += [f"// {verb}: {nm}", _TODO, ""]
+            lines += [_todo_anchor(nm), ""]
             if kind == "types":
                 for fld in field_map.get(nm, ()):
-                    lines += [f"// Field: {nm}.{fld}", _TODO, ""]
+                    lines += [_todo_anchor(f"{nm}.{fld}"), ""]
             any_member = True
     if not any_member:
         lines.append("// (no members homed here yet)")

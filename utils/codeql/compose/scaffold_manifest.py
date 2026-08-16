@@ -104,6 +104,12 @@ _SKIP_CRATES: frozenset[str] = frozenset()
 # ``// crustify:todo`` placeholder; the scheduler treats todo-absent as "done"
 # and ``--reset`` resets the anchor's region. Anchors are laid for the symbol
 # subkinds the wrap/port stages actually emit; the rest are filtered out.
+#: The unfilled anchor token. An item anchor is ONE line, ``<_TODO>: <item>``,
+#: with no verb: scaffold runs before translate and cannot know whether the
+#: agent will wrap the item or replace it — that is `--objective`, chosen per
+#: wave by the orchestrator. The agent promotes the line to ``/// Wraps:`` or
+#: ``/// Replaces:`` according to what it did. The item is owner-qualified for
+#: a field (``Type.field``), since a file-grained module holds many types.
 _TODO = "// crustify:todo"
 _MANAGED = "//! crustify:managed"
 
@@ -430,19 +436,19 @@ def _type_block(tm: "TypeMod") -> str:
     so the owner is everything before the FIRST one.
 
     No ``[typedef: ...]`` / ``(<scope>)`` annotations: nothing ever parsed them,
-    the scope is already carried by the verb (``Replaces`` = port, ``Wraps`` =
+    the section is read from the oracle, not the anchor (``Replaces`` = 
     wrap) and could contradict it, and their only real effect was forcing the
     anchor-name matcher to exclude ``[`` and ``(``.
     """
-    block = f"// Replaces: {tm.tag}\n{_TODO}"
+    block = f"{_TODO}: {tm.tag}"
     for f in tm.fields:
-        block += f"\n// Field: {tm.tag}.{f}\n{_TODO}"
+        block += f"\n{_TODO}: {tm.tag}.{f}"
     return block
 
 
 def _sym_block(a: "SymAnchor") -> str:
     loc = f" ({Path(a.file).name})" if a.file else ""
-    return f"// {a.verb}: {a.name}{loc}\n{_TODO}"
+    return f"{_TODO}: {a.name}{loc}"
 
 
 def _file_stub(st: FileStub) -> str:

@@ -318,7 +318,9 @@ def translate_lifetime_for(
 
 #: `// Wraps: <name>` / `// Replaces: <name>`, at any comment depth and with an
 #: optional trailing gloss the wrapper may have added.
-_ANCHOR_RE = _re.compile(r"^\s*//+\s*(?:Wraps|Replaces):\s*([A-Za-z_]\w*)")
+_ANCHOR_RE = _re.compile(
+    r"^\s*(?://+\s*(?:Wraps|Replaces):\s*([A-Za-z_]\w*)"
+    r"|//\s*crustify:todo:\s*([A-Za-z_]\w*))")
 #: `// Field: <owner>.<field>` — the per-accessor placeholder, OWNER-QUALIFIED
 #: (`prompts/principles.md`). Both halves are captured: the owner disambiguates a
 #: module that homes several types (37 of 75 in the openssl tree) which share
@@ -357,10 +359,12 @@ def _closure_names(seeds: list[str], by_key, by_name, keep) -> list[str]:
 def _pending_names(names: list[str], layout, target: Path) -> tuple[list[str], list[str]]:
     """Split into (pending, already-wrapped) on the per-item `crustify:todo`.
 
-    `scaffold` lays every item as ``// Wraps: <name>`` followed by a
-    ``// crustify:todo`` placeholder; the wrapper deletes the placeholder when
-    it fills the item, so a SURVIVING one is the on-disk record that the item
-    is still open. Cheaper and more honest than tracking state elsewhere: it
+    `scaffold` lays every item as one ``// crustify:todo: <name>`` line; the
+    wrapper replaces it with a ``/// Wraps:`` or ``/// Replaces:`` doc comment
+    naming what it did, so a SURVIVING todo is the on-disk record that the item
+    is still open. (A tree scaffolded before the neutral anchor carries the
+    older two-line ``// Wraps: <name>`` + bare ``// crustify:todo`` shape; the
+    same test reads both, since it keys on the todo token.) Cheaper and more honest than tracking state elsewhere: it
     lives next to the code it describes and cannot drift from it."""
     from crustify import crates as _crates
     from crustify.scaffold import _TODO, _entries_for_names
@@ -392,9 +396,15 @@ def _pending_names(names: list[str], layout, target: Path) -> tuple[list[str], l
             hit = False
             for i, ln in enumerate(lines):
                 m = _ANCHOR_RE.match(ln)
-                if m and m.group(1) == nm:
+                # group(1) = a verbed anchor (`// Wraps:` / `/// Replaces:`),
+                # group(2) = the neutral `// crustify:todo: <name>`.
+                neutral = m.group(2) if m else None
+                if m and (m.group(1) or neutral) == nm:
                     hit = True
-                    if any(_TODO in l for l in lines[i + 1:i + 3]):
+                    # In the neutral form the anchor line IS the placeholder, so
+                    # matching it at all means the item is still open. In the
+                    # older two-line form the placeholder sits BELOW.
+                    if neutral or any(_TODO in l for l in lines[i + 1:i + 3]):
                         open_ = True
                     break
             if not hit:

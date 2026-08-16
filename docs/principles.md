@@ -188,24 +188,37 @@ The `.rs` module for each target and dependency (types/symbols) is found via the
 `crustify-cli scaffold` command, which reflects the pre-established item placement policy.
 
 Each module is a shared, file-grained module - one Rust module per C source
-file, holding the following anchor kinds:
-- `// Replaces: <C_ITEM>` for port-scope items (functions / globals / types)
-- `// Wraps: <C_ITEM>` for wrap-scope items
-- `// Field: <C_ITEM>.<field>` for the `<C_ITEM>` type's `<field>` accessors
+file. The scaffolder lays every item as ONE neutral line:
 
-Each module includes anchors for many elements at once (across batches,
-wrap *and* port). Any one agent owns only the anchors in its workset; the rest
-belong to other batches and the other stage. Each anchor may be followed by
-a `// crustify:todo` placeholder marking remaining work, which gets deleted
-once the target is processed.
+- `// crustify:todo: <C_ITEM>` for a function / global / type
+- `// crustify:todo: <C_ITEM>.<field>` for that type's `<field>` accessors
+
+The anchor carries no verb, because scaffold runs before translate and cannot
+know which one applies: wrapping versus replacing is `--objective`, chosen per
+wave by the orchestrator. YOU pick the verb when you fill the anchor, from what
+you actually did - `/// Wraps: <C_ITEM>` for a safe view over the FFI seam,
+`/// Replaces: <C_ITEM>` for a native Rust translation.
+
+A field item is always owner-qualified (`<C_ITEM>.<field>`): a file-grained
+module holds many types, and two of them with a `data` field would otherwise
+collide on one line.
+
+Each module includes anchors for many elements at once, across batches and
+across objectives. Any one agent owns only the anchors in its workset; the rest
+belong to other batches and other waves. An unfilled anchor IS the
+`crustify:todo` line, so its presence is the record that the item is open.
 
 The per-anchor fill contract:
 
-- a target is located by its `// <Anchor>:` item anchor;
+- a target is located by its `// crustify:todo: <C_ITEM>` line (older trees
+  may carry a two-line `// Wraps: <C_ITEM>` + `// crustify:todo` pair; fill
+  either the same way);
 - an assigned anchor is filled in place, every other left exactly as-is;
-- a filled anchor's `// <Anchor>: <C_ITEM>` line is promoted to a
-  `/// <Anchor>: <C_ITEM>{.<field>}` doc comment on the emitted item, and its
-  `// crustify:todo` is deleted (a surviving todo marks still-pending work).
+- a filled anchor's `// crustify:todo: <C_ITEM>{.<field>}` line is REPLACED by a
+  `/// Wraps: <C_ITEM>{.<field>}` or `/// Replaces: <C_ITEM>{.<field>}` doc
+  comment on the emitted item — the todo line does not survive alongside it. A
+  surviving `crustify:todo` marks still-pending work, and is the only record
+  that an item is open.
 
 ## Re-export ported symbols
 
