@@ -537,34 +537,6 @@ def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
 
 # -- helpers --------------------------------------------------------------
 
-def _scope_from_args(args: argparse.Namespace) -> str | None:
-    """Resolve the scope flag to ``"port"``, ``"wrap"``, or ``None`` (both)."""
-    if getattr(args, "port", False):
-        return "port"
-    if getattr(args, "wrap", False):
-        return "wrap"
-    return None
-
-
-def _check_libraries_requires_wrap(args: argparse.Namespace) -> None:
-    """``--libraries`` is only meaningful with ``--wrap`` (or implicit
-    wrap context). For ``analyze *`` subjects we surface this as an
-    early error rather than letting the agent get confused."""
-    libs = getattr(args, "libraries", None)
-    if libs and not getattr(args, "wrap", False):
-        # Allow it without an explicit --wrap only when no scope group
-        # exists (wrap subjects' include_scope=False), so distinguish:
-        # if the args namespace HAS a `port` attribute, the scope group
-        # exists and --libraries needs --wrap to be set.
-        if hasattr(args, "port"):
-            print(
-                "error: --libraries requires --wrap (port-scope entries "
-                "are not library-tagged in the manifests).",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-
-
 def _require_artifact(target: Path, filename: str, command: str) -> None:
     """Data-driven pipeline gate: refuse to run if a required upstream
     artifact is missing on disk (stage completion is the presence of its
