@@ -543,7 +543,7 @@ def _introspect(
             if sj is not None:
                 from compose import scope as _sc
                 keep = {k[0] for k in _sc.scope_membership(
-                    sj, "wrap" if import_only else "port",
+                    sj, _sc.IMPORT if import_only else _sc.TARGET,
                     kinds=("functions", "globals", "macros"))}
                 pool &= keep
             win = sorted(pool)
@@ -656,10 +656,11 @@ def scope_touched_index(layout, target, which: str) -> dict:
 
 def _scope_touched_fields(layout, target, tag: str, defined_in: str | None,
                           which: str) -> set:
-    """Field names of `tag` touched by some function in scope `which`
-    (port|wrap). Empty if no scope.json. Drives the --port-only/--wrap-only
-    narrowing for --fields and --field-touchers, and — through
-    `scope_touched_index` — which fields the scaffolder anchors."""
+    """Field names of `tag` touched by some function in section `which`
+    (:data:`~compose.scope.TARGET` | :data:`~compose.scope.IMPORT`). Empty if no
+    scope.json. Drives the --target-only/--import-only narrowing for --fields
+    and --field-touchers, and — through `scope_touched_index` — which fields the
+    scaffolder anchors."""
     by_file = scope_touched_index(layout, target, which).get(tag) or {}
     if defined_in and defined_in in by_file:
         return set(by_file[defined_in])
@@ -669,10 +670,11 @@ def _scope_touched_fields(layout, target, tag: str, defined_in: str | None,
 def _field_keep_set(layout, target, tag: str, defined_in: str | None, *,
                     import_only: bool, target_only: bool) -> set | None:
     """Field-name keep-set for the -only narrowing, or None = keep ALL fields.
-    --port-only / --wrap-only → fields touched by that scope's code."""
+    --target-only / --import-only → fields touched by that section's code."""
     if not (import_only or target_only):
         return None
-    which = "wrap" if import_only else "port"
+    from compose import scope as _sc
+    which = _sc.IMPORT if import_only else _sc.TARGET
     return _scope_touched_fields(layout, target, tag, defined_in, which)
 
 
@@ -2070,7 +2072,7 @@ def query_files(
     if target_only or not import_only:
         target_files = sorted(scope_mod.load_target_paths(doc))
     if import_only or not target_only:
-        import_files = sorted(set((doc.get("wrap") or {}).get("files") or []))
+        import_files = sorted(set((doc.get(scope_mod.IMPORT) or {}).get("files") or []))
 
     if target_only:
         for f in target_files:
