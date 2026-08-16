@@ -140,6 +140,13 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
              "a per-unit verb.",
     )
     p.add_argument(
+        "--force", action="store_true", dest="force",
+        help="Re-schedule items whose anchor is already FILLED. Without it "
+             "they are warned about and dropped, since re-running an agent "
+             "over finished work usually means the selection was wrong, not "
+             "that the work needs redoing. Use --skip to drop them silently.",
+    )
+    p.add_argument(
         "--dry-run", action="store_true", dest="dry_run",
         help="Print the plan (units, batches, first-layer deps) and stop.",
     )
@@ -534,6 +541,7 @@ def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
         max_syms=getattr(args, "max_syms", None),
         max_loc=getattr(args, "max_loc", None),
         dry_run=bool(getattr(args, "dry_run", False)),
+        force=bool(getattr(args, "force", False)),
     )
 
 

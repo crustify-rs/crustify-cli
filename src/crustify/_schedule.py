@@ -607,6 +607,39 @@ def run(
     return failures
 
 
+def _place_batch_anchors(b: "Batch", layout, target, stage) -> None:
+    """Lay this batch's `// crustify:todo:` anchors, in ITS worktree.
+
+    Deliberately after the fork, not before. An anchor is a placeholder for work
+    one agent owes, so it belongs on that agent's branch and nowhere else: place
+    them up front in the shared tree and every sibling sees placeholders it is
+    not going to fill, which is both misleading context and a merge conflict
+    waiting on a file two agents now both have a reason to touch. Placed here,
+    the anchor lands on the branch that fills it.
+
+    `review` writes nothing. It re-examines emitted work, so an item with no
+    anchor has nothing to review — creating one would invite an agent to wrap it
+    under an objective that is not `wrap`, which is exactly the confusion the
+    objective split exists to prevent. Such items are reported and skipped.
+    """
+    from crustify.scaffold import place_anchors
+    names = [u.node.id for u in b.units]
+    if not names:
+        return
+    review = getattr(stage, "verb", None) == "review"
+    n, unanchored = place_anchors(layout, target, names, emit=not review)
+    if review and unanchored:
+        print(f"[crustify-cli {stage.verb}] {len(unanchored)} item(s) in this "
+              f"batch have no anchor — nothing emitted to review: "
+              + ", ".join(sorted(unanchored)[:8])
+              + (" …" if len(unanchored) > 8 else ""))
+    elif unanchored:
+        print(f"[crustify-cli {stage.verb}] {len(unanchored)} item(s) have no "
+              f"home in crates.json and were left unanchored: "
+              + ", ".join(sorted(unanchored)[:8])
+              + (" …" if len(unanchored) > 8 else ""))
+
+
 def _isolated_wave(
     by_file: dict[str | None, list[Batch]], stage: Stage,
     parallelize: bool, parallel_max: int,
@@ -695,6 +728,7 @@ def _isolated_wave(
         for j, b in enumerate(chain):
             try:
                 wt = _fork(i0 + j, b)
+                _place_batch_anchors(b, Layout(wt), wt / rel, stage)
                 stage.emit_factory(wt / rel, Layout(wt))(b)   # bound to the worktree
             except BaseException as e:                        # noqa: BLE001
                 # Abort the rest of THIS chain (its later batches are ordered

@@ -364,7 +364,7 @@ def _materialize(layout, entries: list[dict],
     except Exception:
         generators = set()
     field_map = field_map or {}
-    created = updated = preserved = links = 0
+    created = preserved = links = 0
     for e in entries:
         crate_dir = layout.repo_root / e["crate_path"]
         rs = _safe_rs(e["rs"])
@@ -373,17 +373,14 @@ def _materialize(layout, entries: list[dict],
             rs_path.parent.mkdir(parents=True, exist_ok=True)
             rs_path.write_text(_stub(e, scope_map, field_map, generators))
             created += 1
-        elif _merge_anchors(rs_path, e, scope_map, field_map, generators):
-            # File already there but newly-homed members lack an anchor —
-            # `--create` is additive/idempotent (the
-            # docstring contract), so add the missing ones rather than leaving
-            # them unscaffolded.
-            updated += 1
         else:
+            # Already materialized. Nothing to top up: members are anchored by
+            # the SCHEDULER, in the worktree of the agent that owes them, so a
+            # newly-homed member needs no scaffold rerun to become reachable.
             preserved += 1
         links += _wire(crate_dir, rs)
-    return (f"{created} stub(s) created, {updated} updated, "
-            f"{preserved} preserved, {links} module link(s)")
+    return (f"{created} stub(s) created, {preserved} preserved, "
+            f"{links} module link(s)")
 
 
 def _crustify_prim(layout) -> Path:
@@ -515,70 +512,13 @@ def _ensure_workspace_lints(ws_toml: Path) -> None:
         'module_inception = "allow"\n')
 
 
-def _merge_anchors(rs_path: Path, e: dict,
-                   scope_map: dict[str, str] | None = None,
-                   field_map: dict[str, list[str]] | None = None,
-                   generators: set[str] | None = None) -> int:
-    """Add anchors missing from the existing managed `.rs`: one
-    ``// crustify:todo: <item>`` line per member (macros are anchored only when
-    they are template generators), plus a type's owner-qualified field anchors.
-    Idempotent — skips anchors already present in any form, neutral or verbed,
-    filled `///` or not. Returns the number of anchors added."""
-    scope_map = scope_map or {}
-    field_map = field_map or {}
-    text = rs_path.read_text()
-    added = 0
-    new: list[str] = []
-    for kind in ("types", "functions", "callbacks", "globals", "macros"):
-        for nm in e["members"].get(kind) or []:
-            # Only a template generator among macros — see `_stub`.
-            if kind == "macros" and nm not in (generators or set()):
-                continue
-            # Form-agnostic match (won't duplicate an anchor already present,
-            # neutral or verbed, filled or not).
-            if not _anchor_re(nm).search(text):
-                new += [_todo_anchor(nm), ""]
-                if kind == "types":
-                    for fld in field_map.get(nm, ()):
-                        new += [_todo_anchor(f"{nm}.{fld}"), ""]
-                added += 1
-            elif kind == "types" and field_map.get(nm):
-                # The type is already anchored, but a field can ENTER port scope
-                # after the file was written (scope-config change, or a composer
-                # fix that made previously-invisible accesses visible). Anchor
-                # the newcomers so the type stops reading as complete.
-                #
-                # Appended at the end of the file rather than slotted next to
-                # its neighbours: by now an agent has promoted anchors to `///`,
-                # moved them into `impl` blocks and forked some in two, so there
-                # is no position that is right in general — whereas the end of
-                # the file is always valid, and `// crustify:todo` is a plain
-                # comment, so it is inert wherever it lands. The agent moves it
-                # when it fills it.
-                #
-                # Presence is an exact match on the OWNER-QUALIFIED name, so no
-                # positional attribution is needed and none of its failure modes
-                # apply: another type's identically-named field, or an
-                # intervening symbol anchor, cannot be mistaken for this one.
-                for fld in field_map.get(nm, ()):
-                    if not _has_field_anchor(text, nm, fld):
-                        new += [f"// Field: {nm}.{fld}", _TODO, ""]
-                        added += 1
-    if new:
-        if not text.endswith("\n"):
-            text += "\n"
-        text += "\n".join(new) + "\n"
-    if added:
-        rs_path.write_text(text)
-    return added
-
 
 _TODO = "// crustify:todo"  # matches _schedule._TODO; a surviving one = pending
 
-#: The unfilled item anchor. ONE line naming the item, with no verb: scaffold
-#: runs before translate, so it cannot know whether the agent will wrap the item
-#: or replace it -- that is `--objective`, and the orchestrator picks it per
-#: wave. The agent promotes this to `/// Wraps: <item>` or `/// Replaces: <item>`
+#: The unfilled item anchor. ONE line naming the item, with no verb: it is laid
+#: by the SCHEDULER, inside the worktree of the agent that owes it, and even
+#: there the verb is unknown -- that is `--objective`, and the orchestrator
+#: picks it per wave. The agent promotes this to `/// Wraps: <item>` or `/// Replaces: <item>`
 #: according to what it actually did, which is the only moment the verb is
 #: knowable. The item is OWNER-QUALIFIED for a field (`Type.field`): a
 #: file-grained module holds many types, and two of them with a `data` field
@@ -732,3 +672,71 @@ def _safe_rs(rs: str) -> str:
 
 def _full_rs(layout, crate_path: str, rs: str) -> str:
     return str(layout.repo_root / crate_path / _safe_rs(rs))
+
+
+def place_anchors(layout, target: Path, names: list[str], *,
+                  fields: dict[str, list[str]] | None = None,
+                  emit: bool = True) -> tuple[int, list[str]]:
+    """Insert a `// crustify:todo: <item>` line for every `names` entry that has
+    no anchor yet, in the `.rs` `crates.json` homes it at.
+
+    This is the LAZY replacement for the scaffolder's up-front anchor pass. The
+    scaffolder still materializes crates, empty modules and the `mod` tree —
+    one-time, single-threaded work whose absence would break compilation — but
+    it no longer writes an anchor per in-scope entity. On a wrap campaign over
+    libcrypto that was ~25k placeholders, almost all of them for items a given
+    wave never touches, and it forced an idempotent re-reconcile of a tree
+    agents had already edited on every rerun.
+
+    Called by the scheduler AFTER a batch's worktree exists and against that
+    worktree's `Layout`, so an agent sees exactly the anchors for its own units
+    and none of its siblings'. Two agents therefore cannot both be looking at a
+    placeholder only one of them owes, and the anchor lands on the branch that
+    fills it.
+
+    `emit=False` reports without writing — the review path, which has nothing to
+    do for an item nobody has wrapped yet.
+
+    Returns `(inserted, unanchored)`: how many lines were written, and the names
+    that have no anchor and did not get one.
+    """
+    from crustify import crates as _crates
+    doc = _crates.load(layout)
+    fields = fields or {}
+    def _rs_path(e: dict) -> Path:
+        # `crate_path` is repo-root-relative (`crustify/rust/<crate>`), not
+        # relative to `layout.rust` — joining it there double-prefixes.
+        cp = Path(e["crate_path"] or "")
+        return (cp if cp.is_absolute() else layout.repo_root / cp) / e["rs"]
+
+    homes: dict[Path, list[str]] = {}
+    unanchored: list[str] = []
+    for nm in names:
+        entries, missing = _entries_for_names(doc, [nm])
+        if missing:
+            unanchored.append(nm)
+            continue
+        for e in entries:
+            homes.setdefault(_rs_path(e), []).append(nm)
+    inserted = 0
+    for rs_path, items in homes.items():
+        if not rs_path.exists():
+            unanchored += items
+            continue
+        text = rs_path.read_text()
+        add: list[str] = []
+        for nm in items:
+            wanted = [nm] + [f"{nm}.{f}" for f in fields.get(nm, ())]
+            for item in wanted:
+                if _anchor_re(item).search(text) or any(
+                        l == _todo_anchor(item) for l in add):
+                    continue
+                if not emit:
+                    unanchored.append(item)
+                    continue
+                add += [_todo_anchor(item), ""]
+        if add:
+            sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+            rs_path.write_text(text + sep + "\n".join(add) + "\n")
+            inserted += sum(1 for l in add if l)
+    return inserted, unanchored

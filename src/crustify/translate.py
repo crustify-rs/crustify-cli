@@ -453,6 +453,7 @@ def translate_types(
     max_types: int | None = None,
     min_fields: int | None = None,
     dry_run: bool = False,
+    force: bool = False,
     emit_fn=None,
 ) -> None:
     """Translate the selected in-scope units via the ``--name`` scheduler.
@@ -540,10 +541,19 @@ def translate_types(
     # C-side readers are now gone. Only the default `wrap` objective filters
     # to items whose `// crustify:todo` placeholder still survives.
     if objective == "wrap":
-        sel_names, _done = _pending_names(sel_names, layout, target)
-        if _done:
-            print(f"[crustify-cli translate] skipping {len(_done)} already-wrapped "
-                  f"item(s); --objective review|port to act on them: "
+        _pending, _done = _pending_names(sel_names, layout, target)
+        if _done and not force:
+            sel_names = _pending
+            print(f"[crustify-cli translate] {len(_done)} selected item(s) already "
+                  f"have a FILLED anchor and were dropped — re-running an agent "
+                  f"over finished work usually means the selection was wrong. "
+                  f"--force re-schedules them, --skip drops them silently, "
+                  f"--objective review|port acts on them deliberately: "
+                  f"{', '.join(sorted(_done)[:8])}"
+                  + (" …" if len(_done) > 8 else ""))
+        elif _done:
+            print(f"[crustify-cli translate] --force: re-scheduling {len(_done)} "
+                  f"item(s) whose anchor is already filled: "
                   f"{', '.join(sorted(_done)[:8])}"
                   + (" …" if len(_done) > 8 else ""))
     if not sel_names:
