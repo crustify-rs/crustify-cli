@@ -56,7 +56,7 @@ _GLOBAL_COUNTS = (
     "unsafe_block_code_lines", "unsafe_blocks_wrapper_impl", "wrapper_impl_macro",
     "wrapper_impl_handwritten", "unsafe_blocks_ffi_export", "rp_wrap_nonseam_args",
     "rp_wrap_nonseam_rets", "rp_wrap_nonseam_wrapped", "rp_outside_args",
-    "rp_outside_rets", "rp_outside_wrapped", "ref_to_wrapper",
+    "rp_outside_rets", "rp_outside_wrapped", "ref_to_type_wrapper",
     "field_proj_wrapped", "field_proj_outside_impl", "void_ptr_sanctioned",
     "void_ptr_smell", "raw_ptr_derefs", "total_stmts", "code_lines",
 )

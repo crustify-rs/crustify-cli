@@ -202,7 +202,7 @@ none of them the types an API is built around.
 
 **What it buys.** Soundness by construction on every type, with no analysis:
 `&mut` ergonomics on day one, and an audit rule that is pure syntax
-(`ref_to_wrapper`, target 0) rather than a per-type judgement.
+(`ref_to_type_wrapper`, target 0) rather than a per-type judgement.
 
 **Measured against the alternatives.** A ZST borrowed type at the object's
 address (the `foreign-types` shape) is rejected by Stacked Borrows: the retag
@@ -225,7 +225,7 @@ under both.
 
 **Scoreboard.** `audit --all` on `ssl` today: 2,531 unsafe LoC, 93.5% inside
 `impl` blocks, 7.39% of 34,235 code lines. Any relaxation should move the first
-two down without moving `field_proj_outside_impl` or `ref_to_wrapper` off
+two down without moving `field_proj_outside_impl` or `ref_to_type_wrapper` off
 zero.
 
 ---

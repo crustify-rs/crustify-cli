@@ -29,7 +29,7 @@ the regex pass in `audit.py` for the subset of properties below.
 | `rp_wrap_nonseam_wrapped` | ...of those, pointee is a type that has a `define_*ctype!` wrapper (a safe alternative exists) |
 | `rp_outside_args` / `_rets` | raw-ptr args / returns in fns outside wrapper impls AND outside `mod ffi_export` |
 | `rp_outside_wrapped` | ...of those, pointee has a `define_*ctype!` wrapper available |
-| `ref_to_wrapper` | `&W` or `&mut W` in signatures (incl. the `&self` / `&mut self` receiver) where `W` is a wrapper — a reference of either kind over a wrapped C object asserts something about memory C may write through a pointer it retains, so access goes through the borrowed handles instead; **should be 0** |
+| `ref_to_type_wrapper` | `&W` or `&mut W` in signatures (incl. the `&self` / `&mut self` receiver) where `W` is a TYPE wrapper — implements `CCell` AND stores the C object inline (`CType<ffi::T>`), rather than holding a pointer to it. A reference of either kind over the object's own bytes asserts something about memory C may write through a pointer it retains, so access goes through the borrowed handles instead; **should be 0**. A reference to a POINTER wrapper (a handle, `#[repr(transparent)]` over `CPtr`) covers Rust-owned storage and is NOT counted |
 | `field_proj_wrapped` | `(*p).field` (incl. `addr_of!((*p).field)`) where `p: *C` and `C` has a `define_*ctype!` wrapper |
 | `field_proj_outside_impl` | ...of those, the subset outside any impl/trait body — the smell (a port body bypassing the accessor instead of calling it); inside-impl projections are accessor definitions (sanctioned) |
 | `void_ptr_sanctioned` / `void_ptr_smell` | `*const/*mut c_void` in signatures, split: sanctioned (seam method / `mod ffi_export`) vs smell (ordinary signatures, where a typed pointer/wrapper is preferred). Signature-scoped; `as *mut c_void` casts not counted |
@@ -118,7 +118,7 @@ Emits `{"crate":...,"seeds":[ {per-seed} ]}`. Per seed:
 - **own-region** metrics (scoped to the region): `unsafe_blocks`,
   `unsafe_block_code_lines`, `wrapper_macro`/`wrapper_handwritten`,
   `raw_ptr_derefs`, `field_proj` / `field_proj_outside_impl`,
-  `ref_to_wrapper`, `void_ptr_smell`.
+  `ref_to_type_wrapper`, `void_ptr_smell`.
 - **`naked`** = uses of the seed's C entity outside the sanctioned homes
   (seam routines, `mod ffi_export`, macro-generated code via `from_expansion`),
   counted **everywhere including the seed's own region**: for a **type**, raw

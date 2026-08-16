@@ -51,19 +51,71 @@ fn is_seam_fn(tcx: TyCtxt<'_>, did: DefId) -> bool {
     tcx.opt_item_name(did).is_some_and(|n| SEAM_FNS.contains(&n.as_str()))
 }
 
-/// True if `t` is `&W` or `&mut W` where `W` is a wrapper (implements `CCell`).
-/// Catches the `&self` / `&mut self` receiver (whose type is `&Self` / `&mut
-/// Self` = `&W` / `&mut W`) and explicit reference params alike.
+/// True if `t` is `PhantomData<..>` -- a ZST, so it is not the wrapper's
+/// storage and must be skipped when deciding the storage shape.
+fn is_phantom(tcx: TyCtxt<'_>, t: Ty<'_>) -> bool {
+    matches!(t.kind(), ty::TyKind::Adt(d, _)
+        if tcx.item_name(d.did()).as_str() == "PhantomData")
+}
+
+/// True if `t` is POINTER storage -- a raw pointer, or one of the pointer
+/// newtypes a handle is `#[repr(transparent)]` over.
+fn is_ptr_storage(tcx: TyCtxt<'_>, t: Ty<'_>) -> bool {
+    match t.kind() {
+        ty::TyKind::RawPtr(..) => true,
+        ty::TyKind::Adt(d, _) => matches!(
+            tcx.item_name(d.did()).as_str(),
+            "CPtr" | "NonNull" | "CBox" | "CBoxUninit" | "CVoidBox"),
+        _ => false,
+    }
+}
+
+/// True if `W` is a TYPE wrapper: a wrapper whose storage IS the C object's
+/// bytes (an inline `CType<ffi::T>`), as opposed to a POINTER to it.
+///
+/// This is the distinction that decides whether a reference is a hazard at all.
+/// `&W` over inline storage asserts `noalias` / `readonly` / validity over
+/// memory C may write through a pointer it retains; `&W` over a pointer slot
+/// asserts it over Rust-owned storage, which is harmless -- that is exactly why
+/// access goes through the borrowed handles, which hold the pointer by value.
+///
+/// Membership is keyed on `CCell` rather than on the field shape, because
+/// `CCell` is what the framework itself treats as a wrapper (`CBox<W>`, the
+/// `Ref`/`Mut` associated types) and because it resolves AFTER macro expansion,
+/// so `define_ctype!`-generated and hand-written wrappers are seen alike. The
+/// field shape then splits that set; a wrapper with no non-ZST field is counted
+/// as a type wrapper, which keeps the target at 0 rather than silently exempting
+/// it.
+fn is_type_wrapper(tcx: TyCtxt<'_>, did: DefId) -> bool {
+    if !is_wrapper(tcx, did) {
+        return false;
+    }
+    for f in tcx.adt_def(did).all_fields() {
+        let ft = tcx.type_of(f.did).skip_binder();
+        if is_phantom(tcx, ft) {
+            continue;
+        }
+        return !is_ptr_storage(tcx, ft);
+    }
+    true
+}
+
+/// True if `t` is `&W` or `&mut W` where `W` is a TYPE wrapper (implements
+/// `CCell` and stores the C object inline). Catches the `&self` / `&mut self`
+/// receiver (whose type is `&Self` / `&mut Self` = `&W` / `&mut W`) and
+/// explicit reference params alike.
 ///
 /// A reference of EITHER kind over a wrapped C object asserts something about
 /// memory C may write through a pointer it retains -- `noalias` and `readonly`
 /// on the shared form, `noalias` on the exclusive one, and validity on both.
 /// Access goes through the borrowed handles instead, which hold the pointer by
 /// value and so cover Rust-owned storage. This metric should be 0.
-fn is_ref_to_wrapper(tcx: TyCtxt<'_>, t: Ty<'_>) -> bool {
+///
+/// A reference to a POINTER wrapper is not counted: see `is_type_wrapper`.
+fn is_ref_to_type_wrapper(tcx: TyCtxt<'_>, t: Ty<'_>) -> bool {
     if let ty::TyKind::Ref(_, pointee, _) = t.kind() {
         if let ty::TyKind::Adt(def, _) = pointee.kind() {
-            return is_wrapper(tcx, def.did());
+            return is_type_wrapper(tcx, def.did());
         }
     }
     false
@@ -274,7 +326,7 @@ struct Counts {
     rp_outside_args: u64, // outside wrapper impls AND outside `mod ffi_export`
     rp_outside_rets: u64,
     rp_outside_wrapped: u64, //        of those, pointee has a wrapper
-    ref_to_wrapper: u64, // `&W` / `&mut W` (incl. the receiver), W a wrapper
+    ref_to_type_wrapper: u64, // `&W` / `&mut W` (incl. the receiver), W a TYPE wrapper
     // `(*p).field` where `p: *C` and `C` has a wrapper (bypasses the
     // accessor): total, and the subset outside any impl/trait (the smell).
     field_proj_wrapped: u64,
@@ -782,8 +834,8 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
                 let extern_c = is_extern_c_fn(tcx, did);
                 let span = tcx.def_span(did);
                 for t in sig.inputs().iter().copied().chain(std::iter::once(sig.output())) {
-                    if is_ref_to_wrapper(tcx, t) {
-                        metrics[i].ref_to_wrapper += 1;
+                    if is_ref_to_type_wrapper(tcx, t) {
+                        metrics[i].ref_to_type_wrapper += 1;
                     }
                     if is_void_ptr(tcx, t) && !(seam || in_ffi || extern_c) {
                         metrics[i].void_ptr_smell += 1;
@@ -866,10 +918,10 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
         let st = &sites[i];
         let kind = if s.kind == SeedKind::Type { "type" } else { "func" };
         format!(
-            "{{\"name\":\"{}\",\"c_name\":\"{}\",\"kind\":\"{}\",\"region_owners\":{},\"unsafe_blocks\":{},\"unsafe_block_code_lines\":{},\"wrapper_macro\":{},\"wrapper_handwritten\":{},\"raw_ptr_derefs\":{},\"field_proj\":{},\"field_proj_outside_impl\":{},\"ref_to_wrapper\":{},\"void_ptr_smell\":{},\"naked\":{},\"naked_sites\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{}}}",
+            "{{\"name\":\"{}\",\"c_name\":\"{}\",\"kind\":\"{}\",\"region_owners\":{},\"unsafe_blocks\":{},\"unsafe_block_code_lines\":{},\"wrapper_macro\":{},\"wrapper_handwritten\":{},\"raw_ptr_derefs\":{},\"field_proj\":{},\"field_proj_outside_impl\":{},\"ref_to_type_wrapper\":{},\"void_ptr_smell\":{},\"naked\":{},\"naked_sites\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{}}}",
             s.name, s.c_name, kind, region_owners[i], m.unsafe_blocks, m.unsafe_block_code_lines,
             m.wrapper_impl_macro, m.wrapper_impl_handwritten, m.raw_ptr_derefs,
-            m.field_proj_wrapped, m.field_proj_outside_impl, m.ref_to_wrapper,
+            m.field_proj_wrapped, m.field_proj_outside_impl, m.ref_to_type_wrapper,
             m.void_ptr_smell, naked[i],
             sites_json(&st.naked), sites_json(&st.raw_ptr),
             sites_json(&st.void_ptr), sites_json(&st.field_proj),
@@ -953,8 +1005,8 @@ impl Callbacks for MetricsCallbacks {
                 let extern_c = is_extern_c_fn(tcx, did);
                 // `&mut <wrapper>` and `*c_void` anywhere in the signature.
                 for t in sig.inputs().iter().copied().chain(std::iter::once(sig.output())) {
-                    if is_ref_to_wrapper(tcx, t) {
-                        c.ref_to_wrapper += 1;
+                    if is_ref_to_type_wrapper(tcx, t) {
+                        c.ref_to_type_wrapper += 1;
                     }
                     if is_void_ptr(tcx, t) {
                         if seam || in_ffi || extern_c {
@@ -1023,8 +1075,8 @@ impl Callbacks for MetricsCallbacks {
             }
         }
         println!(
-            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"rp_wrap_nonseam_args\":{},\"rp_wrap_nonseam_rets\":{},\"rp_wrap_nonseam_wrapped\":{},\"rp_outside_args\":{},\"rp_outside_rets\":{},\"rp_outside_wrapped\":{},\"ref_to_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"raw_deref_sites\":{}}}",
-            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.rp_wrap_nonseam_args, c.rp_wrap_nonseam_rets, c.rp_wrap_nonseam_wrapped, c.rp_outside_args, c.rp_outside_rets, c.rp_outside_wrapped, c.ref_to_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
+            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"rp_wrap_nonseam_args\":{},\"rp_wrap_nonseam_rets\":{},\"rp_wrap_nonseam_wrapped\":{},\"rp_outside_args\":{},\"rp_outside_rets\":{},\"rp_outside_wrapped\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"raw_deref_sites\":{}}}",
+            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.rp_wrap_nonseam_args, c.rp_wrap_nonseam_rets, c.rp_wrap_nonseam_wrapped, c.rp_outside_args, c.rp_outside_rets, c.rp_outside_wrapped, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
             sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj), sites_json(&sites.raw_deref)
         );
         Compilation::Continue
