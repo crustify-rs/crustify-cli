@@ -435,10 +435,28 @@ def compose_wrap(
         The anchor set stands in for the include closure: those files are
         exactly what a consumer of this API includes, so intersecting against
         them narrows an item's all-decls superset down to the public header it
-        is imported through — the same job, one seed over."""
+        is imported through — the same job, one seed over.
+
+        The two fallbacks differ, and must. On the port path, missing the
+        closure means the include graph had no row for the TU, so every
+        declaring header is still a candidate. On the ANCHOR path it means
+        something else entirely: the item is declared in no anchored header at
+        all, reached only transitively through one that is. Handing back every
+        declaring header there is not conservative, it is wrong — it readmits
+        the private headers the narrowing exists to exclude, and >1 survivor
+        additionally stamps `reexport: true`, which then sorts a private
+        `*_local.h` ahead of the public header and sends scaffold to home the
+        type under it. Such an item has one honest home, so return one:
+        `canonical_decl`'s ranking (in-repo header > in-repo source > external,
+        generated deprioritised)."""
         clo = anchor_paths if tu is None else closure(tu)
         hit = [d for d in decls if d in clo]
-        return hit or [d for d in decls if d.endswith((".h", ".hpp", ".hh"))] or decls
+        if hit:
+            return hit
+        if tu is None:
+            canon = scope.canonical_decl(decls)
+            return [canon] if canon else decls
+        return [d for d in decls if d.endswith((".h", ".hpp", ".hh"))] or decls
 
     def add_sym(name: str, df: str, decls: list[str], tu: str | None) -> None:
         if not name or scope.classify(df, decls, port_paths) != "wrap":

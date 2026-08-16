@@ -20,7 +20,8 @@ from pathlib import Path
 #:  1 — pair-keyed type nodes; `deps.types` carries `defined_in`.
 #:  3 — `wrap.anchors`; anonymous tags dropped from `wrap.types`.
 #:  4 — dag keeps every field of an anchor-DEFINED wrap struct.
-_VERSION = 4
+#:  5 — anchored `declared_in` falls back to one canonical header, not all.
+_VERSION = 5
 
 
 def fingerprint(layout, target) -> dict:
