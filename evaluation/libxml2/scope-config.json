@@ -1,0 +1,69 @@
+{
+  "_comment": [
+    "TARGET-tier scope definition for a WRAP-ONLY campaign over libxml2",
+    "v2.15.3. There is no port scope: nothing is translated to native Rust.",
+    "The deliverable is a safe Rust wrapper over the whole published C API,",
+    "so the target is defined by the headers that publish it."
+  ],
+
+  "_comment_files": [
+    "`files.port` is empty, and that is the point. Every entity classifies",
+    "wrap, no C source is fenced or re-exported, and libxml2 builds",
+    "unmodified - Rust links the existing shared object.",
+    "",
+    "`files.wrap` anchors the public header directory. Every function,",
+    "global and type declared under include/libxml/ enters the wrap surface",
+    "directly, independent of whether anything in this target reaches it -",
+    "which is the only way in when there is no port scope to seed a closure.",
+    "45 headers, 1416 XMLPUBFUN declarations at this tag.",
+    "",
+    "The definitions are all present in the CodeQL database (55 .c files at",
+    "the repo root, one shared object) even though none of them is ported.",
+    "That is what the ownership analysis walks: free / store / return paths",
+    "read off the real implementation rather than guessed from a signature,",
+    "which is the thing a hand-written -sys crate cannot do.",
+    "",
+    "A struct DEFINED in one of these headers is a value type whose fields",
+    "are the API, so its field types are walked in full. One merely",
+    "forward-declared there stays an opaque handle. libxml2 defines most of",
+    "its tree structs publicly (xmlNode, xmlDoc, xmlAttr), so the value-type",
+    "share here is far higher than in OpenSSL.",
+    "",
+    "NOT anchored, deliberately: the private headers under include/private/",
+    "and the two repo-root headers (libxml.h, timsort.h). They declare",
+    "libxml2's internals, which no consumer includes; anything the public",
+    "API genuinely exposes from them reaches wrap scope through the type",
+    "closure instead, and lands as an opaque handle."
+  ],
+  "files": {
+    "port": [
+    ],
+    "wrap": [
+      "include/libxml/"
+    ]
+  },
+
+  "_comment_out_of_scope": [
+    "`paths` is empty. The candidates are excluded by construction: `files`",
+    "names only include/libxml/, so test/, fuzz/, python/, example/ and the",
+    "xmllint/xmlcatalog programs are outside it and never enter.",
+    "",
+    "`features` is documentation only - no composer reads it. It lists the",
+    "LIBXML2_WITH_* options that are OFF in the configure line recorded in",
+    "build.json, so a body they elide contributes no entities and drops out",
+    "of scope.json on its own."
+  ],
+  "out_of_scope": {
+    "paths": [
+    ],
+    "features": [
+      "LIBXML2_WITH_HTTP",
+      "LIBXML2_WITH_ICU",
+      "LIBXML2_WITH_LEGACY",
+      "LIBXML2_WITH_PYTHON",
+      "LIBXML2_WITH_READLINE",
+      "LIBXML2_WITH_TLS",
+      "LIBXML2_WITH_DOCS"
+    ]
+  }
+}

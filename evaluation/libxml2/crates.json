@@ -1,0 +1,56 @@
+{
+  "_comment": [
+    "REPO-ROOT-tier crate/module decomposition for libxml2 v2.15.3.",
+    "",
+    "SEEDED SHELL - `modules` is empty on purpose, and Phase 1 fills it.",
+    "The member lists are an enumeration of the entity inventory, which does",
+    "not exist until `extract-ql` has produced the T1 tables; authoring them",
+    "ahead of the database would be guessing at names. The crate identity,",
+    "paths and link edges below ARE settled and do not depend on it.",
+    "",
+    "One link unit, so one crate. `depends_on` mirrors build.json's",
+    "`link_dependencies` for libxml2 exactly - the placement oracle keys on",
+    "the same library names bindgen uses."
+  ],
+  "crates": {
+    "libxml2": {
+      "kind": "library",
+      "in_tree": true,
+      "crate_path": "crustify/rust/libxml2",
+      "sys_crate": "crustify/rust/libxml2-sys",
+      "depends_on": [
+        "libz",
+        "libm",
+        "libdl",
+        "libpthread",
+        "libc"
+      ],
+      "_comment_modules": [
+        "Fill during Phase 1, after `extract-ql`.",
+        "",
+        "A wrap-only target homes its entities by IMPORT HEADER, not by",
+        "translation unit: scaffold routes a wrap item through its",
+        "`scope.json` `wrap.declared_in`, so the module tree should mirror",
+        "include/libxml/ rather than the 55 flat .c files. Expect roughly one",
+        "module per public header, with `tu: null` on every `.rs` - nothing",
+        "here is ported, so no module mirrors a C translation unit.",
+        "",
+        "Suggested grouping, by the subsystem boundaries the headers already",
+        "draw (sizes are XMLPUBFUN counts at this tag):",
+        "  tree      tree.h 172, entities.h, valid.h 71",
+        "  parser    parser.h 126, parserInternals.h 75, SAX2.h 36, HTMLparser.h 43",
+        "  xpath     xpath.h 41, xpathInternals.h 117, xpointer.h, pattern.h",
+        "  io        xmlIO.h 55, encoding.h, xmlsave.h, xmlwriter.h 81",
+        "  reader    xmlreader.h 89",
+        "  schema    xmlschemas.h, xmlschemastypes.h 34, relaxng.h, schematron.h",
+        "  util      xmlstring.h 30, hash.h, list.h, dict.h, uri.h, buf.h",
+        "  catalog   catalog.h 37",
+        "",
+        "Verify against the real inventory before committing to it - the",
+        "authority is `crustify-oracle /work/libxml2 . query types --wrap-only`",
+        "and the symbol equivalent, not this comment."
+      ],
+      "modules": {}
+    }
+  }
+}
