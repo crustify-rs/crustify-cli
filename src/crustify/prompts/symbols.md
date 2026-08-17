@@ -18,9 +18,13 @@ The deterministic scheduler chose which symbols and in which order.
 
 ## Inputs
 
-- `{repo_root}`: top level repo that the targeted port-scope elements belong to.
+- `{repo_root}`: the C project's repository root. Repo-relative paths resolve
+  against it, and the crustify artifacts live under `<repo_root>/crustify/`.
 
-- `{target}`: dir path to the port-scope elements targeted by this session.
+- `{target}`: the repo-relative id this session runs under, which locates its
+  `crustify/targets/<target>/scope-config.json`. The scope is that config's
+  `files`, which may name paths outside this dir. Use the `crustify-oracle`
+  skill to obtain the target and import sections your session works over.
 
 - `{workspace_root}`: shared Cargo workspace, homing modules and
 translations across multiple port sessions.
