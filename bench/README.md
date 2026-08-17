@@ -1,4 +1,4 @@
-# Evaluation
+# Bench
 
 One target per directory. Each holds the `TASK.md` a run is given, plus
 whatever Phase 1 artifacts are authored ahead of time.
@@ -11,11 +11,11 @@ You can also do claude orchestrator and codex translators, or vice-versa.
 Both commands from the repo root:
 
 ```sh
-docker build -t crustify evaluation/
+docker build -t crustify bench/
 
 docker run --rm -it --name crustify-libgit2 \
     -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
-    -v "$PWD/evaluation/libgit2:/campaign:ro" \
+    -v "$PWD/bench/libgit2:/campaign:ro" \
     -v crustify-work:/work \
     crustify
 ```

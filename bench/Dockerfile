@@ -2,11 +2,11 @@
 #
 # Both commands run from the repo root:
 #
-#   docker build -t crustify evaluation/
+#   docker build -t crustify bench/
 #
 #   docker run --rm -it --name crustify-libgit2 \
 #       -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
-#       -v "$PWD/evaluation/libgit2:/campaign:ro" \
+#       -v "$PWD/bench/libgit2:/campaign:ro" \
 #       -v crustify-work:/work \
 #       crustify
 #
