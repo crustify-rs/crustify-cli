@@ -5,7 +5,7 @@ Builds one scope-agnostic directed graph whose
 nodes are **types** and **all symbols** (functions / macros / globals,
 including a type's lifecycle methods), where ``A -> B`` means "A needs B
 emitted first". Topo-sorted (Tarjan SCC → longest-path layers) it drives both
-the translate stage (wrap-scope subset) and, once it exists, a port stage (the whole graph, in
+the translate stage (import subset) and, once it exists, a port stage (the whole graph, in
 order). See ``docs/WRAP_STAGE_PLAN.md``.
 
 Relationships come straight from the analysis tree:
@@ -223,8 +223,8 @@ def _is_real(entry: dict, key: str = "name") -> bool:
 def _field_ctype_refs(entry: dict, keep_fields: set[str] | None = None) -> set[str]:
     """Type refs from a struct's fields.
 
-    ``keep_fields`` restricts to the named fields — the port-touched subset
-    for a wrap-scope struct, whose other fields are layout bound opaquely and
+    ``keep_fields`` restricts to the named fields — the target-touched subset
+    for an import struct, whose other fields are layout bound opaquely and
     must not order this target's work. None keeps every field (port scope).
     """
     refs: set[str] = set()
@@ -290,19 +290,19 @@ def _collect(analysis_root: Path,
     """Collect nodes/edges from the analysis tree, narrowed to one target.
 
     The tree is scope-agnostic and ACCUMULATES across targets: an entry that
-    was port-scope for an earlier target keeps the full body-level
+    was target-section for an earlier target keeps the full body-level
     ``depends_on`` it gained then. Building this target's graph from that
     unfiltered tree imports another target's body edges, which deepens the
     layering for work this target never does.
 
     So edges are narrowed per node against THIS target's scope:
 
-      - **port-scope symbol** — every edge. Its body is translated, so its
+      - **target symbol** — every edge. Its body is translated, so its
         callees and field-derived type uses are real dependencies.
-      - **wrap-scope symbol** — signature only. A binding is emitted from the
+      - **import symbol** — signature only. A binding is emitted from the
         signature alone: callee edges are dropped outright, and type edges
         keep only signature/opaque uses (``fields: []``).
-      - **wrap-scope struct** — only fields the port scope actually touches
+      - **import struct** — only fields the port scope actually touches
         (``port_fields``); the rest of the layout is never reached through
         this target and must not order its work.
 
@@ -398,7 +398,7 @@ def _collect(analysis_root: Path,
                 n.has_dep = True
                 dep = e["depends_on"] or {}
                 # `depends_on` is only ever emitted for an entry that was
-                # port-scope for SOME target; whether it is port-scope for
+                # target-section for SOME target; whether it is target-section for
                 # THIS one decides how much of it applies.
                 is_port = port_syms is None or key in port_syms
                 for d in dep.get("types") or []:
@@ -967,7 +967,7 @@ def _emit_node(nodes, comp):
 def _populate_nfields(codeql_dir: Path, types: dict[str, TypeNode]) -> None:
     """Set each type's ``nfields`` to its **full** struct field count from the
     T1 ``fields.csv`` (``<crustify>/codeql/t1/fields.csv``, a sibling of the
-    analysis tree). This is the whole struct, NOT the port-accessed subset that
+    analysis tree). This is the whole struct, NOT the target-accessed subset that
     ``types.json``'s ``fields[]`` narrows to — a struct's translated surface
     (``define_ctype!`` + accessors) scales with its field layout, so a type's
     own LoC is its field count. fields.csv attributes anonymous-struct fields to
@@ -994,7 +994,7 @@ def _populate_nfields(codeql_dir: Path, types: dict[str, TypeNode]) -> None:
 def port_touched_fields(analysis_root: Path, port_syms: set) -> dict[str, set[str]]:
     """``{type tag: field names the port scope reads}``.
 
-    Derived from the port-scope symbols' own ``depends_on.types[].fields``,
+    Derived from the target-section symbols' own ``depends_on.types[].fields``,
     which is exactly "fields this function accesses" — the same quantity the
     types composer computes transiently as ``focus_by_key`` for the wrapper's
     focus. A type absent from the result is reached only opaquely.

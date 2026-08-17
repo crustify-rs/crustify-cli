@@ -10,7 +10,7 @@ composer, agent, and redo precursors all share the same semantics.
     Seed mode is active iff any of these is non-empty.
   - **`scope_json_path`** — optional path to a `scope.json` enabling
     port/wrap classification + the seed admission gate. When
-    `None`, the composer treats every entry as wrap-scope (base
+    `None`, the composer treats every entry as import-section (base
     analysis only — no port additions, no closure expansion).
   - **`port_only` / `wrap_only`** — mutually exclusive post-emission
     filters. After the seed/closure logic runs, keep only entries
@@ -22,7 +22,7 @@ composer, agent, and redo precursors all share the same semantics.
 | scope.json passed? | Effect on seeds and closure |
 |---|---|
 | **No** (default) | No port/wrap split. Every entry is wrap-shape (base only). No closure expansion. Seeds emit only if they pass `--target-only`/`--import-only` (and the wrap_only side admits everything). |
-| **Yes** | Port/wrap classification per the scope.json. A seed is admitted iff it's port-scope OR wrap-reachable from port code per the scope.json. Port seeds emit with port additions; wrap seeds + closure entries emit as base shape. |
+| **Yes** | Port/wrap classification per the scope.json. A seed is admitted iff it's target-section OR wrap-reachable from port code per the scope.json. Port seeds emit with port additions; wrap seeds + closure entries emit as base shape. |
 
 ## Why scope.json is optional now
 
@@ -36,7 +36,7 @@ port-related reasoning at all — the output is purely seed-driven.
 
 `analyze_scope` (a composer-only stage) still
 reads the target's `scope.json` implicitly — that command is
-defined as "operate on the target's port-scope file set," not as
+defined as "operate on the target's target file set," not as
 a general query.
 """
 from __future__ import annotations

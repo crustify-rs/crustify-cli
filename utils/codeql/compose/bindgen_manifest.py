@@ -1,7 +1,7 @@
 """Deterministically scaffold the ``-sys`` FFI crates from the analysis tree.
 
 The **bindgen** stage is composer-only (no LLM). It partitions the target's
-wrap-scope (FFI) surface by owning crate into one ``<lib>-sys`` crate per
+import-section (FFI) surface by owning crate into one ``<lib>-sys`` crate per
 link artifact (``libssl-sys``, ``libcrypto-sys``, …) and emits, per crate,
 only what the analysis tree already states as fact:
 
@@ -458,7 +458,7 @@ def compose(
     # crate graph. A per-reference walk cannot substitute for it: it would only
     # see types reached from a crate's own WRAP entities and so miss a foreign
     # type embedded by a PORT struct (`rio_poll_builder_st.pfds: pollfd` — that
-    # struct is port-scope for the ssl target, so no wrap loop ever visits it).
+    # struct is target-section for the ssl target, so no wrap loop ever visits it).
     # Every wrap type homed to a declared dep is blocklisted, referenced or not,
     # so bindgen imports it from the dep's `-sys` instead of re-minting it.
     # Filtered to deps that actually emit a `-sys` (an empty foreign crate — e.g.

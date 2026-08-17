@@ -11,7 +11,7 @@ Finishing them needs a compiler in the loop, which this stage does not have;
 see ``compose/bindgen_manifest.py``.
 
 Stage gate: ``analyze`` + ``scaffold`` must have run (annotated tree +
-``crates.json`` placing the wrap-scope entities) and the CodeQL T1/T2 CSVs
+``crates.json`` placing the import entities) and the CodeQL T1/T2 CSVs
 must exist.
 """
 
@@ -69,7 +69,7 @@ def bindgen(target: Path, *, libs: list[str] | None = None,
         raise SystemExit(
             "error: no in-scope FFI libraries for this target"
             + (f" matching --libs {libs}" if libs else "")
-            + ". Check crates.json places the wrap-scope entities "
+            + ". Check crates.json places the import entities "
             + f"(scaffold must run first) for {analysis_root}."
         )
 

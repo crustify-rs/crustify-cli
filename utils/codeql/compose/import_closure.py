@@ -128,7 +128,7 @@ def build_index(
     the EXACT ``depends_on`` view the symbols composer writes, so this index is
     byte-equivalent to the one the old ``syms.json`` walk produced:
 
-      - port-scope entity → full ``depends_on`` (``_compose_dep_syms`` over the
+      - target entity → full ``depends_on`` (``_compose_dep_syms`` over the
         forward-sym set + ``_compose_dep_types`` with the body field-access
         index) — matching ``_port_additions_function``;
       - everything else → signature-only (``syms: []``, ``_compose_dep_types``
@@ -489,7 +489,7 @@ def compose_import(
         TU-local: apply that same linkage argument one step further and keep
         only a definition in ``tu`` ITSELF, because no other TU's file-static
         struct is nameable from here. Returning every candidate instead (the
-        prior "err toward over-inclusion" fallback) credits one TU's port-side
+        prior "err toward over-inclusion" fallback) credits one TU's target-side
         reachability to an unrelated same-tagged struct in another TU, which
         admits a phantom into the wrap closure: libgit2's ``entry`` is
         ``struct entry`` in BOTH src/libgit2/indexer.c (port) and
@@ -563,7 +563,7 @@ def compose_import(
             # `STACK_OF(OCSP_RESPID)` reaches `OCSP_RESPID_free` (wrap), whose
             # signature names `ocsp_responder_id_st`; without this the element
             # type stays an unwrapped opaque pointer. `add_type` re-filters to
-            # wrap-scope aggregates, so a primitive/port/opaque-only sig type is
+            # import-section aggregates, so a primitive/port/opaque-only sig type is
             # dropped; an opaque-but-owned struct lands as a field-less wrapper.
             for st in idx.sig_types.get(nm, ()):
                 add_type(st, tu)
@@ -576,7 +576,7 @@ def compose_import(
                 target_touched[tag].add(fld)
 
     # Field-walk over the CodeQL type graph. PORT struct → every field type
-    # (full layout reimplemented in Rust); WRAP struct → only port-touched
+    # (full layout reimplemented in Rust); WRAP struct → only target-touched
     # fields (bindgen owns the rest). A TARGET struct is full-scanned: its
     # definition is the target's own, so every field type is a real dep --
     # which for a struct defined in a header the config named means the fields
@@ -639,14 +639,14 @@ def compose_import(
                 walk_type(key, None)
 
     # Callback typedefs (unaliased_kind == "callback" in types.csv): function-
-    # pointer typedefs that are wrap-scope. They are excluded from add_type (not
+    # pointer typedefs that are import-section. They are excluded from add_type (not
     # an aggregate) and never appear in functions.csv (so ingest() misses them),
     # but they ARE part of the wrap surface — bindgen emits them and the wrap
     # stage needs safe type aliases for them. Emit each as a plain sym entry so
     # it lands in wrap.functions alongside regular functions with no extra tag.
     #
     # Reachability gate: at least one function that mentions this callback in
-    # its signature (reach.functions_using_type) must itself be port-reachable
+    # its signature (reach.functions_using_type) must itself be target-reachable
     # — the same criterion the syms_manifest uses to decide whether to emit a
     # callback entry. This avoids pulling in every callback in transitively
     # included headers (which the include-closure gate would do).
@@ -655,8 +655,8 @@ def compose_import(
             continue
         decls = tmeta["decls"]
         df = tmeta["def_file"]
-        # Skip port-scope callbacks — they're already collected in
-        # port.functions by scope_manifest. Only emit wrap-scope callbacks here
+        # Skip target callbacks — they're already collected in
+        # port.functions by scope_manifest. Only emit import callbacks here
         # to avoid bucket overlap.
         if scope.classify(df, decls, target_paths) != scope.IMPORT:
             continue
@@ -672,7 +672,7 @@ def compose_import(
             users = reach_.functions_using_type(tag, df) | reach_.functions_using_type(tag, "")
             # Mirror the _wrap_port_reachable gate from types_manifest: a type is
             # wrap-reachable if any function that mentions it (sig or body) is
-            # defined in a port file OR is port-reachable from a port file.
+            # defined in a port file OR is target-reachable from a port file.
             body_users = reach_.functions_using_type_in_body(tag, df) | \
                          reach_.functions_using_type_in_body(tag, "")
             all_users = users | body_users
@@ -687,7 +687,7 @@ def compose_import(
         # target-declared callback narrows against the target file set instead,
         # having no importing TU.
         # add_sym re-checks scope.classify — bypass it and insert directly into
-        # sym_items (the classify guard above already ensures wrap-scope only).
+        # sym_items (the classify guard above already ensures import-section only).
         for src in ([None] if in_target else list(target_paths)):
             via = narrow(decls, src) if src is None else \
                 [d for d in decls if d in closure(src)]
@@ -719,7 +719,7 @@ def compose_import(
         # dropping the count let PCRE2_STRUCTURE_LIST and DEFINE_LHASH_OF_INTERNAL
         # in with zero reachable members.
         # Relevance spans BOTH scopes: `type_items` is the wrap closure's own
-        # set, and every khash instance is port-scope, so testing against it
+        # set, and every khash instance is target-section, so testing against it
         # alone rejected all 25. A member counts as reached when it is a known
         # type defined inside this target's port files, or already in the wrap
         # closure. `classify` is NOT the test -- it would call any system header
@@ -763,7 +763,7 @@ def compose_import(
             # which reads the DECLARING header — and a public header sits
             # outside the port set even when the body does not. Resolving the
             # definition settles it the way `classify` would have with the
-            # def_file in hand: the entity is port-scope, so it is dropped
+            # def_file in hand: the entity is target-section, so it is dropped
             # rather than re-keyed, which would otherwise file a port symbol
             # under wrap with a port `defined_in`. Unreachable while a null
             # def_file means "no body in the database" (a prototype-only call

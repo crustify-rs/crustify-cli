@@ -34,7 +34,7 @@ per-arg/return ownership.
 Per-source-file partitioning rule lives in `path_partition.py`.
 The merge primitive (`manifest_merge.merge_manifest_file`) handles
 cross-target evolution via field-level union — a wrap entry that
-gains port-scope additions in a later target invocation gets the new
+gains target-section additions in a later target invocation gets the new
 fields added without overwriting any composer-filled or
 agent-annotated fields already present.
 
@@ -139,7 +139,7 @@ def _callback_deps(
          direct callees. This is the only source for a callback reached
          through a STRUCT FIELD (`s->psk_server_callback(...)`): the invoker
          names the typedef nowhere in its own record, and the owning struct's
-         `fields[]` is only the port-accessed subset. Pass `invoked=False` for
+         `fields[]` is only the target-accessed subset. Pass `invoked=False` for
          a callback's own entry -- a typedef invokes nothing.
 
     `defined_in` is always null -- a callback is a header typedef with no
@@ -681,7 +681,7 @@ def _base_callback(
 def _forward_syms_of(
     name: str, def_file: str, reach: Reach,
 ) -> set[tuple[str, str]]:
-    """Return the one-hop forward symbol set of a port-scope symbol.
+    """Return the one-hop forward symbol set of a target symbol.
 
     Union of every direct edge type CodeQL captures:
 
@@ -740,15 +740,15 @@ def compose(
         the "raw symbol inventory" mode for naïve queries.
       - **Scope.json + seed mode** (`scope_json_path` set AND any
         of `dirs`/`files`/`names` set): entries matching the seed
-        predicate become seeds. From port-scope seeds, the composer
+        predicate become seeds. From target seeds, the composer
         computes a one-hop forward closure and adds touched symbols
-        to the output. **Seed admission gate**: a wrap-scope seed
+        to the output. **Seed admission gate**: an import seed
         is admitted only if it is wrap-reachable from port code per
         the scope.json. Port-scope seeds emit with port additions;
         wrap seeds + closure emit as base shape.
       - **Scope.json + filter mode** (`scope_json_path` set, no
         seed flags): emit every reachable entry. Port-scope entries
-        emit with port additions; wrap-scope entries emit as base.
+        emit with port additions; import entries emit as base.
 
     `--target-only` / `--import-only` post-filters apply in every mode
     (they're emitted-shape filters).
@@ -889,7 +889,7 @@ def compose(
         # header is in port scope — anything still in C may `#include` it.
         # Only a TU-local `.c` macro is genuinely "ported": it has no external
         # consumer and bindgen can't see it, so it's inlined into its TU's
-        # Rust translation. Hence a macro is port-scope iff it's defined in a
+        # Rust translation. Hence a macro is target-section iff it's defined in a
         # `.c` (etc.) file that's in scope.
         in_target = scope_enabled and (r["name"], r["def_file"]) in tgt_macros
         if scope_enabled and not in_target and not seed_mode and not unscoped:
@@ -946,7 +946,7 @@ def compose(
 
     # Pass 2: identify seeds (seed mode only). When scope.json is
     # provided, apply the **seed admission gate**: a candidate is
-    # admitted as a seed only if it's port-scope OR wrap-reachable
+    # admitted as a seed only if it's target-section OR wrap-reachable
     # from port code per the scope.json. Without scope.json, no
     # gate (every match is admitted).
     seed_keys: set[tuple[str, str]] = set()
@@ -982,7 +982,7 @@ def compose(
     if dropped_seeds:
         print(
             f"syms: {len(set(dropped_seeds))} seed(s) dropped -- named but not "
-            f"port-reachable from scope.json (re-run with --unscoped to include "
+            f"target-reachable from scope.json (re-run with --unscoped to include "
             f"them): {sorted(set(dropped_seeds))}"
         )
 
@@ -1120,7 +1120,7 @@ def main() -> None:
             kinds[e.get("kind") or "macro_unclassified"] += 1
     print(
         f"syms: {len(entries_by_dir)} manifest dirs "
-        f"({port_dirs} port-scope, {wrap_dirs} wrap-scope), "
+        f"({port_dirs} target-section, {wrap_dirs} import-section), "
         f"{total} entries → {args.out_root}"
     )
     for k, c in sorted(kinds.items()):

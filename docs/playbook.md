@@ -212,7 +212,7 @@ crustify-cli <repo_root> <target> scaffold --validate
 crustify-cli <repo_root> <target> bindgen [--libs LIB …]
 ```
 
-Partitions the wrap-scope surface by owning crate into `<lib>-sys` crates.
+Partitions the import surface by owning crate into `<lib>-sys` crates.
 **They come out incomplete by design**: `build.rs` carries the per-kind
 allowlists but no `fn main`, and `bindgen.h`'s shim block is empty. Finishing
 them needs a compiler in the loop, so complete them by hand.

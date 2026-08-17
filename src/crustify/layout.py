@@ -146,7 +146,7 @@ class Layout:
         cache (:mod:`crustify.cache`).
 
         Target-tier because the graph is: its edges are narrowed by scope, so a
-        wrap-scope node contributes only its signature and the layering differs
+        import node contributes only its signature and the layering differs
         per target."""
         return self.target_dir(target) / "deps-dag.json"
 

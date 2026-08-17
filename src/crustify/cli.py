@@ -361,7 +361,7 @@ def main() -> None:
     # -- bindgen (deterministic -sys FFI-crate composer) -----------------
     _bindgen_blurb = (
         "Scaffold the <lib>-sys FFI crates from the analysis tree "
-        "(deterministic; no LLM). Partitions the wrap-scope surface by "
+        "(deterministic; no LLM). Partitions the import surface by "
         "owning crate (crates.json) into <target>/rust/crates/<lib>-sys/. "
         "Crates come out incomplete: build.rs carries the per-kind "
         "allowlists but no fn main, and bindgen.h's shim block is "
@@ -414,7 +414,7 @@ def main() -> None:
              "reads back the `lifetime` blocks that exist (`query symbols "
              "--lifetime-for TIER`) and, when none do, discovers the routines "
              "that drop/dispose/clone the tier and submits their blocks first, "
-             "over a wrap-scope candidate set. SETS the objective to `raw` "
+             "over an import candidate set. SETS the objective to `raw` "
              "-- the discovery arm, which this flag is the only way to reach "
              "and which --objective cannot select or override. TIER is `void` "
              "(raw byte-level) "

@@ -434,7 +434,7 @@ def _enumerate(
     # scope.json). Empty when scope.json is absent, so --target-only/--import-only
     # yield nothing for a scope-less target (e.g. ".") rather than mislabeling.
     # Synthetic types (string/array clusters) are NOT in scope.json — they are
-    # *always* wrap-scope, classified by kind here.
+    # *always* import-section, classified by kind here.
     sub = ("types",) if kind == "type" else ("functions", "globals", "macros")
     # Composed only on the branch that needs it — an unfiltered enumeration
     # must not pay the wrap closure.
@@ -699,7 +699,7 @@ def _field_touchers(layout, target, tag: str, defined_in: str | None, *,
     ALL declared fields by default; --target-only/--import-only narrow the FIELD set
     to the ones touched by that scope's code. Each field's toucher set is the
     COMPLETE, UNfiltered set of functions that access it — read straight from the
-    raw ``t2/field_accesses`` edge, NOT the port-scope ``depends_on`` inversion.
+    raw ``t2/field_accesses`` edge, NOT the target-section ``depends_on`` inversion.
     So a toucher that is itself out of scope (while the field is touched in-scope
     via raw ``obj->field``) still surfaces as a candidate."""
     import csv as _csv

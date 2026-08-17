@@ -6,7 +6,7 @@ Mirrors `syms_manifest.py`'s seed + closure model, adapted to types:
     subjects → **extended schema**: full declared-field layout. They
     will be rewritten as native Rust types.
   - **Wrap-scope types** (reached by port code) get the **base
-    schema** with `fields[]` **narrowed to the port-accessed subset**
+    schema** with `fields[]` **narrowed to the target-accessed subset**
     (the FFI surface).
 
 Every struct entry (port and wrap) carries two consumer footprints,
@@ -40,7 +40,7 @@ a null skeleton. Composer fills name / type / ref / array; the type
 agent fills ops / lifecycle / placement (unchanged) plus every `ptr`
 block.
 
-Closure (seed mode): port-scope type seeds pull the transitive set of
+Closure (seed mode): target type seeds pull the transitive set of
 types referenced by their non-scalar fields (cycle-safe). Filter mode
 (`--scope`, no seed flags): emit all port types + all wrap types
 passing the 7-scenario reach gate.
@@ -263,7 +263,7 @@ def _compose_fields_full(
 def _port_touched_field_names(
     reach: Reach, struct_name: str, struct_def_file: str,
 ) -> list[str]:
-    """The field names port-scope code actually reaches into — the
+    """The field names target code actually reaches into — the
     deterministic per-target analysis surface handed to the type agent
     via `focus.fields`. Transient (target-specific): never persisted to
     the scope-agnostic manifest."""
@@ -281,7 +281,7 @@ def _compose_fields_wrap(
     reach: Reach, struct_name: str, struct_def_file: str,
     *, port_only: bool = True, by_name: dict[str, dict] | None = None,
 ) -> list[dict[str, Any]]:
-    """Access-narrowed field set for a wrap-scope type — only the
+    """Access-narrowed field set for an import type — only the
     fields some (port, when `port_only`) symbol actually reaches into.
     This is the FFI surface.
     """
@@ -334,8 +334,8 @@ def _type_consumers(
     op signal; opaque = lifecycle/forwarder candidates).
 
     `in_scope` (when not None) restricts both footprints to the
-    admitted symbol universe (port-defined ∪ port-reachable). Applied
-    for **wrap-scope** types, whose only relevant consumers are the
+    admitted symbol universe (port-defined ∪ target-reachable). Applied
+    for **import-section** types, whose only relevant consumers are the
     ones the port reaches. **Port-scope** types pass `in_scope=None` to
     keep the full cross-codebase footprint — required for ABI/layout
     completeness and to retain out-of-scope lifecycle ops (a wrap-side
@@ -446,8 +446,8 @@ def _import_reachable(
         # body), so WITHOUT this the per-type gate diverges from the wrap
         # surface and the type lands in wrap.types with no record
         # (git_config_entry, git_error, git_pool_page, error_threadstate — used
-        # only in the bodies of port-reachable functions, never their
-        # signatures). No path guard: anything legitimately wrap-scope and
+        # only in the bodies of target-reachable functions, never their
+        # signatures). No path guard: anything legitimately import-section and
         # needed by the port scope earns a record, external or not (an external
         # type like pthread_mutex_t is already admitted by-value via S5; the
         # scaffolder decides bindgen-vs-record home downstream, not this gate).
@@ -502,7 +502,7 @@ def _build_struct_entry(
     by_name: dict[str, dict], kind: str = "struct",
 ) -> tuple[dict[str, Any], list[dict[str, Any]], set[str], list[str] | None]:
     """Build a struct-shaped manifest entry, its field-type forward edges, and
-    the transient port-touched field subset — the single path shared by the
+    the transient target-touched field subset — the single path shared by the
     named-struct loop, the anonymous-struct-typedef loop, and unions (`kind`
     "union" — same member layout / footprints, only the tag differs).
 
@@ -515,8 +515,8 @@ def _build_struct_entry(
 
     `ops` stays the skeleton's empty list — agent-populated from the consumer
     footprints below. Returns ``(entry, fields, forward, touched)``; ``touched``
-    (the wrap-only port-touched field subset, returned out-of-band via
-    focus_by_key) is None for port-scope types.
+    (the wrap-only target-touched field subset, returned out-of-band via
+    focus_by_key) is None for target types.
     """
     fields = _compose_fields_full(reach, name, def_file, by_name)
     entry = _struct_skeleton(name, typedefs, declared_in, defined_in, fields, kind)
@@ -721,7 +721,7 @@ def compose(
                 if not _in_import_surface(c):
                     continue
             seed_keys.add(c["key"])
-        # Transitive field-type closure. Seeded from port-scope seeds
+        # Transitive field-type closure. Seeded from target seeds
         # only (wrap seeds, like wrap symbol seeds, don't expand), but
         # once inside the closure we follow EVERY neighbour's forward
         # edges — including wrap types, via their port-narrowed fields
@@ -820,7 +820,7 @@ _COMMENT = (
     "Factual skeleton emitted by compose/types_manifest.py. Port-scope "
     "types (defined_in in scope.json) carry the full declared-field "
     "layout and will be ported to native Rust. Wrap-scope types carry "
-    "the base schema with `fields[]` narrowed to the port-accessed "
+    "the base schema with `fields[]` narrowed to the target-accessed "
     "subset (FFI surface). Each field: {name} (scalar single) | "
     "{name,type,ref,array?} (value/array) | "
     "{name,type,ref:pointer,ptr:{…},array?} (pointer). `ptr` ownership "
@@ -833,7 +833,7 @@ _COMMENT = (
     "(touchers that access a field — layout users) and `opaque_in` "
     "(touchers that hold the type opaquely — forwarders, ctors, "
     "wrappers). Wrap types restrict both to the in-scope universe "
-    "(port-defined ∪ port-reachable); port types keep the full "
+    "(port-defined ∪ target-reachable); port types keep the full "
     "footprint. The agent fills each pointer field's `ptr` ownership block and "
     "any guarded field's `locked_by`; a type stores NO lifecycle of its own -- "
     "which routines drop/dispose/clone it is reverse-derived from the acting "

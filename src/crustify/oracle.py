@@ -216,7 +216,7 @@ def _add_query_command(sub) -> None:
         "type's destructor in another scope is readable, submittable through "
         "--update, and comes back from --lifetime-for. Scope gates emission, "
         "not content: an emitted record's depends_on / used_by are "
-        "codebase-wide whatever its scope, so a wrap-scope node's "
+        "codebase-wide whatever its scope, so an import node's "
         "depends_on.syms is populated and safe to walk. Submit through "
         "--update, never by editing a file."
     )

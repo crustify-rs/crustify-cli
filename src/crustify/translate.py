@@ -78,7 +78,7 @@ def _lifetime_by_sym(layout: "Layout") -> dict:
 def _wrap_bound_ops(scope_json, entry_pair) -> dict:
     """``op name -> the WRAP-scope type whose wrapper already binds it``.
 
-    A wrap-scope type's droppers / disposers / cloners are emitted BY that
+    An import type's droppers / disposers / cloners are emitted BY that
     type's wrapper, as the strategy a `CBox` / `CVec` selects its `CDropped` /
     `CCloned` on. Scheduling one separately would emit a second, unrelated
     surface for one C routine — different anchor, possibly different file, and
@@ -124,7 +124,7 @@ def _translate_eligible_pred(scope_json):
     scope** — port or wrap, type or symbol. Only an out-of-scope entity is
     rejected, by the gate in :func:`translate_types`.
 
-    Scope no longer routes: a port-scope symbol used to be refused as the port
+    Scope no longer routes: a target symbol used to be refused as the port
     stage's, but that stage is retired, so refusing it left the entity with no
     stage at all. Both halves now reach the same type and symbol agents; scope
     remains a *filter* the caller opts into (`--target-only` / `--import-only`),
@@ -162,8 +162,8 @@ def batch_objective(batch, objective: str, scope_of=None) -> str:
     """The objective a batch is handed: the CALLER's, always.
 
     This used to override it for a SYMBOL batch, substituting the unit's scope
-    on the reasoning that "a wrap-scope symbol can never be ported (it is
-    foreign code) and a port-scope one has no reason to stay wrapped". The
+    on the reasoning that "an import symbol can never be ported (it is
+    foreign code) and a target one has no reason to stay wrapped". The
     first half is false: on the ssl target 1735 of 1805 import-section symbols
     are first-party code that a later wave will port, not foreign code. The
     second ignores incremental porting, where a type is legitimately wrapped
@@ -251,7 +251,7 @@ def translate_lifetime_for(
     routines that drop/dispose/clone ``spec`` and submits their `lifetime`
     blocks through the oracle, reading back with ``query symbols
     --lifetime-for <spec>`` whatever already exists. Candidates are collected
-    codebase-wide, wrap- and port-scope alike, because a primitive is a
+    codebase-wide, wrap- and target-section alike, because a primitive is a
     primitive wherever it is defined.
 
     What the blocks then BUY — the strategy ZST plus the smart-pointer
@@ -273,7 +273,7 @@ def translate_lifetime_for(
     a job the type wrapper owns, and land it in the wrong module.
 
     The ordinary scope-only analysis tree is the right input: the agent's
-    candidate set is wrap-scope by instruction
+    candidate set is import-section by instruction
     (`prompts/symbols.md`), so a primitive the target never
     reaches is not a gap.
     """
@@ -338,7 +338,7 @@ def _closure_names(seeds: list[str], by_key, by_name, keep) -> list[str]:
     via a symbol is still collected (nothing in `ssl/` names `evp_rand_ctx_st`,
     but `RAND_bytes_ex` traffics in it) -- a types-only walk misses those, which
     is the whole reason a hand-written name list keeps coming up short. What is
-    KEPT is narrowed by `keep`, so a port-scope dep is traversed but never
+    KEPT is narrowed by `keep`, so a target dep is traversed but never
     scheduled: wrap must not take one (the scope gate below would refuse it)."""
     out, seen = [], set()
     stack = list(seeds)
@@ -414,11 +414,11 @@ def _pending_names(names: list[str], layout, target: Path) -> tuple[list[str], l
             #
             # The ANCHOR'S EXISTENCE is the authorization -- no scope query
             # here. The scaffolder lays a `// Field:` anchor only for a field
-            # port-scope code touches, so every anchor present is one the
-            # wrapper owes. This used to intersect with a port-scope field set
+            # target code touches, so every anchor present is one the
+            # wrapper owes. This used to intersect with a target field set
             # because the scaffolder anchored every DECLARED field, and without
             # that filter an opaque type (`evp_pkey_st`: 21 anchors, 0
-            # port-scope) stayed pending forever on placeholders nobody would
+            # target-section) stayed pending forever on placeholders nobody would
             # fill. Narrowing emission removed the reason for it.
             #
             # Matching is OWNER-QUALIFIED: `f.group(1) == nm` keeps a sibling
@@ -495,14 +495,14 @@ def translate_types(
 
     entry_pair = (_manifests.entries(layout, target, "types", stage="wrap"),
                   _manifests.entries(layout, target, "symbols", stage="wrap"))
-    # Ops a wrap-scope type's own wrapper already emits — never scheduled
+    # Ops an import type's own wrapper already emits — never scheduled
     # separately. See :func:`_wrap_bound_ops`.
     bound_ops = _wrap_bound_ops(scope_json, entry_pair)
 
     sel_names = list(names or [])
     if dag_layer is not None:
         # e2e driver mode: EVERY in-scope unit at dag layer N — types (any
-        # in-scope) and wrap-scope free syms, minus macros and lifecycle
+        # in-scope) and import-section free syms, minus macros and lifecycle
         # primitives.
         #
         # The primitive filter reads the `lifetime` blocks directly rather than
@@ -622,7 +622,7 @@ def translate_types(
         raise SystemExit(
             f"wrap: {len(bad_oos)} selected "
             f"{'entity is' if len(bad_oos)==1 else 'entities are'} out of scope "
-            f"(neither wrap- nor port-scope):\n{listing}")
+            f"(neither wrap- nor target-section):\n{listing}")
 
     # Bindgen gate for the libraries actually being wrapped. A selected unit's
     # owning library is its crate in crates.json (crate name == link unit);

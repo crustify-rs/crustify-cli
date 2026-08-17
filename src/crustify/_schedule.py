@@ -16,7 +16,7 @@ Model
   (:func:`load_type_meta` -> :func:`ordered_ops`).
 * **Unit** — the agent's working set. A named **type** forms a *type-unit* =
   the type + its in-scope ops (ops are scope-filtered: a wrap run bundles the
-  type's wrap-scope ops, a port run its port-scope ops, so the two stages
+  type's import-section ops, a port run its target-section ops, so the two stages
   partition a type's ops and both write its ``<type>.rs`` additively). A named
   **non-type** (free symbol or directly-named op) is atomic.
 * **Blind scheduling** — the scheduler does NOT inspect whether an element has
@@ -82,7 +82,7 @@ def resolve_names(
 
 
 def bare_gate(nodes: list[Node]) -> None:
-    """Refuse to schedule a port-scope symbol left unclassified
+    """Refuse to schedule a target symbol left unclassified
     (``kind: null`` → ``subkind == "symbol"``). Moved here from the scaffolder:
     the bare kind only exists in the DAG, never in the fresh composer."""
     bad = sorted({(n.id, n.defined_in or "?") for n in nodes if n.is_bare})
@@ -131,7 +131,7 @@ class Unit:
 
     def label(self) -> str:
         # No field/op counts: `fields` here is the type's DECLARED list, while
-        # the scaffolder anchors only the port-touched subset, so the two
+        # the scaffolder anchors only the target-touched subset, so the two
         # disagree — `evp_keymgmt_st` reported 35 fields against 0 anchors on
         # disk. The agent works from the anchors, so a count taken from
         # anywhere else is at best noise and at worst an instruction to exceed
@@ -472,7 +472,7 @@ class Stage:
     min_fields: int = 0
     # `Batch -> verb`. The objective the emit seam will ACTUALLY hand this
     # batch, which is not always `verb`: a symbol batch takes its scope's, so a
-    # wave invoked `wrap` ports its port-scope symbols. Wired by the caller to
+    # wave invoked `wrap` ports its target-section symbols. Wired by the caller to
     # the same function the emit seam calls, so `--dry-run` cannot drift from
     # what runs. Unset = single-objective caller, everything takes `verb`.
     objective_of: Callable[["Batch"], str] | None = None
@@ -795,8 +795,8 @@ def coalesce_waves(
     * a type-unit gets a batch to itself, so any union holding a type and
       anything else packs to >=2 and the run stops there;
     * ``scope_of`` partitions the pool, so a port+wrap union packs to >=2 —
-      which is the case that matters, since a port-scope unit above a
-      wrap-scope one has a real edge to it and co-scheduling would break it;
+      which is the case that matters, since a target-section unit above a
+      import one has a real edge to it and co-scheduling would break it;
     * ``max_syms`` / ``max_loc`` are already the split condition, so an
       oversized union cannot merge.
 
@@ -927,7 +927,7 @@ def schedule(
     if dry_run:
         # The objective each batch will ACTUALLY be handed. `stage.verb` is the
         # caller's, and a symbol batch overrides it with its scope's, so a wave
-        # invoked with the default `wrap` runs `port` over its port-scope
+        # invoked with the default `wrap` runs `port` over its target-section
         # symbols. Resolved through `stage.objective_of` — the same function the
         # emit seam calls — so the plan cannot drift from what runs.
         obj_of = stage.objective_of or (lambda _b: stage.verb)

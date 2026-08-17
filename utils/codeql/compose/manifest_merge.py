@@ -82,7 +82,7 @@ def _merge_fields(existing_fields: list, incoming_fields: list) -> list:
         incoming, agent ``ptr`` from existing);
       - field only in incoming → append it (composer skeleton, null ``ptr``);
       - field only in existing → keep it (composer didn't re-emit — e.g. a
-        wrap-scope narrowing after a fuller port-scope run; grow-only).
+        import-section narrowing after a fuller target-section run; grow-only).
 
     Order follows the incoming (composer) declaration order, with any
     existing-only fields appended after — deterministic and stable.
@@ -223,7 +223,7 @@ def _merge_depends_on(existing: dict, incoming: dict) -> dict:
     """Union a symbol's ``depends_on`` (``{syms, types}``) across runs.
 
     Monotonic growth, mirroring the type ``fields[]`` merge: a symbol first
-    seen wrap-scope (signature-only deps) that a later run re-emits port-scope
+    seen import-section (signature-only deps) that a later run re-emits target-section
     (signature + body deps) gains the body edges instead of having them
     discarded by the plain existing-wins rule. The edge sets are
     composer-authored and scope-agnostic — no agent annotation lives here, so

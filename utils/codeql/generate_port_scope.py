@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Regenerate utils/codeql/port_scope.qll from a target's scope.json.
 
-Reads the target's port-scope file list (``scope.json``'s
+Reads the target's target file list (``scope.json``'s
 ``port.files``, emitted by ``compose.scope_manifest``) and emits a
 CodeQL library file with the path set inlined as a string predicate.
 The library exports:
 
   - ``portFile(File f)`` — predicate that holds when ``f``'s
-    repository-relative path is in the port-scope set.
+    repository-relative path is in the target set.
   - ``portPath(string p)`` — predicate that holds when ``p`` (a
-    repository-relative path string) is in the port-scope set. Used
+    repository-relative path string) is in the target set. Used
     by callers that have a path string rather than a File entity.
 
 Usage:
@@ -64,8 +64,8 @@ def render_qll(paths: list[str]) -> str:
  * Source of truth: the target's scope.json (its port.files)
  *
  * Exports:
- *   - portFile(File f)   — f's relative path is in the port-scope set.
- *   - portPath(string p) — p is in the port-scope set.
+ *   - portFile(File f)   — f's relative path is in the target set.
+ *   - portPath(string p) — p is in the target set.
  *
  * Consumed by every query in utils/codeql/ that needs scope
  * partitioning. The path set is inlined here so queries are
@@ -129,7 +129,7 @@ def main() -> None:
     output = render_qll(paths)
     target_qll = Path(__file__).parent / "port_scope.qll"
     target_qll.write_text(output)
-    print(f"wrote {target_qll} — {len(paths)} port-scope paths inlined")
+    print(f"wrote {target_qll} — {len(paths)} target-section paths inlined")
 
 
 if __name__ == "__main__":

@@ -187,8 +187,8 @@ class TranslateAgent(CrustifyAgent):
         #
         # The agent pulls the field set, the reverse-derived lifecycle and the
         # cast graph from each record itself; nothing about the accessor
-        # surface is handed over, since a wrap-scope type already carries only
-        # its port-touched fields.
+        # surface is handed over, since an import type already carries only
+        # its target-touched fields.
         files = self._entry_files or [None] * len(self._tags)
         common["types"] = json.dumps(
             [{"name": n, "defined_in": f}

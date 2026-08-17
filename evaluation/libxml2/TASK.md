@@ -80,7 +80,7 @@ correct, not a misconfiguration: a wrap campaign owns no C.
 Every wave is `--objective wrap`; there is no port stage. Report the plan from
 `--dry-run` and wait for approval before spending on any of them.
 
-**1. The type closure.** Every wrap-scope type and callback, bottom-up by DAG
+**1. The type closure.** Every import type and callback, bottom-up by DAG
 layer:
 
 ```
