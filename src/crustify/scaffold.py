@@ -145,11 +145,10 @@ def _in_scope_names(layout, target: Path) -> set[str]:
 
 
 def _scope_map(layout, target: Path) -> dict[str, str]:
-    """``name -> scope.TARGET | scope.IMPORT`` from scope.json — the anchor-verb selector: a
-    wrap-scope item anchors as ``// Wraps:``, a port-scope one as ``// Replaces:``.
-    Types key on ``name`` (port) / ``type`` (wrap); functions/globals on ``name``.
-    Port is applied second so it wins on the (rare) overlap. Empty when scope
-    cannot be composed -> everything falls back to ``Replaces``."""
+    """``name -> scope.TARGET | scope.IMPORT`` from scope.json — which section an
+    item sits in. Types key on ``name``, with a ``type`` fallback for un-migrated
+    records; functions/globals on ``name``. TARGET is applied second so it wins
+    on the (rare) overlap. Empty when scope cannot be composed."""
     from crustify import scope as _scope_mod
     try:
         doc = _scope_mod.build(layout, target, stage="scaffold")
@@ -195,15 +194,15 @@ def _port_touched(layout, target) -> dict[str, set] | None:
 
 def _field_map(layout, target=None) -> dict[str, list[str]]:
     """``type tag -> [field names]`` from the analysis tree's ``types.json`` — the
-    source for a type's ``// Field:`` accessor anchors (crates.json / scope.json
-    carry no field lists). Empty when the analysis tree is absent.
+    source for a type's field accessor anchors (crates.json / scope.json carry no
+    field lists). Empty when the analysis tree is absent.
 
-    Narrowed to the fields PORT-scope code actually touches, because an anchor
-    is a request for an ACCESSOR and only the port side consumes one. The
+    Narrowed to the fields TARGET-section code actually touches, because an
+    anchor is a request for an ACCESSOR and only the target side consumes one. The
     manifest's ``fields`` is the full declared layout for every type -- this
     function used to take it verbatim on the belief that the type composer had
     already scope-shaped it, which it never did. The cost of that was concrete:
-    ``bio_st`` carried 16 anchors against 0 port-touched fields, ``ossl_provider_st``
+    ``bio_st`` carried 16 anchors against 0 target-touched fields, ``ossl_provider_st``
     30 against 0, and agents filled them, so two thirds of the accessors emitted
     tree-wide serve only code inside the type's own module.
 
@@ -211,8 +210,8 @@ def _field_map(layout, target=None) -> dict[str, list[str]]:
     struct, which the type's own definition anchor covers. This governs only
     which fields are owed a public accessor.
 
-    The narrowing is near-total for wrap-scope types (53 of 1,223 fields
-    port-touched) and near-nil for port-scope ones (2,158 of 2,214): a ported
+    The narrowing is near-total for import-section types (53 of 1,223 fields
+    target-touched) and near-nil for target ones (2,158 of 2,214): a ported
     type is translated wholesale, so its own ported code touches its fields.
     """
     out: dict[str, list[str]] = {}
@@ -543,7 +542,7 @@ def _has_field_anchor(text: str, tag: str, fld: str) -> bool:
     """Is ``<tag>.<fld>`` already anchored in ``text``, filled or not?
 
     One exact match, because the anchor names its own owner
-    (``prompts/principles.md``: ``// Field: <C_ITEM>.<field>``). The unqualified form
+    (``prompts/principles.md``: ``// crustify:todo: <C_ITEM>.<field>``). The unqualified form
     this replaced could only be attributed by POSITION, which needed a walk that
     tracked the enclosing item anchor and had two failure modes -- a sibling
     type in the same module with the same field name, and a symbol's anchor
@@ -575,7 +574,7 @@ def _stub(e: dict, scope_map: dict[str, str] | None = None,
     # whole aggregate, and the generic its instances alias is Rust this stage
     # writes, so it gets an anchor like any other item. `generators` is the set
     # `compose.macro_families` recognises; the same carve-out exists in
-    # `wrap._is_macro` and in the wrap closure's admission gate. A type additionally gets one `// Field: <name>` accessor
+    # `wrap._is_macro` and in the import closure's admission gate. A type additionally gets one accessor
     # anchor per field, laid right after the item anchor so it binds to it as
     # the owner. The wrap/port AGENT locates each by its anchor,
     # fills it, and promotes `//` -> `///` while dropping the todo. This is the
@@ -658,7 +657,7 @@ def _safe_rs(rs: str) -> str:
     runs collapsed to ``_`` (``pack-objects.rs`` → ``pack_objects.rs``). Applied
     at the filesystem boundary so ``crates.json`` stays C-faithful while the
     emitted tree (files, ``pub mod`` declarations, query output) is valid Rust.
-    Node→module resolution keys on the ``// Replaces:`` anchors, not file names,
+    Node→module resolution keys on the anchors, not file names,
     so renaming is transparent to the scheduler."""
     out = []
     for seg in Path(rs).parts:

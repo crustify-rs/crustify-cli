@@ -195,7 +195,7 @@ class TypeMod(NamedTuple):
     tag: str             # C type tag (entry["name"])
     typedef: str | None  # public typedef, if any
     scope: str | None    # scope.TARGET / scope.IMPORT / None (unknown)
-    fields: tuple = ()   # field names (each gets a `// Field:` accessor anchor)
+    fields: tuple = ()   # field names (each gets its own accessor anchor)
 
 
 # ======================================================================
@@ -204,7 +204,7 @@ class TypeMod(NamedTuple):
 # Every element is anchored where it *lives* — port elements by ``defined_in``,
 # wrap elements by their **import header** (the precise ``scope.json.wrap``
 # surface). A type is just an item anchor among its file's other items, so
-# multiple types share one file and a wrap type's port-scope ops cannot be
+# multiple types share one file and an import type's target-side ops cannot be
 # misplaced into the wrong crate (the failure mode of the earlier, now-removed
 # per-``<type>.rs`` model).
 # ======================================================================
@@ -421,9 +421,9 @@ def compose_files(
 
 def _type_block(tm: "TypeMod") -> str:
     """One type's anchor block: the ``// Replaces:`` item anchor followed by its
-    ``// Field:`` accessor anchors. Shared by the fresh-stub and reconcile paths.
+    field accessor anchors. Shared by the fresh-stub and reconcile paths.
 
-    A field anchor is OWNER-QUALIFIED (``// Field: <tag>.<field>``, per
+    A field anchor is OWNER-QUALIFIED (``<tag>.<field>``, per
     ``docs/AGENTS.md``). Unqualified, it only identifies its type by POSITION --
     the nearest preceding item anchor -- and position is not reliable here: a
     module routinely homes several types (37 of 75 in the openssl tree) which
@@ -454,7 +454,7 @@ def _sym_block(a: "SymAnchor") -> str:
 def _file_stub(st: FileStub) -> str:
     """Render one source file's module: a managed header, then every type (as a
     ``// Replaces:`` *item* anchor — files hold many types now — each followed by
-    its ``// Field:`` accessor anchors), then the file's free functions / mirrored
+    its field accessor anchors), then the file's free functions / mirrored
     macros. All ``//`` line comments so the unfilled stub compiles."""
     head = (
         f"//! `{st.src_label}` — generated module (file-grained).\n"
@@ -479,7 +479,7 @@ def _file_stub(st: FileStub) -> str:
 # for already-done work.
 #
 # ``Wraps`` was missing here while every other reader accepted it, so this
-# matcher alone could not see a wrap-scope anchor. ``Mirrors`` was present here
+# matcher alone could not see an import-section anchor. ``Mirrors`` was present here
 # and nowhere else — no emitter, no other reader, no anchor in any tree — so it
 # is gone; the verb set is exactly what the scaffolder writes.
 _ANCHOR_RE = re.compile(
@@ -663,7 +663,7 @@ def _op_ownership(
 
 def _entry_scope(entry: dict[str, Any], target_files: set[str]) -> str:
     """port iff the type's defining file (or first declaring header) is in
-    the port-scope set; else wrap."""
+    the target set; else import."""
     df = entry.get("defined_in")
     if not df:
         decls = entry.get("declared_in")
@@ -791,7 +791,7 @@ def _merge_module_block(path: Path, header: str, entries: list[str]) -> bool:
 
 
 def _field_names(entry: dict[str, Any]) -> tuple[str, ...]:
-    """Field names of a type entry — each gets a `// Field:` accessor anchor so
+    """Field names of a type entry — each gets its own accessor anchor so
     the per-field workload is budget-split (``--max-fields``) and tracked like
     ops. Fields come from the structural composer, so this is available without
     an on-disk read (unlike ops)."""
