@@ -17,6 +17,31 @@ own `usage.json`, so it INCLUDES its per-worktree C rebuild. In the batches
 table `wall` is the layer's LONGEST agent — what the layer would cost with
 every batch spawned at once — and the parenthetical is the serial-sum multiple.
 
+## Overview
+
+Every unit the campaign emitted, across all four waves. `units` counts agents'
+worklist entries.
+
+| wave | kind | units | loc | $ | $/type | $/symbol | wall |
+|---|---|---|---|---|---|---|---|
+| raw lifetime | symbols | `2` tiers | — | `$16.63` | — | `$0.49` | `37m45s` |
+| import closure | types + callbacks | `77` | `41,946` | `$549.65` | `$7.14` | — | `1h19m29s` |
+| import closure | symbols | `86` | `6,135` | `$47.88` | — | `$0.56` | `1h09m10s` |
+| god objects | types + callbacks | `72` | `61,570` | `$666.47` | `$9.26` | — | `3h17m41s` |
+| **Σ** | | **`237`** | **`109,651`** | **`$1280.63`** | **`$8.16`** | **`$0.56`** | **`6h24m05s`** |
+
+Types and callbacks across both waves: `149` units, `780` declared fields of
+which `549` reached an accessor, `136` of the `483` target-touched fields
+pointers, forked into `198` newtypes over `103,516` loc for `$1216.12` —
+`$8.16` per unit, `$0.012` per loc, `$1.56` per declared field.
+
+Symbols: `499` target-section functions needed the `71` wrapped items, which
+took `99` distinct safe fns over `6,135` loc for `$47.88` — `$0.56` per unit,
+`$0.008` per loc, two orders of magnitude under a type.
+
+Tree-wide: `$0.012` per loc. Wall is the sum of the four waves' own elapsed
+time; the import type wave alone would have run `17h43m` serially.
+
 ## Raw lifetime discovery
 
 Goal: turn the untyped lifecycle primitives into Rust lifetime contracts before
