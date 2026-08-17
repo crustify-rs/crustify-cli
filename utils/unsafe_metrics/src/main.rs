@@ -319,13 +319,19 @@ struct Counts {
     wrapper_impl_macro: u64,         //   of which macro-generated (get/get_mut)
     wrapper_impl_handwritten: u64,   //   of which hand-written methods
     unsafe_blocks_ffi_export: u64,   // unsafe blocks inside `mod ffi_export`
-    // signature raw pointers (args/rets), region-classified:
-    rp_wrap_nonseam_args: u64, // in `impl <wrapper T>`, non-seam methods
-    rp_wrap_nonseam_rets: u64,
-    rp_wrap_nonseam_wrapped: u64, //   of those, pointee has a wrapper
-    rp_outside_args: u64, // outside wrapper impls AND outside `mod ffi_export`
-    rp_outside_rets: u64,
-    rp_outside_wrapped: u64, //        of those, pointee has a wrapper
+    // Signature raw pointers. ONE family, with the sanctioned subset named
+    // rather than excluded: `rp_args` + `rp_rets` is every raw-pointer position
+    // in a signature (the denominator), `rp_seam` the subset that is legitimate
+    // by construction, so the smell is `rp_args + rp_rets - rp_seam`. The old
+    // scheme split `rp_wrap_nonseam_*` from `rp_outside_*` and counted the seam
+    // region in NEITHER, so it reported a numerator with no denominator.
+    rp_args: u64,
+    rp_rets: u64,
+    rp_seam: u64,      // seam fn / `mod ffi_export` / `extern "C"` / ptr-to-own-Self
+    rp_wrapped: u64,   // of the NON-seam remainder, pointee is a wrapped C type
+    rp_in_wrapper: u64, // of the NON-seam remainder, inside `impl <wrapper T>`
+                        //   — kept because a raw ptr in the very type meant to
+                        //   hide it is worse than one in a ported free fn
     ref_to_type_wrapper: u64, // `&W` / `&mut W` (incl. the receiver), W a TYPE wrapper
     // `(*p).field` where `p: *C` and `C` has a wrapper (bypasses the
     // accessor): total, and the subset outside any impl/trait (the smell).
@@ -1040,18 +1046,26 @@ impl Callbacks for MetricsCallbacks {
                         }
                     }
                 }
-                // Raw-pointer args/rets, region-classified.
-                let cat_wrap = in_wrapper && !seam;
-                let cat_out = !in_wrapper && !in_ffi;
+                // Raw-pointer args/rets: count EVERY position, then name the
+                // sanctioned subset. No position goes unreported.
+                let sanctioned = seam || in_ffi || extern_c;
                 // Resolution-based self-boundary: a raw ptr to the method's OWN
                 // wrapper type (`*mut Self` in `free`/`dispose`/`dup`/…) is the
                 // type's raw-form lifecycle seam, not a "use the wrapper" smell
                 // (you can't pass `&Self` while destroying/duplicating it). Skip.
                 let own_self = enclosing_impl_self(tcx, did);
-                if cat_wrap || cat_out {
+                {
                     let mut tally = |p: Ty<'_>, is_ret: bool, c: &mut Counts| {
-                        if let Some(s) = own_self {
-                            if p.ty_adt_def().map(|d| d.did()) == Some(s) { return; }
+                        if is_ret { c.rp_rets += 1 } else { c.rp_args += 1 }
+                        // A raw ptr to the method's OWN wrapper type (`*mut Self`
+                        // in `free`/`dup`) is the type's raw-form lifecycle seam —
+                        // you cannot pass `&Self` while destroying it. Sanctioned,
+                        // and now COUNTED as such instead of dropped silently.
+                        let is_own = own_self
+                            .is_some_and(|s| p.ty_adt_def().map(|d| d.did()) == Some(s));
+                        if sanctioned || is_own {
+                            c.rp_seam += 1;
+                            return;
                         }
                         // The actionable smell is a raw ptr to the *C type* when a
                         // wrapper exists (`*mut ffi::git_oid` → should be GitOid).
@@ -1060,13 +1074,8 @@ impl Callbacks for MetricsCallbacks {
                         // / array boundary), not a smell. So count only the C case.
                         let w = matches!(p.kind(),
                             ty::TyKind::Adt(def, _) if wrapped_c.contains(&def.did()));
-                        if cat_wrap {
-                            if is_ret { c.rp_wrap_nonseam_rets += 1 } else { c.rp_wrap_nonseam_args += 1 }
-                            if w { c.rp_wrap_nonseam_wrapped += 1 }
-                        } else {
-                            if is_ret { c.rp_outside_rets += 1 } else { c.rp_outside_args += 1 }
-                            if w { c.rp_outside_wrapped += 1 }
-                        }
+                        if w { c.rp_wrapped += 1 }
+                        if in_wrapper { c.rp_in_wrapper += 1 }
                         if w {
                             sites.raw_ptr.push(span_site(tcx, tcx.def_span(did)));
                         }
@@ -1098,8 +1107,8 @@ impl Callbacks for MetricsCallbacks {
             }
         }
         println!(
-            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"rp_wrap_nonseam_args\":{},\"rp_wrap_nonseam_rets\":{},\"rp_wrap_nonseam_wrapped\":{},\"rp_outside_args\":{},\"rp_outside_rets\":{},\"rp_outside_wrapped\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
-            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.rp_wrap_nonseam_args, c.rp_wrap_nonseam_rets, c.rp_wrap_nonseam_wrapped, c.rp_outside_args, c.rp_outside_rets, c.rp_outside_wrapped, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
+            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"rp_args\":{},\"rp_rets\":{},\"rp_seam\":{},\"rp_wrapped\":{},\"rp_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
+            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.rp_args, c.rp_rets, c.rp_seam, c.rp_wrapped, c.rp_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
             sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj), sites_json(&sites.field_ref), sites_json(&sites.raw_deref)
         );
         Compilation::Continue
