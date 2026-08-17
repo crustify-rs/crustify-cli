@@ -17,11 +17,25 @@ accessors on the type handles, and safe FFI wrappers for making FFI calls.
 
 ## Scope policy
 
-Wrap-scope types stay layout-compatible with C.
+Every item sits in one of two sections of `scope.json`, decided by
+`scope-config.json`'s `files` — which takes one of two mutually exclusive keys:
 
-Port-scope types initially do too, and get opacified once the C side no longer
-accesses their fields. They also get fully nativized: storage allocation and
-free become owned by Rust.
+- `files.target` names the code this campaign owns. An item is **target-scope**
+  when its body lives in one of those files, or, having no body anywhere, when
+  all its declarations do. Everything target code reaches that is not named
+  there is **import-scope**.
+- `files.import` names an API to wrap, owning nothing. Those files' declarations
+  seed the import section directly, and there is no target scope.
+
+**Import-scope** items stay C's: a safe wrapper over the FFI seam, layout
+compatible, with storage allocation and free still owned by C.
+
+**Target-scope** items are on their way to native Rust. They start
+layout-compatible and wrapped, get opacified once the C side no longer reads
+their fields, and end fully nativized — allocation and free owned by Rust.
+
+The section says which trajectory an item is on; `--objective` says what to do
+with it this wave, and it is handed to you.
 
 Rust consumers use the safe type's API, never raw pointers or `unsafe` blocks.
 
