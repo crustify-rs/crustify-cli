@@ -141,10 +141,14 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument(
         "--force", action="store_true", dest="force",
-        help="Re-schedule items whose anchor is already FILLED. Without it "
-             "they are warned about and dropped, since re-running an agent "
-             "over finished work usually means the selection was wrong, not "
-             "that the work needs redoing. Use --skip to drop them silently.",
+        help="Schedule items the selection would otherwise drop with a "
+             "warning: one whose anchor is already FILLED, and a LIFECYCLE "
+             "PRIMITIVE (a type's dropper / disposer / cloner, or an untyped "
+             "void / string one). Both are dropped by default because "
+             "something else already emits them — finished work, an owning "
+             "type's wrapper, or the --lifetime-for arm — so scheduling one "
+             "here is a second surface for the same routine. Use --skip to "
+             "drop them silently instead.",
     )
     p.add_argument(
         "--dry-run", action="store_true", dest="dry_run",

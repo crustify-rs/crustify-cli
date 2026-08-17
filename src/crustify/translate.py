@@ -8,7 +8,7 @@ longer absorbs its ops. The user supplies the dependency order (the DAG is
 what they read to choose it); a confirmation prompt lists first-layer deps.
 
 This module owns only the stage-specific pieces — the selection predicate
-(:func:`_selection_pred`), the wrap-bound-op index (:func:`_wrap_bound_ops`),
+(:func:`_selection_pred`), the lifecycle-op index (:func:`_lifecycle_ops`),
 the bindgen gate, and the emit seam to
 :class:`crustify.agents.translate.TranslateAgent`. Scope (wrap/port) is applied
 **here**, never in the DAG, via the same ``compose.scope`` classifier the
@@ -75,27 +75,41 @@ def _lifetime_by_sym(layout: "Layout") -> dict:
             if r.get("lifetime")}
 
 
-def _wrap_bound_ops(scope_json, entry_pair) -> dict:
-    """``op name -> the WRAP-scope type whose wrapper already binds it``.
+def _lifecycle_ops(entry_pair) -> dict:
+    """``op name -> the type whose wrapper emits it``, or ``None`` when it
+    belongs to no type.
 
-    An import type's droppers / disposers / cloners are emitted BY that
-    type's wrapper, as the strategy a `CBox` / `CVec` selects its `CDropped` /
-    `CCloned` on. Scheduling one separately would emit a second, unrelated
-    surface for one C routine — different anchor, possibly different file, and
-    nothing downstream looks for the duplicate.
+    A lifecycle primitive is emitted BY the thing that owns it: a typed
+    dropper / disposer / cloner by its type's wrapper, as the strategy a
+    `CBox` / `CVec` selects its `CDropped` / `CCloned` on; an UNTYPED one
+    (`CRYPTO_free` acts on `void`, `OPENSSL_strdup` on `char *`) by the
+    `--lifetime-for` tier arm. Scheduling either as an ordinary symbol emits a
+    second, unrelated surface for one C routine — different anchor, possibly
+    different file, and nothing downstream looks for the duplicate.
 
-    A PORT-scope type binds nothing: its ops are ordinary symbols that no other
-    stage will take, so they stay schedulable. That asymmetry is the whole rule
-    — it is about who already emits the routine, not about which scope it is in.
+    Section-blind on purpose. Who already emits the routine is the question;
+    which section it sits in does not change the answer, and an untyped
+    primitive has no section-bearing owner to ask in the first place.
+
+    Two sources, because neither alone is complete. The type index catches a
+    typed op and names its owner. The symbols' own ``lifetime`` blocks catch
+    the untyped tiers, which belong to no type's method surface and so never
+    appear in the first — they map to ``None``, and the caller reports them
+    without an owner.
     """
     from crustify.dag import load_type_meta
-    wrap_tags = {e["name"]
-                 for e in ((scope_json.get(scope.IMPORT) or {}).get("types") or [])}
-    out: dict[str, str] = {}
+    out: dict = {}
     for tag, (_fields, lifecycle) in load_type_meta(entry_pair).items():
-        if tag in wrap_tags:
-            for op in lifecycle:
-                out.setdefault(op, tag)
+        for op in lifecycle:
+            out.setdefault(op, tag)
+    for e in entry_pair[1]:
+        lf = e.get("lifetime")
+        if not isinstance(lf, dict):
+            continue
+        if lf.get("is_dropper") or lf.get("is_disposer") or lf.get("is_cloner"):
+            nm = e.get("name")
+            if nm:
+                out.setdefault(nm, None)
     return out
 
 
@@ -496,8 +510,8 @@ def translate_types(
     entry_pair = (_manifests.entries(layout, target, "types", stage="wrap"),
                   _manifests.entries(layout, target, "symbols", stage="wrap"))
     # Ops an import type's own wrapper already emits — never scheduled
-    # separately. See :func:`_wrap_bound_ops`.
-    bound_ops = _wrap_bound_ops(scope_json, entry_pair)
+    # separately. See :func:`_lifecycle_ops`.
+    bound_ops = _lifecycle_ops(entry_pair)
 
     sel_names = list(names or [])
     if dag_layer is not None:
@@ -521,7 +535,7 @@ def translate_types(
             if n.layer == dag_layer and base_in_scope(n)
             and not (n.node_kind == "symbol"
                      and ((n.subkind or "").startswith("macro")
-                          or n.id in bound_ops))})
+                          or (n.id in bound_ops and not force)))})
     if transitive:
         _before = len(sel_names)
         sel_names = _closure_names(sel_names, by_key, by_name, base_in_scope)
@@ -605,18 +619,23 @@ def translate_types(
              if not _is_macro(n)}
     bad_oos = sorted(i for i, n in loose.items() if not in_scope(n))
     named_bound = sorted({i for i in loose if i in bound_ops})
-    if named_bound:
-        listing = "\n".join(f"  - {i}  (bound by `{bound_ops[i]}`)"
-                            for i in named_bound)
-        raise SystemExit(
-            f"translate: {len(named_bound)} selected symbol"
-            f"{'' if len(named_bound) == 1 else 's'} "
-            f"{'is' if len(named_bound) == 1 else 'are'} a lifecycle op of a "
-            f"WRAP-scope type — its wrapper emits it as the CDropped/CCloned "
-            f"strategy, so wrapping it here would be a second surface for one "
-            f"C routine:\n{listing}\n"
-            f"  Wrap the owning type instead. A PORT-scope type's ops carry no "
-            f"such binding and schedule normally.")
+    if named_bound and not force:
+        listing = "\n".join(
+            f"  - {i}" + (f"  (emitted by `{bound_ops[i]}`'s wrapper)"
+                          if bound_ops[i] else "  (untyped tier primitive)")
+            for i in named_bound)
+        print(f"[crustify-cli translate] dropped {len(named_bound)} lifecycle "
+              f"primitive(s): each is already emitted by its owner — a typed op "
+              f"by its type's wrapper, an untyped one by the `--lifetime-for` "
+              f"arm — so scheduling it here would be a second surface for one C "
+              f"routine. Wrap the owning type, or run the tier. --force "
+              f"schedules them anyway; --skip drops them silently:\n{listing}")
+        sel_names = [n for n in sel_names if n not in set(named_bound)]
+    elif named_bound:
+        print(f"[crustify-cli translate] --force: scheduling "
+              f"{len(named_bound)} lifecycle primitive(s): "
+              + ", ".join(named_bound[:8])
+              + (" …" if len(named_bound) > 8 else ""))
     if bad_oos:
         listing = "\n".join(f"  - {i}" for i in bad_oos)
         raise SystemExit(
