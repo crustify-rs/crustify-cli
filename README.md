@@ -22,11 +22,11 @@ in your terminal.
 git clone https://github.com/crustify-rs/crustify-cli.git
 ```
 
-**2. Clone [`crustify-prim`](https://github.com/crustify-rs/crustify-prim).** It carries the smart
+**2. Clone [`ffibox`](https://github.com/crustify-rs/ffibox).** It carries the smart
 pointers and lifetime traits used to emit safe FFI wrappers for C/C++/Rust interop.
 
 ```bash
-git clone https://github.com/crustify-rs/crustify-prim.git
+git clone https://github.com/crustify-rs/ffibox.git
 ```
 
 **3. Install an AI assistant** *(optional — skip if you already have one).*
@@ -39,7 +39,7 @@ curl -fsSL https://chatgpt.com/codex/install.sh | sh  # OpenAI Codex
 **4. Spawn the orchestrator.** Render the orchestrator prompt and hand it to your assistant:
 
 ```bash
-utils/build-orchestrator-prompt.sh <crustify-prim-checkout> -o orchestrator.md
+utils/build-orchestrator-prompt.sh <ffibox-checkout> -o orchestrator.md
 ```
 
 It will first ask you to point it at the repo root and the target subsystem(s) you want to translate

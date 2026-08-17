@@ -3,7 +3,7 @@
 Campaign: libgit2 @ `ddf3b5c85`, target section `src/` + `include/` (409 files),
 import section 102. Agent backend `claude_cli`, model `anthropic/claude-opus-5`,
 `--billing api`, `--max-types 1`, `--parallel-max 32`, policy `per-agent`.
-Deps: crustify-cli `05b76b2` (**ref**), crustify-prim `7282e05` (**ref**).
+Deps: crustify-cli `05b76b2` (**ref**), ffibox `7282e05` (**ref**).
 Campaign branch `crustify/src-opus5`; `crustify/src` is the untouched scaffold
 baseline. Cost is priced from token counts by `log_cost.py`'s own
 `parse_usage`, never from provider-reported dollars.
@@ -492,7 +492,7 @@ assert `noalias` / `readonly` / validity over memory C may write through a
 pointer it retains. This slot is Rust-owned stack storage built by `new()` and
 never handed to C — no C routine takes an `ntlm_buf *` at all — so nothing
 outside Rust holds a pointer to it. It is shaped exactly like
-`crustify_prim::CVal<T>`, and the agent verified it under Miri (Stacked
+`ffibox::CVal<T>`, and the agent verified it under Miri (Stacked
 Borrows) and documented the argument in the type's rustdoc.
 
 The metric is deliberately syntactic ("decidable by syntax rather than by a

@@ -133,7 +133,7 @@ class CrustifyAgent:
     # never act on is context it pays for on every request.
     SKILLS: tuple[tuple[str, str], ...] = (
         ("crustify", "src/crustify/prompts/skill-oracle.md"),
-        ("crustify-prim", "SKILL.md"),
+        ("ffibox", "SKILL.md"),
     )
     output: str | None = None  # path under .crustify/; when set, artifact existence
                                # is the agent-level done signal (skip on re-run).
@@ -281,7 +281,7 @@ class CrustifyAgent:
 
     def _dep(self, name: str, fallback: Path | None = None) -> Path | None:
         """Resolve an absolute dependency path declared under ``deps`` in the
-        repo config (e.g. ``crustify-prim``), else ``fallback``."""
+        repo config (e.g. ``ffibox``), else ``fallback``."""
         raw = self._repo_config().get("deps", {}).get(name)
         return Path(raw) if raw else fallback
 
@@ -302,7 +302,7 @@ class CrustifyAgent:
         index, so it belongs to the index, and principles.md stays principles."""
         bins = self._repo_config().get("bins", {})
         # `crustify` resolves without config in a source checkout; an
-        # out-of-tree dep (crustify-prim) has no meaningful fallback and is
+        # out-of-tree dep (ffibox) has no meaningful fallback and is
         # skipped when unconfigured rather than guessed at.
         fallback = {"crustify": _PKG_ROOT.parent.parent}
         blocks = []

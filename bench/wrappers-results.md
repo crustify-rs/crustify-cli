@@ -3,7 +3,7 @@
 Campaign: `<repo>` @ `<commit>`, target section `<dirs>` (`<n>` files), import
 section `<n>`. Agent backend `<backend>`, model `<model>`, `--billing <mode>`,
 `--max-types <n>`, `--parallel-max <n>`, policy `<policy>`.
-Deps: crustify-cli `<sha>` (**`<branch>`**), crustify-prim `<sha>` (**`<branch>`**).
+Deps: crustify-cli `<sha>` (**`<branch>`**), ffibox `<sha>` (**`<branch>`**).
 Campaign branch `<branch>`; `<branch>` is the untouched scaffold baseline. Cost
 is priced from token counts by `log_cost.py`'s own `parse_usage`, never from
 provider-reported dollars.

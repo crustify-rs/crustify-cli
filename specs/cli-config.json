@@ -16,7 +16,7 @@
     "                      src/crustify/prompts/skill-oracle.md to the skill",
     "                      index in every agent's system prompt; falls back to",
     "                      the installed package's own tree when absent.",
-    "  * `crustify-prim` - the wrap-primitive crate. Its `SKILL.md` joins that",
+    "  * `ffibox` - the wrap-primitive crate. Its `SKILL.md` joins that",
     "                      index, and `scaffold` writes this path into every",
     "                      generated crate's `Cargo.toml`. Required: scaffold",
     "                      errors out when it is missing rather than guess a",
@@ -24,7 +24,7 @@
   ],
   "deps": {
     "crustify": "/absolute/path/to/crustify",
-    "crustify-prim": "/absolute/path/to/crustify-prim"
+    "ffibox": "/absolute/path/to/ffibox"
   },
 
   "_comment_bins": [
@@ -41,7 +41,7 @@
   "_comment_no_skills_block": [
     "`deps` and `bins` are the whole file. The skill set is the",
     "`CrustifyAgent.SKILLS` tuple, resolved through `deps`: `crustify` supplies",
-    "src/crustify/prompts/skill-oracle.md, `crustify-prim` supplies its own",
+    "src/crustify/prompts/skill-oracle.md, `ffibox` supplies its own",
     "SKILL.md. Each is rendered into every agent's system prompt as a metadata",
     "index (name, description, and - for a skill with a body - its on-disk",
     "path); a body is read on demand. Point `deps` at the right checkouts and",

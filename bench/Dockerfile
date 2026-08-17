@@ -46,7 +46,7 @@
 FROM debian:12-slim
 
 ARG CRUSTIFY_CLI_REF=ref
-ARG CRUSTIFY_PRIM_REF=ref
+ARG FFIBOX_REF=ref
 ARG CODEQL_VERSION=v2.26.3
 ARG PYTHON_VERSION=3.13
 # Both backends by default. The playbook says to ask which are wanted, so
@@ -113,20 +113,20 @@ RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
 #    orchestrator's work area and the documented volume mount point, and a
 #    volume there would shadow anything the image had put underneath it.
 #
-#    crustify-prim MUST be a sibling of the crustify checkout: scaffold
-#    resolves it as <crustify>/../crustify-prim and writes that absolute path
+#    ffibox MUST be a sibling of the crustify checkout: scaffold
+#    resolves it as <crustify>/../ffibox and writes that absolute path
 #    into every generated Cargo.toml. cli-config.json cannot override it.
 RUN git clone https://github.com/crustify-rs/crustify-cli.git  /opt/crustify-cli \
-    && git clone https://github.com/crustify-rs/crustify-prim.git /opt/crustify-prim \
+    && git clone https://github.com/crustify-rs/ffibox.git /opt/ffibox \
     && git -C /opt/crustify-cli  checkout "${CRUSTIFY_CLI_REF}" \
-    && git -C /opt/crustify-prim checkout "${CRUSTIFY_PRIM_REF}" \
+    && git -C /opt/ffibox checkout "${FFIBOX_REF}" \
     && uv pip install --python /opt/venv -e /opt/crustify-cli \
     && cd /opt/crustify-cli/utils/codeql && codeql pack install
 
 # 7. Quick Setup step 4. Rendered from source at build time, never
 #    hand-copied: the prompt inlines the skill index, so a stale copy is
 #    exactly the drift the generator exists to avoid.
-RUN /opt/crustify-cli/utils/build-orchestrator-prompt.sh /opt/crustify-prim \
+RUN /opt/crustify-cli/utils/build-orchestrator-prompt.sh /opt/ffibox \
       -o /opt/orchestrator.md
 
 # The results table, from the one copy in the build context. Baked at /opt and
@@ -137,7 +137,7 @@ COPY wrappers-results.md /opt/wrappers-results.md
 # The absolute paths the orchestrator needs to author a target's
 # cli-config.json, which is machine-local and cannot come from any clone.
 ENV CRUSTIFY_DEP_CRUSTIFY=/opt/crustify-cli \
-    CRUSTIFY_DEP_CRUSTIFY_PRIM=/opt/crustify-prim \
+    CRUSTIFY_DEP_FFIBOX=/opt/ffibox \
     CRUSTIFY_BIN_CLI=/opt/venv/bin/crustify-cli \
     CRUSTIFY_BIN_ORACLE=/opt/venv/bin/crustify-oracle
 

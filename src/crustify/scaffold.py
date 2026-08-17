@@ -382,8 +382,8 @@ def _materialize(layout, entries: list[dict],
             f"{links} module link(s)")
 
 
-def _crustify_prim(layout) -> Path:
-    """Absolute path to the crustify-prim checkout, from ``deps.crustify-prim``
+def _ffibox(layout) -> Path:
+    """Absolute path to the ffibox checkout, from ``deps.ffibox``
     in ``cli-config.json``.
 
     That entry is the only source — the same one
@@ -401,12 +401,12 @@ def _crustify_prim(layout) -> Path:
     """
     p = layout.repo_config
     try:
-        dep = (json.loads(p.read_text()).get("deps") or {}).get("crustify-prim")
+        dep = (json.loads(p.read_text()).get("deps") or {}).get("ffibox")
     except (json.JSONDecodeError, OSError) as exc:
         raise SystemExit(f"scaffold: cannot read {p}: {exc}") from exc
     if not dep:
         raise SystemExit(
-            f"scaffold: no `deps.crustify-prim` in {p}. Every generated "
+            f"scaffold: no `deps.ffibox` in {p}. Every generated "
             f"Cargo.toml needs the wrap-primitive crate's absolute path; set "
             f"it from specs/cli-config.json.")
     return Path(dep)
@@ -422,7 +422,7 @@ def _materialize_manifests(layout, doc: dict) -> str:
     by denying ``clippy::undocumented_unsafe_blocks`` workspace-wide, inherited
     via ``[lints] workspace = true`` (the ``-sys`` crates don't opt in, keeping
     their generated-code ``allow``)."""
-    crustify_prim = _crustify_prim(layout)
+    ffibox = _ffibox(layout)
     crates = doc.get("crates") or {}
     # A wrapper crate becomes "real" once it has a scaffolded lib.rs (members were
     # placed there); skip empty ones (e.g. a foreign lib with no wrappers). NOTE:
@@ -438,7 +438,7 @@ def _materialize_manifests(layout, doc: dict) -> str:
         manifest = crate_dir / "Cargo.toml"
         if not manifest.exists():
             manifest.write_text(
-                _crate_manifest(name, c, crate_dir, layout, crustify_prim, real))
+                _crate_manifest(name, c, crate_dir, layout, ffibox, real))
             written += 1
         members += _add_workspace_member(
             ws_toml, os.path.relpath(crate_dir, layout.rust).replace(os.sep, "/"))
@@ -448,13 +448,13 @@ def _materialize_manifests(layout, doc: dict) -> str:
 
 
 def _crate_manifest(name: str, c: dict, crate_dir: Path, layout,
-                    crustify_prim: Path, real: dict) -> str:
+                    ffibox: Path, real: dict) -> str:
     def rel(p: Path) -> str:
         return os.path.relpath(p, crate_dir).replace(os.sep, "/")
-    # Absolute, per `_crustify_prim`: the crate lives outside `rust/`, so a
+    # Absolute, per `_ffibox`: the crate lives outside `rust/`, so a
     # relative path resolves differently from a worktree than from the main
     # checkout.
-    deps = [f'crustify-prim = {{ path = "{crustify_prim}" }}']
+    deps = [f'ffibox = {{ path = "{ffibox}" }}']
     # The crate's -sys FFI dep: explicit `sys_crate`, else the `<name>-sys`
     # convention. Every library with bound entities has one, in-tree or not
     # (e.g. libpthread → libpthread-sys).

@@ -61,11 +61,11 @@ Three things need HIR/typeck, not text:
 - wrapper detection needs the struct's **macro-expansion context** + the impl's resolved self-type.
 - the `_wrapped` subset needs mapping each wrapper's `CType<C>` field back to `C` (a `DefId`, alias-proof).
 HIR is also post-expansion, so it counts macro-generated unsafe and excludes
-`///` doc-comment examples (on `crustify-prim`: 27 real blocks vs 59 `grep 'unsafe {'`).
+`///` doc-comment examples (on `ffibox`: 27 real blocks vs 59 `grep 'unsafe {'`).
 
 ## Usage mode (`UM_MODE=usage`)
 A separate mode (distinct from the unsafe/audit metrics above) that profiles
-crustify-prim primitive usage. Emits a different JSON shape:
+ffibox primitive usage. Emits a different JSON shape:
 ```json
 {"crate":"libgit2",
  "types":{"CType":118,"CBox":58,"SelfPtr":55,"CVec":38,...},   // struct refs in type positions

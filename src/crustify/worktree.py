@@ -205,7 +205,7 @@ def link_shared(wt: Path, repo: Path) -> None:
 
     ``cli-config.json`` is here for the same reason as ``build.json``: it is
     hand-authored, machine-local (absolute paths to the crustify and
-    crustify-prim checkouts, and to their binaries), and therefore not committed
+    ffibox checkouts, and to their binaries), and therefore not committed
     — so HEAD cannot carry it into a worktree. Without the symlink an agent's
     ``Layout.repo_config`` resolves to a file that is not there, every skill
     path fails to resolve, and the whole set silently disappears from its system

@@ -2,7 +2,7 @@
 # Render prompts/orchestrator.md into a self-contained prompt to paste into
 # whatever assistant is driving a crustify port.
 #
-#   utils/build-orchestrator-prompt.sh <crustify-prim-checkout> [-o OUT]
+#   utils/build-orchestrator-prompt.sh <ffibox-checkout> [-o OUT]
 #
 # Writes to stdout unless -o is given. Progress and warnings go to stderr, so
 # the prompt can be piped or redirected without picking them up.
@@ -24,7 +24,7 @@
 # lines of setup procedure in front of every wave-planning turn.
 #
 # WHERE SKILLS COME FROM. Content is read from each skill's SOURCE, never from
-# a deployed copy: prompts/skill-oracle.md here, plus the crustify-prim
+# a deployed copy: prompts/skill-oracle.md here, plus the ffibox
 # checkout named on the command line, since that skill lives in its own repo.
 # Reading a target's .claude/skills/ instead would source a generator from its
 # own deployed derivative, so a stale copy there would silently yield a stale
@@ -43,7 +43,7 @@ PYTHON="${PYTHON:-python3}"
 OUT=""
 
 usage() {
-    echo "usage: ${BASH_SOURCE[0]##*/} <crustify-prim-checkout> [-o OUT]" >&2
+    echo "usage: ${BASH_SOURCE[0]##*/} <ffibox-checkout> [-o OUT]" >&2
     echo "       writes the rendered prompt to stdout unless -o is given" >&2
     exit 2
 }
@@ -59,7 +59,7 @@ while [ $# -gt 0 ]; do
 done
 
 [ -f "$PRIM/SKILL.md" ] || {
-    echo "no $PRIM/SKILL.md -- expected a crustify-prim checkout" >&2
+    echo "no $PRIM/SKILL.md -- expected a ffibox checkout" >&2
     exit 1
 }
 PRIM="$(cd "$PRIM" && pwd)"
@@ -82,7 +82,7 @@ prompts = repo / "src" / "crustify" / "prompts"
 template = (prompts / "orchestrator.md").read_text()
 
 # Mirrors `CrustifyAgent.SKILLS`. The oracle entry is metadata only, so it
-# lives under prompts/ as plain markdown; crustify-prim keeps frontmatter and a
+# lives under prompts/ as plain markdown; ffibox keeps frontmatter and a
 # real body.
 # `CrustifyAgent.SKILLS` plus the playbook, which is orchestrator-facing and
 # deliberately absent from that tuple: a translate agent never authors config
@@ -98,7 +98,7 @@ for skill in sources:
     # Same rule as `CrustifyAgent._render_skills`: point at whatever carries the
     # procedure. A frontmatter skill carries its own, and is read from where it
     # is DEPLOYED in the target. A metadata-only one names its doc (`Doc path`),
-    # which lives in the crustify or crustify-prim checkout, so it is absolute.
+    # which lives in the crustify or ffibox checkout, so it is absolute.
     if skill.read_text().startswith("---"):
         block += f"\n  read in full: .claude/skills/{name}/SKILL.md"
     elif doc:

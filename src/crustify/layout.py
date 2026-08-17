@@ -105,7 +105,7 @@ class Layout:
     @property
     def repo_config(self) -> Path:
         """Repo-wide crustify config (``cli-config.json``) — two blocks:
-        ``deps``, the absolute paths to the crustify and crustify-prim
+        ``deps``, the absolute paths to the crustify and ffibox
         checkouts, and ``bins``, the absolute path to each tool a skill declares
         via its ``bin:`` key. Lives at the ``crustify/`` root so it is shared
         across targets. The skill set itself is not configured here: it is

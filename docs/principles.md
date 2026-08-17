@@ -45,7 +45,7 @@ Rust consumers use the safe type's API, never raw pointers or `unsafe` blocks.
 
 ### The three types
 
-Based on primitives from `crustify-prim`.
+Based on primitives from `ffibox`.
 
 `define_ctype!(Foo, FooRef, FooMut, ffi::foo_st)` emits, per wrapped C type:
 
@@ -133,7 +133,7 @@ to our conventions.
 To leverage idiomatic Rust features, we express each pointer argument,
 return, field, and variable based on ownership facets submitted through the
 `crustify-oracle` skill via the smart pointers and traits from the
-`crustify-prim` skill.
+`ffibox` skill.
 
 ### Footprint
 

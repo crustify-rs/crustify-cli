@@ -168,7 +168,7 @@ as a real atomic.
 
 ### DONE -- handles instead of references (2026-08-15)
 
-Implemented in `crustify-prim` on branch `ref`. Per-field cells stay open,
+Implemented in `ffibox` on branch `ref`. Per-field cells stay open,
 below.
 
 The representation question dissolves once no reference to a wrapped C object is
@@ -420,7 +420,7 @@ mutable-global gap noted for `DRIFTS.md`.
 
 ## `CVec` / `CrustifyStr` `Clone` -- primitives done; wrapper opt-in + deep clone pending
 
-DONE (crate, `crustify-prim/src/owned_refs.rs`): both now have a
+DONE (crate, `ffibox/src/owned_refs.rs`): both now have a
 **conditional** `Clone` gated on the strategy registering a copy -- a free-only
 strategy is deliberately not `Clone` (a `.clone()` is a compile error, never a
 silent shallow double-freeing copy; the types are never `#[derive(Clone)]`).
@@ -1525,11 +1525,11 @@ Two pieces of work are parked here:
      primitive through the crustify trait. Migrate them only as part of
      full nativization (after layout sovereignty), never standalone.
 
-  2. **Pinned native handle in `crustify-prim`.** Once a type *is*
+  2. **Pinned native handle in `ffibox`.** Once a type *is*
      Rust-allocated but still exchanges its (opaque) handle with C, the
      allocation must not move after exposure. Today this is expressible
      with std `Pin<Box<T>>` over the `!Unpin` `CType` (`define_type!`
-     already bakes in `PhantomPinned`, see `crustify-prim/src/c_type.rs`),
+     already bakes in `PhantomPinned`, see `ffibox/src/c_type.rs`),
      but there is no ergonomic crate-level primitive (a `CPinBox<T>` /
      pinned `CBox` analogue) that ties the pinned heap handle to the
      crate's ownership model the way `CBox` does for C-allocated
@@ -1589,7 +1589,7 @@ ctors) and the scaffolder's two-`Drop` emit.
 
 ## 2026-06-12 - Kill *Stack/*Embed companions + hand-written impl Drop -- DONE
 
-`crustify-prim`: `define_type!` forwards `uninit()`/`zeroed()` to `CType`;
+`ffibox`: `define_type!` forwards `uninit()`/`zeroed()` to `CType`;
 `CValued` trait + `CVal<T>` + `impl_cvalued!` added (`smart_pointers.rs`,
 `macros.rs`). All 7 target subjects migrated to `CVal` in the libgit2 port
 (`GitPool`/`GitMap`/`GitHashCtx`/`GitOidarray`/`GitCache`/... via `impl_cvalued!`);

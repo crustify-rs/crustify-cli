@@ -42,7 +42,7 @@ From an untouched checkout to the first commit of the scaffolded Rust tree.
 | Rust | rustup: `cargo`, `clippy`, nightly toolchain |
 | `bindgen-cli` | `cargo install bindgen-cli` |
 | CodeQL | the CodeQL CLI bundle, on `PATH` |
-| `crustify-prim` | `git clone https://github.com/crustify-rs/crustify-prim.git` |
+| `ffibox` | `git clone https://github.com/crustify-rs/ffibox.git` |
 
 On macOS arm64 the CodeQL bundle needs Rosetta.
 
@@ -58,7 +58,7 @@ Author `<repo>/crustify/cli-config.json` from `specs/cli-config.json`:
 
 | block | holds |
 |---|---|
-| `deps` | absolute path to the crustify checkout and to `crustify-prim`|
+| `deps` | absolute path to the crustify checkout and to `ffibox`|
 | `bins` | absolute path to `crustify-cli` and `crustify-oracle` |
 
 **Absolute paths only.** An agent runs inside a git worktree, so nothing

@@ -30,7 +30,7 @@ tmp
 # Derived analysis — regenerable from the C by `analyze`
 codeql
 
-# Machine-local: absolute paths to the crustify and crustify-prim checkouts,
+# Machine-local: absolute paths to the crustify and ffibox checkouts,
 # and to each tool binary. Author one per machine from specs/cli-config.json.
 cli-config.json
 

@@ -35,11 +35,11 @@ use rustc_span::Span;
 use std::collections::{HashMap, HashSet};
 
 /// FFI-seam conversion routines: raw pointers in these signatures are the
-/// expected boundary, not a smell. Mirrors `crustify-prim`'s seam surface
+/// expected boundary, not a smell. Mirrors `ffibox`'s seam surface
 /// (`c_type.rs`, `CCell` + the owning handles) plus the names the ported trees
 /// add for callback wrappers.
 const SEAM_FNS: &[&str] = &[
-    // crustify-prim
+    // ffibox
     "as_ptr", "as_mut_ptr", "as_void_ptr",
     "from_ptr", "from_raw", "from_raw_parts", "from_raw_uninit",
     "into_raw", "into_raw_parts", "into_raw_uninit",
@@ -516,7 +516,7 @@ impl<'a, 'tcx> Visitor<'tcx> for BodyVisitor<'a, 'tcx> {
     }
 }
 
-/// The `crustify-prim` macros, tallied by expansion site. The `define_*ctype!`
+/// The `ffibox` macros, tallied by expansion site. The `define_*ctype!`
 /// family emits the wrapper newtype (one per representation); the `impl_*!`
 /// family binds a lifecycle contract or an ownership marker to it.
 const CRUSTIFY_MACROS: &[&str] = &[
