@@ -130,9 +130,11 @@ every function it merely *declares*, whose body sits in a `.c` you did not name.
 Add a header only if its **implementors** are in the target; one whose types are
 merely *used* reaches the import section on its own.
 
-**`files.import` — an API to wrap, with nothing owned.** The target section
-composes empty and the import section is seeded off these files directly, on
-**declaration-site** membership. That is the right test for a public header,
+**`files.import` — an API to wrap, with nothing owned.** Name the **headers that
+publish the API** (`include/openssl/`, `include/libxml/`), not its sources: the
+target section composes empty and the import section is seeded off these files
+on **declaration-site** membership, so pointing it at a source tree seeds on
+declarations inside `.c` files. That test is the right one for a public header,
 whose declared bodies live in files the campaign does not own — and it is what
 makes "wrap this library" expressible without scoping its whole implementation.
 
@@ -248,6 +250,21 @@ promotion is read against.
 A wave is one `crustify-cli … translate` invocation: the scheduler selects
 units, batches them under budget, and spawns one agent per batch in its own git
 worktree. Waves repeat bottom-up until the target is closed.
+
+### Choosing the objective
+
+`--objective` is taken as given — nothing derives it from an item's section — so
+one run carries one verb and picking it is yours.
+
+A **wrap** campaign runs every wave at `--objective wrap`.
+
+A **port** campaign runs `wrap` first: the type stays layout-compatible while C
+still reads its fields. It runs `port` for an item once the C-side readers are
+gone. `port` re-visits a filled anchor deliberately, so it is how an item is
+escalated rather than redone, and it is what starts the opacification burn-down.
+
+An item whose anchor is already filled is dropped from a `wrap` selection with a
+warning. `--force` re-runs it anyway; `--skip NAME …` drops items silently.
 
 ### Raw lifetime discovery stage
 

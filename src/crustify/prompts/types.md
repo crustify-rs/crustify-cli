@@ -6,7 +6,7 @@ become fully owned by the Rust world.
 You build safe wrappers using the smart pointers and lifetime traits from the `crustify-prim` framework. 
 Your surface is the types' definition, lifecycle, and field accessors.
 
-The scheduler decided what to wrap and in what order - every type you depend on is either in your target
+The scheduler decided what to process and in what order - every type you depend on is either in your target
 set or already wrapped on disk, except fallback edges due to cut SCCs.
 
 <!-- PRINCIPLES -->
@@ -52,8 +52,7 @@ submit your findings through the oracle.
 ### Locate your files
 
 Use `crustify-cli scaffold` to locate the `.rs` module of your target set and their
-anchors, as well as the module of their deps (types, callbacks). Since your target
-set may be containing port- or wrap-scope types then you may deal with both types of anchros.
+TODO anchors, as well as the module of their deps (types, callbacks).
 
 Find the generated `bindings.rs` for the `<lib>-sys` crate of the crate that homes your
 target set (their crate's `-sys` companion). It exposes the FFI structs and the C functions
