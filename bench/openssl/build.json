@@ -1,0 +1,121 @@
+{
+  "_comment": "REPO-ROOT-tier build.json for OpenSSL 4.1.0-dev (upstream master, ECH included). Hand-authored per the playbook's Phase 1. Describes the link topology downstream stages treat as authoritative: library partitioning, link edges, feature gating, and the build invocation. All paths are repo-root-relative.",
+
+  "_comment_libraries": "Two in-tree link units. libssl is the port target; libcrypto is its only in-tree link dependency. Keys are the stem of `target` (libssl.a -> `libssl`). This build is `no-shared` (required by enable-asan), so both are static archives. NOTE for attribution: ssl/build.info adds ../crypto/packet.c, ../crypto/quic_vlint.c and ../crypto/time.c to libssl as SHARED_SOURCE - that path is inactive in a no-shared build, and those files stay attributed to libcrypto (they live under crypto/, which is libcrypto's source_dir). providers/ compiles into libcrypto here: the default and base providers are built in, and no separate provider module is linked at build time.",
+  "libraries": {
+    "libssl": {
+      "kind": "static",
+      "target": "libssl.a",
+      "source_dirs": ["ssl/"],
+      "include_dirs": ["include/openssl/", "include/internal/", "include/"],
+      "link_dependencies": ["libcrypto", "libc"]
+    },
+    "libcrypto": {
+      "kind": "static",
+      "target": "libcrypto.a",
+      "source_dirs": ["crypto/", "providers/"],
+      "include_dirs": ["include/openssl/", "include/internal/", "include/crypto/", "include/"],
+      "link_dependencies": ["libc"]
+    },
+    "libc": {
+      "kind": "system",
+      "target": null,
+      "source_dirs": [],
+      "include_dirs": ["/usr/include/", "/usr/include/aarch64-linux-gnu/"],
+      "link_dependencies": []
+    }
+  },
+
+  "_comment_executables": "apps/ builds the `openssl` driver; test/ and fuzz/ build harness binaries. None are in the target section - listed so the composer can recognise executable-only sources.",
+  "executables": {
+    "openssl": {
+      "source_dirs": ["apps/"],
+      "link_dependencies": ["libssl", "libcrypto", "libc"]
+    }
+  },
+
+  "_comment_features": "Feature state produced by THIS build's configure line. `enabled` is what the configure invocation actually yields; `default_value` is what a bare ./Configure would give. The OPENSSL_NO_* entries are inverted-sense macros: `enabled: true` means the macro IS defined, i.e. the guarded API surface is compiled OUT.",
+  "features": {
+    "all": [
+      {
+        "name": "OPENSSL_THREADS",
+        "role": "POSIX threading for thread-safe global state and per-context locks. Per INSTALL.md ('threads' is on by default on POSIX) and Configure's default target settings.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "OPENSSL_NO_DEPRECATED",
+        "role": "Umbrella macro defined by `no-deprecated`; per INSTALL.md ('no-deprecated: Don't build with support for deprecated APIs') it disables every API deprecated up to the configured API level. Set by this build's configure line, per the playbook's 'prefer a `configure` that disables deprecated features'.",
+        "default_value": false,
+        "enabled": true
+      },
+      {
+        "name": "OPENSSL_NO_DEPRECATED_3_0",
+        "role": "Disables APIs deprecated in OpenSSL 3.0 (RSA/DH/EC low-level, ENGINE, SRP, ...). Per CHANGES.md these are scheduled for removal; `no-deprecated` implies it at API level 4.x. Legacy / transitional.",
+        "default_value": false,
+        "enabled": true
+      },
+      {
+        "name": "OPENSSL_NO_DEPRECATED_3_5",
+        "role": "Disables APIs deprecated in OpenSSL 3.5 - the continuation of the 3.0 deprecation wave, per CHANGES.md. Legacy / transitional.",
+        "default_value": false,
+        "enabled": true
+      },
+      {
+        "name": "OPENSSL_NO_SHARED",
+        "role": "`no-shared` - build static archives only. Per INSTALL.md's enable-asan entry, ASan 'should be used in conjunction with the no-shared option'; also keeps ssl/build.info's SHARED_SOURCE fold-in of crypto/packet.c out of libssl, so library attribution stays clean.",
+        "default_value": false,
+        "enabled": true
+      },
+      {
+        "name": "OPENSSL_ASAN",
+        "role": "`enable-asan` - AddressSanitizer instrumentation. Per INSTALL.md a developer-only option, gcc/clang only, to be paired with no-shared. Enabled per the playbook's 'enable sanitizers'.",
+        "default_value": false,
+        "enabled": true
+      },
+      {
+        "name": "OPENSSL_UBSAN",
+        "role": "`enable-ubsan` - UndefinedBehaviourSanitizer. Per INSTALL.md a developer-only option, gcc/clang only, to be used together with -DPEDANTIC (which this build passes).",
+        "default_value": false,
+        "enabled": true
+      },
+      {
+        "name": "OPENSSL_ECH",
+        "role": "Encrypted ClientHello (ssl/ech/, include/openssl/ech.h). Enabled by default upstream - ssl/build.info adds SUBDIRS=ech unless `no-ech`. Its implementation is under ssl/ech/, so it is in the target section.",
+        "default_value": true,
+        "enabled": true
+      },
+      {
+        "name": "OPENSSL_NO_QUIC",
+        "role": "`no-quic` would drop ssl/quic/ and the QUIC internals. Left OFF: QUIC is roughly half of the ssl/ tree and is in the target section.",
+        "default_value": false,
+        "enabled": false
+      },
+      {
+        "name": "OPENSSL_NO_MULTIBLOCK",
+        "role": "`no-multiblock` - per INSTALL.md, 'Don't build support for writing multiple records in one go in libssl'. The multiblock path stitches AES-CBC+HMAC-SHA over several TLS<=1.2 records in one EVP pass, and the stitched ciphers exist ONLY as x86_64 assembly (crypto/evp/e_aes_cbc_hmac_sha*.c), which is why ssl/record/methods/tls_multib.c gates on `AES_ASM && __x86_64__`. Disabled DELIBERATELY here: it is the single arch-conditional site in the whole target section, and turning it off makes the x86_64 CodeQL database and the aarch64 artifacts agree exactly (see _comment_codeql_host_deviation). No entity is lost - tls_write_records_multiblock / tls_get_max_records_multiblock stay in the OSSL_RECORD_METHOD vtable (tls1_meth.c:617) and fall through to tls_write_records_default; only the EVP_CTRL_TLS1_1_MULTIBLOCK_* edges leave the import closure.",
+        "default_value": false,
+        "enabled": true
+      },
+      {
+        "name": "OPENSSL_NO_ASM",
+        "role": "Disables hand-written assembly across crypto primitives. Per INSTALL.md it forces C reference implementations. Left OFF - libcrypto is import-section only, so its asm never reaches the Rust side.",
+        "default_value": false,
+        "enabled": false
+      }
+    ]
+  },
+
+  "_comment_build_commands": "`configure` runs uninstrumented from the repo root; `build` is the command CodeQL traces (`codeql database create ... --command=\"make -j16\"`). 16 of the 18 available cores, leaving headroom. `test` is the port-equivalence baseline.",
+  "_comment_codeql_host_deviation": "PLATFORM DEVIATION - this host is linux/aarch64 and GitHub ships no linux-arm64 CodeQL CLI (2.26.2 assets: linux64/osx64/win64 only), so an aarch64 database is not obtainable by any route. The database is therefore created from a SECOND, x86_64 configure of the same tree, run under qemu-user binfmt emulation with the amd64 gcc so the extractor intercepts an x86_64 compiler: `./Configure linux-x86_64 no-deprecated no-multiblock no-shared -d CC=x86_64-linux-gnu-gcc-14`, then `make -j16 build_libs`. The tree is then `make distclean`ed and reconfigured with the aarch64 sanitizer line below - that is the state left on disk, and the one bindgen parses headers against. `no-multiblock` is carried by BOTH configure lines: it is what makes the two agree exactly (ssl/record/methods/tls_multib.c is the only arch-conditional site in the target section), so the database's entity and edge set is identical to what the native build compiles.",
+  "_comment_codeql_tracing_deviation": "TRACING DEVIATION - `codeql database create --command=...` cannot be used on this host: its preload_tracer is an x86_64 binary, and under qemu-user it segfaults the moment it execs the build command (both with a native aarch64 make and with make:amd64, which dies one recipe later when make execs the native perl). The database is built with CodeQL's supported INDIRECT BUILD TRACING instead: `codeql database init --language=cpp --begin-tracing`, source `<db>/temp/tracingEnvironment/start-tracing.sh`, run the build normally, source `end-tracing.sh`, then `codeql database finalize`. The exported LD_PRELOAD is `.../${LIB}_${PLATFORM}_trace.so`; glibc expands those tokens per process, so the real x86_64 tracer loads inside each emulated gcc and is harmlessly ignored (one ld.so warning) by the aarch64 make/perl/sh. Same extractor, same compile commands, no cross-architecture library load.",
+  "_comment_test_baseline": "What `build_commands.test` yields on the UNPORTED tree - the port-equivalence reference. A post-port run must match it. The 37 skips are config-gated (e.g. 00-prep_fipsmodule_cnf.t needs a fips build), i.e. the harness declining, not failing.",
+  "test_baseline": "4448/4448 pass across 381 recipe files, 37 skipped, 0 disabled (2026-07-31, aarch64 asan+ubsan)",
+  "_comment_toolchain_shim": "The amd64 gcc/binutils installed for the CodeQL extractor take over every unprefixed binutils name (/usr/bin/{ld,as,ar,ranlib,nm} become symlinks to the x86_64-linux-gnu-* variants, and Debian's ld is single-target: `ld -V` lists only elf_x86_64). A native build therefore fails at assemble/link with the default PATH. ~/tools/native-bin/ holds symlinks pointing {gcc,cc,ld,as,ar,ranlib,nm,objdump,objcopy,strip,readelf,...} back at the aarch64-linux-gnu-* tools; prefix it on PATH for the native build. The configure line's CC=gcc resolves through that shim.",
+  "build_commands": {
+    "configure": "./Configure linux-aarch64 no-deprecated no-multiblock no-shared -d enable-asan enable-ubsan -DPEDANTIC CC=aarch64-linux-gnu-gcc-14",
+    "build":     "make -j16",
+    "test":      "make test HARNESS_JOBS=16",
+    "clean":     "make distclean"
+  }
+}
