@@ -103,6 +103,10 @@ _REASONING_EFFORT = {
     "gpt-5.6-sol": "high",
     "gpt-5.6-terra": "high",
     "gpt-5.6-luna": "high",
+    # OpenRouter route. Not in codex's catalog either, so its fallback is
+    # `none` — the worst case the comment above describes. `high` verified
+    # accepted end to end against the OpenRouter responses API.
+    "moonshotai/kimi-k3": "high",
 }
 
 
