@@ -3,7 +3,7 @@
 The user has chosen the following configuration:
 
 target repo: `https://github.com/libgit2/libgit2.git`, commit ddf3b5c85d86a389330b1d1dd90f08f60ae05fe4
-target-section target: the whole `src/` dir of libgit2
+target: the whole `src/` dir of libgit2
 max-syms: default
 max-loc: default
 max-types: 1
@@ -36,7 +36,7 @@ crustify-oracle /work/libgit2 src query dag --layer <L> --import-only
 
 Wave one layer at a time, lowest first, using `--name`.
 
-**2. The import-section symbols the port scope needs at port layers 0–2.** The
+**2. The import symbols the target needs at layers 0–2.** The
 functions and globals target code calls but does not own. Select by `--name`.
 
 **3. The god objects.** The three target types with more than 25 declared

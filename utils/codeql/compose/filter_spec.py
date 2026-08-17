@@ -36,7 +36,7 @@ port-related reasoning at all — the output is purely seed-driven.
 
 `analyze_scope` (a composer-only stage) still
 reads the target's `scope.json` implicitly — that command is
-defined as "operate on the target's target file set," not as
+defined as "operate on the target's file set," not as
 a general query.
 """
 from __future__ import annotations

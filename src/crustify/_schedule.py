@@ -82,7 +82,7 @@ def resolve_names(
 
 
 def bare_gate(nodes: list[Node]) -> None:
-    """Refuse to schedule a target symbol left unclassified
+    """Refuse to schedule any symbol left unclassified
     (``kind: null`` → ``subkind == "symbol"``). Moved here from the scaffolder:
     the bare kind only exists in the DAG, never in the fresh composer."""
     bad = sorted({(n.id, n.defined_in or "?") for n in nodes if n.is_bare})
@@ -470,11 +470,9 @@ class Stage:
     # one-type-per-batch behaviour for callers that do not set them.
     max_types: int = 1
     min_fields: int = 0
-    # `Batch -> verb`. The objective the emit seam will ACTUALLY hand this
-    # batch, which is not always `verb`: a symbol batch takes its scope's, so a
-    # wave invoked `wrap` ports its target-section symbols. Wired by the caller to
-    # the same function the emit seam calls, so `--dry-run` cannot drift from
-    # what runs. Unset = single-objective caller, everything takes `verb`.
+    # `Batch -> verb`. The objective the emit seam will hand this batch. Wired
+    # by the caller to the same function the emit seam calls, so `--dry-run`
+    # cannot drift from what runs. Unset = everything takes `verb`.
     objective_of: Callable[["Batch"], str] | None = None
     shared_artifact_fn: Callable[[], None] | None = None  # serialized post-step
     # Worktree-isolation seam. When wired, EVERY agent runs in its own worktree,
@@ -925,11 +923,9 @@ def schedule(
         return []
 
     if dry_run:
-        # The objective each batch will ACTUALLY be handed. `stage.verb` is the
-        # caller's, and a symbol batch overrides it with its scope's, so a wave
-        # invoked with the default `wrap` runs `port` over its target-section
-        # symbols. Resolved through `stage.objective_of` — the same function the
-        # emit seam calls — so the plan cannot drift from what runs.
+        # The objective each batch will be handed. Resolved through
+        # `stage.objective_of` — the same function the emit seam calls — so the
+        # plan cannot drift from what runs.
         obj_of = stage.objective_of or (lambda _b: stage.verb)
         verb_of = {(u.node.id, u.node.defined_in): obj_of(b)
                    for b in all_batches for u in b.units}

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Regenerate utils/codeql/port_scope.qll from a target's scope.json.
 
-Reads the target's target file list (``scope.json``'s
-``port.files``, emitted by ``compose.scope_manifest``) and emits a
+Reads the target's file list (``scope.json``'s
+``target.files``, emitted by ``compose.scope_manifest``) and emits a
 CodeQL library file with the path set inlined as a string predicate.
 The library exports:
 
@@ -35,7 +35,7 @@ from pathlib import Path
 
 
 def collect_port_paths(scope_json: Path) -> list[str]:
-    """Read scope.json's `port.files` and return the sorted unique path
+    """Read scope.json's `target.files` and return the sorted unique path
     list. Schema: ``{"target": {"files": ["a/b.c", ...], ...}}`` —
     mirrors ``compose.scope.load_target_paths``. Defensively also accepts
     a list of ``{"path": ...}`` entries or bare strings under `files`."""
@@ -61,7 +61,7 @@ def render_qll(paths: list[str]) -> str:
  * Regenerate with:
  *   python3 utils/codeql/generate_port_scope.py <target>
  *
- * Source of truth: the target's scope.json (its port.files)
+ * Source of truth: the target's scope.json (its target.files)
  *
  * Exports:
  *   - portFile(File f)   — f's relative path is in the target set.

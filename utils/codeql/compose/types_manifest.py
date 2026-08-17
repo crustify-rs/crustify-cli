@@ -5,7 +5,7 @@ Mirrors `syms_manifest.py`'s seed + closure model, adapted to types:
   - **Port-scope types** (`defined_in ∈ scope.json`) are the porting
     subjects → **extended schema**: full declared-field layout. They
     will be rewritten as native Rust types.
-  - **Wrap-scope types** (reached by port code) get the **base
+  - **Import types** (reached by target code) get the **base
     schema** with `fields[]` **narrowed to the target-accessed subset**
     (the FFI surface).
 
@@ -444,11 +444,11 @@ def _import_reachable(
         # Body usage by a target-REACHABLE (non-target-file) function. import_closure
         # pulls these in via depends_on.types (field_access_index over the
         # body), so WITHOUT this the per-type gate diverges from the wrap
-        # surface and the type lands in wrap.types with no record
+        # surface and the type lands in import.types with no record
         # (git_config_entry, git_error, git_pool_page, error_threadstate — used
         # only in the bodies of target-reachable functions, never their
         # signatures). No path guard: anything legitimately import-section and
-        # needed by the port scope earns a record, external or not (an external
+        # needed by the target earns a record, external or not (an external
         # type like pthread_mutex_t is already admitted by-value via S5; the
         # scaffolder decides bindgen-vs-record home downstream, not this gate).
         for fn_name, fn_def_file in reach.functions_using_type_in_body(tname, tdef):

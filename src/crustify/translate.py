@@ -251,7 +251,7 @@ def translate_lifetime_for(
     routines that drop/dispose/clone ``spec`` and submits their `lifetime`
     blocks through the oracle, reading back with ``query symbols
     --lifetime-for <spec>`` whatever already exists. Candidates are collected
-    codebase-wide, wrap- and target-section alike, because a primitive is a
+    codebase-wide, import- and target-section alike, because a primitive is a
     primitive wherever it is defined.
 
     What the blocks then BUY — the strategy ZST plus the smart-pointer
@@ -622,7 +622,7 @@ def translate_types(
         raise SystemExit(
             f"wrap: {len(bad_oos)} selected "
             f"{'entity is' if len(bad_oos)==1 else 'entities are'} out of scope "
-            f"(neither wrap- nor target-section):\n{listing}")
+            f"(in neither the target nor the import section):\n{listing}")
 
     # Bindgen gate for the libraries actually being wrapped. A selected unit's
     # owning library is its crate in crates.json (crate name == link unit);

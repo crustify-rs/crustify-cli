@@ -743,7 +743,7 @@ def compose(
         predicate become seeds. From target seeds, the composer
         computes a one-hop forward closure and adds touched symbols
         to the output. **Seed admission gate**: an import seed
-        is admitted only if it is wrap-reachable from port code per
+        is admitted only if it is reachable from target code per
         the scope.json. Port-scope seeds emit with port additions;
         wrap seeds + closure emit as base shape.
       - **Scope.json + filter mode** (`scope_json_path` set, no
@@ -946,8 +946,8 @@ def compose(
 
     # Pass 2: identify seeds (seed mode only). When scope.json is
     # provided, apply the **seed admission gate**: a candidate is
-    # admitted as a seed only if it's target-section OR wrap-reachable
-    # from port code per the scope.json. Without scope.json, no
+    # admitted as a seed only if it's target-section OR reachable
+    # from target code per the scope.json. Without scope.json, no
     # gate (every match is admitted).
     seed_keys: set[tuple[str, str]] = set()
     dropped_seeds: list[str] = []

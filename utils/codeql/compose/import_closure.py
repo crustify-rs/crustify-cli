@@ -494,7 +494,7 @@ def compose_import(
         admits a phantom into the wrap closure: libgit2's ``entry`` is
         ``struct entry`` in BOTH src/libgit2/indexer.c (port) and
         deps/xdiff/xpatience.c (wrap, and touched by no port file), and the
-        fallback put the xdiff one in wrap.types with no manifest record
+        fallback put the xdiff one in import.types with no manifest record
         behind it."""
         dfs = defs_of.get(tag)
         if not dfs:
@@ -656,7 +656,7 @@ def compose_import(
         decls = tmeta["decls"]
         df = tmeta["def_file"]
         # Skip target callbacks — they're already collected in
-        # port.functions by scope_manifest. Only emit import callbacks here
+        # target.functions by scope_manifest. Only emit import callbacks here
         # to avoid bucket overlap.
         if scope.classify(df, decls, target_paths) != scope.IMPORT:
             continue
