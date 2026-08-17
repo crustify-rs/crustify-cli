@@ -1,18 +1,18 @@
 # Crustify
 
-Crustify leverages LLM agents to (a) **migrate production C/C++ codebases** to safe,
-idiomatic Rust, and (b) **generate safe Rust wrappers** for unsafe APIs - automatically,
+Crustify leverages LLM agents to (a) **migrate production C/C++ codebases to safe,
+idiomatic Rust**, and (b) **generate safe Rust wrappers for unsafe APIs** - automatically,
 incrementally and efficiently, with little human involvement.
 
 Point it at a repo and it will map its build system and test suite, extract an exact dependency
 graph of its types and symbols, and translate/wrap them in dependency order, focusing on maximizing
-safety without sacrificing correctness. See the [Results](#results) section for our experiments with
-Crustify on translating libgit2 and OpenSSL.
+safety without sacrificing correctness. See the [Results](#results) section for our experiments
+on translating **libgit2** and **OpenSSL**.
 
 
 ## Quick Setup
 
-The following bootstraps the harness for a C-to-Rust port driven by an AI orchestrator. You can
+The following bootstraps the harness for a C-to-Rust port/wrap driven by an AI orchestrator. You can
 spawn the orchestrator as an assistant in your favorite AI-based IDE or as a fully autonomous agent
 in your terminal.
 
@@ -51,15 +51,15 @@ approval before starting work. Adjust to your liking / use case.
 
 Crustify helps you automate the following C-to-Rust tasks:
 
-**Safe wrappers for C/Rust interop.** Crustify can emit a safe wrapper interface over the public API
+**Safe wrappers for C/C++/Rust interop.** Crustify can emit a safe wrapper interface over the public API
 of a C/C++ library, and re-export it so that Rust-native consumers can integrate it without having
-to use unsafe or raw pointers. Moreover, if the library is already written in Rust, or is in the
+to use unsafe or raw pointers. If the target library is already written in Rust, or is in the
 process of being migrated to Rust, Crustify can emit safe wrappers for its public API so that C/C++
-consumers can integrate it without introducing undefined behavior hazards.
+consumers can integrate it without introducing undefined behavior.
 
 **Incremental migration to Rust.** Crustify can also automate the migration of production C/C++
 codebases to memory-safe, idiomatic Rust. It first decomposes the target in smaller units (symbols
-and types), and translates them in dependency order, bottom-up. Some lower-layer Rust items may
+and types), and translates them in dependency order, bottom-up. As some lower-layer Rust items may
 still need to stay interoperable with the higher-layer C/C++ code (e.g. a god object storing a Rust
 handle) — Crustify reuses the same approach of safe wrappers over FFI items, temporarily, and once
 they no longer cross the FFI boundary it nativizes them.
@@ -76,13 +76,16 @@ they need the right guidance, the right unit of work, and the right tools to ena
 high quality outputs. We tested bare LLMs on translating large, production codebases from the real
 world (libgit2 and OpenSSL) and observed the following notable pitfalls:
 
-- **Overthinking.** Without a clear translation playbook, LLMs tend to overthink and get lost in
-  endless reasoning traces, making them very expensive especially on large codebases. However, when
-  tasked with smaller, finer-grained tasks we observed that they produce higher quality outputs,
-  faster, and cheaper.
+- **Overthinking.** There are many ways to translate C/C++ to Rust, and there is no conventional playbook,
+  causing LLMs to overthink and get lost in endless reasoning traces, which makes them very expensive and slow,
+  especially on large codebases.
+
+- **Early termination.** When faced with large codebases, bare LLMs cannot reliably decompose the task
+  in subtasks and tackle all of them in a logical order. However, when tasked with smaller, finer-grained
+  tasks we observed that LLMs produce higher quality outputs, faster, and cheaper.
 
 - **Reward hacking.** When faced with complex type systems, pointers with rich ownership semantics,
-  and FFI code, LLMs often tend to fall back to emitting `unsafe` blocks and _raw pointers_ in order
+  or FFI code, LLMs often tend to fall back to emitting `unsafe` blocks and _raw pointers_ in order
   to claim success, thus losing the safety benefits of Rust.
 
 - **Inaccuracy.** When asked to analyze code (e.g. to find the users of a `struct` field), LLMs
@@ -94,10 +97,10 @@ world (libgit2 and OpenSSL) and observed the following notable pitfalls:
   aggravated on translation tasks where an idiom in one language can be expressed in many ways in
   the other language (e.g. a C/C++ `struct` in Rust).
 
-Crustify mitigates all these via: (a) properly engineered, clear prompts that ensure LLMs don't
-derail from the task, (b) access to the right Rust primitives that facilitate code with memory-
-and type-safety guarantees (c) a deterministic dependency graph of types and symbols to guide them
-through an incremental, bottom-up translation that enables safety-first coding, (d) a balanced
+Crustify mitigates all these via: (a) a clear translation playbook and properly engineered prompts
+that ensure LLMs don't derail from the task, (b) access to the right Rust primitives that facilitate code
+with memory- and type-safety guarantees, free of UB (c) a deterministic dependency graph of types and symbols
+to guide them through an incremental, bottom-up translation that enables safety-first coding, (d) a balanced
 workload and task decomposition to keep them focused and enable parallel agent work, and (e) coding
 conventions and structured specifications to enable deterministic outputs.
 
@@ -109,13 +112,15 @@ to make the most out of available compute resources:
 
 - A **type translator** specialized in `structs`, `enums` and `unions`;
 - A **symbol translator** specialized in `functions`, `function pointers` and `global variables`;
-- An **orchestrator** tasked with spawning translators and ensuring the harness runs smoothly.
+- An **orchestrator** tasked with driving translators in dependency-order and ensuring the harness
+  completes succesfully.
 
-**Agent Backends.** Crustify integrates state-of-the-art agent frameworks to access frontier models,
-both proprietary and open-source, with built-in context management, long-horizon execution, and
-fine-tuning for coding tasks. To execute an agent, the backend simply spawns a Python subprocess
-that invokes the provider's CLI in a shell session.
+**Agent Backends.** Crustify integrates state-of-the-art agent frameworks to access frontier models
+that are fine-tuned for coding tasks, both proprietary and open-weight, with built-in context management and
+long-horizon execution. Additionally, it also employs the latest agentic techniques **adversatial testing**
+and **auto-discovery** to improve output quality. 
 
+To execute an agent, the  backend simply spawns a Python subprocess that invokes the provider's CLI in a shell session.
 Crustify currently supports the following agent backends:
 
 - [Claude Code CLI](https://code.claude.com/docs/en/quickstart) for Anthropic models
@@ -129,16 +134,17 @@ Billing modes: subscription-based (Claude Max, Codex Pro) or via API key (BYOK).
 Crustify enables LLM agents to analyze code with high precision by equipping them with a **_semantic
 oracle_** - a CLI tool that leverages [CodeQL](https://codeql.github.com/) to statically analyze a
 target repository and extract an exact dependency graph of types and symbols. We developed, tested,
-and shipped the `.ql` queries that index the CodeQL database to compose the graph (see [utils](utils/codeql/)).
-This way, agents do not have to re-invent them every time, which would re-introduce the very inaccuracy
+and shipped the `.ql` queries that index the CodeQL database to compose the graph (see [utils](utils/codeql/)),
+so agents do not have to re-invent them every time, which would re-introduce the very inaccuracy
 issues mentioned above.
 
-The semantic oracle has three primary jobs:
+The semantic oracle provides the following capabilities:
 
 1. It builds a **dependency graph** of the C/C++ items - types, functions, function pointers, global
    variables - by analyzing the AST at fine granularity, down to field-level access. It then applies
    Tarjan's algorithm to sort it in topological order, and turns it into a _DAG_ by flattening SCCs
-   while keeping track of cut edges.
+   while keeping track of cut edges. This enables agents to tackle even the largest codebases by
+   decomposing the task into smaller, finer-grained units.
 
 2. It maintains an **`ownership-store.json`** where agents can submit ownership and borrow judgement
    of C/C++ pointers, as well as lifetime primitives of types (drop destructors, cloners) — both of
@@ -159,28 +165,30 @@ fine tuning for custom preferences.
 
 ### 1. Setup
 
-This phase prepares the build environment, bootstraps the semantic oracle, and scaffolds the Rust
+This phase prepares the build environment, bootstraps the semantic oracle, and scaffolds an empty Rust
 tree prior to any translation work. It can be driven entirely by the **orchestrator agent**. Below
 is a simplified description of its stages, while the [playbook](docs/playbook.md), which the
-orchestrator agent also follows, contains more details.
+orchestrator agent also follows, contains the full picture.
 
 **Target discovery.** The orchestrator first identifies the build artifacts of the target
 (executables, libraries) and its configure/build/test commands. Then, it configures and builds it,
 runs the test suite to collect a baseline, and authors **`build.json`** where it documents its
 findings. `build.json` will later drive the organization of the Rust tree in crates, and it will act
-as a source of truth for downstream agents for obtaining build/test commands.
+as a source of truth for downstream agents to obtain build/test commands.
 
 **CodeQL extraction.** The orchestrator builds the CodeQL database and runs the `.ql` extraction
-queries to generate `CSV` tables that store static information about code items:
-argument/return/variable types, field accesses, typedef aliasing, and more. The tables are then
-consumed by the oracle to build the dependency graph.
+queries to generate `CSV` tables that store static information about code: argument/return/variable types,
+field accesses, typedef aliasing, and more. The tables are then consumed by the oracle to build the dependency graph.
 
-**Scope specification.** The orchestrator authors **`scope-config.json`** where it lists all the TUs
-and headers that form the port target selected when bootstrapping the orchestrator agent. Crustify
-splits a target in two scopes, and the split drives everything else:
-  - **port scope** - code that Rust will own. It gets rewritten as native Rust.
-  - **wrap scope** - the import closure that port code reaches: types, functions and callbacks that
-    stay in C and cross the FFI boundary. It gets **safe wrappers**.
+**Scope specification.** The orchestrator authors **`scope-config.json`** where it names the TUs and
+headers of the target selected when bootstrapping the orchestrator agent. Its `files` key names one
+of two sections, never both, and the choice drives everything else:
+  - **target** - what the target owns, membership anchored on definition sites. The import section
+    is derived from what those entities reach.
+  - **import** - an API to wrap, membership anchored on declaration sites. The target section
+    composes empty.
+
+A section says what the target contains; what is done with it is the translate stage's `--objective`.
 
 **Crates specification.** The orchestrator authors **`crates.json`** where it sketches a hierarchy
 of Rust crates, modules, and `.rs` source files that govern how the Rust tree will be organized, and
@@ -197,8 +205,8 @@ it, and ensure all required bindings are properly emitted.
 
 ### 2. Translation
 
-Here's where translation work happens. The bits below give a high-level summary of Crustify's
-translation philosophy, while the complete workflow can be best understood by consulting the prompts
+Here's where translation work happens. The sections below give a high-level view of Crustify's
+translation philosophy, while the complete workflow can be best understood from the prompts
 of the [type](src/crustify/prompts/types.md) and [symbol](src/crustify/prompts/symbols.md) agents,
 and the [principles](docs/principles.md) document.
 
@@ -215,15 +223,15 @@ and the [principles](docs/principles.md) document.
 
 **Batch Scheduling.** Crustify employs a deterministic scheduler that queries the oracle's DAG
 to compose translation batches and routes them to the type/symbol agents. The
-batching policy is governed by kind, DAG, and scope. First a batch is either types or symbols, never
+batching policy is governed by kind and DAG. First a batch is made of either types or symbols, never
 both. Second, a single agent's batch either contains items from a single DAG layer, or from multiple
 layers if their dep closure is also in the batch; lower layers get scheduled before higher ones.
-Third, a batch contains either only port or wrap items, never both.
+Selection is section-blind, and every batch of a run carries the run's `--objective`.
 
 **Workload Tuning.** Crustify also supports workload tuning: the symbol agent takes a batch of
 symbols capped by a configurable max number of symbols and `LoC` (currently `50` and `1000`), while
 the type agent gets a batch of types capped by a max number of types and a min number of fields
-(currently `5` and `10`). Both have tunable CLI parameters. Agents with separate batches and scopes
+(currently `5` and `10`). Both have tunable CLI parameters. Agents with separate batches
 run concurrently in **isolated worktrees** via a configurable concurrency threshold, i.e. max nr of
 parallel agents. The orchestrator agent chooses how to best use the scheduler for driving
 translation campaigns.
@@ -257,8 +265,8 @@ for an ownership judgement submitted to `ownership-store.json`. Agents are instr
 mode via a simple paragraph in their prompt, and they are told to fix any mistakes if they find. The
 orchestrator agent can run reviewer agents by running `crustify-cli translate --objective review`.
 
-**Idempotency.** The scaffolder emits placeholder anchors (`// crustify:todo`) for every port/wrap
-item that is in scope, and translator agents are asked to promote them for done work. This helps the
+**Idempotency.** The scaffolder emits placeholder anchors (`// crustify:todo`) for every in-scope
+item, and translator agents are asked to promote them for done work. This helps the
 orchestrator with accounting and idempotency upon resuming an interrupted campaign.
 
 **Regression and Equivalence Testing.** Translator agents are asked to surround the ported C/C++
@@ -284,13 +292,15 @@ Four query subjects, each with its own modes:
 
 | subject | modes | flags |
 |---|---|---|
-| `types` | enumerate · introspect · submit | `--fields` `--ops` `--methods` `--field-touchers` `--manifest` |
-| `symbols` | enumerate · introspect · submit · lifecycle discovery | `--lifetime-for` `--taking` `--calling` `--hops` `--array` `--manifest` |
-| `files` | the port set / the wrap closure | `--port-only` `--wrap-only` |
+| `types` | enumerate · introspect · submit | `--fields` `--ops` `--methods` `--field-touchers` `--manifest` `--in-tree` `--out-of-tree` |
+| `symbols` | enumerate · introspect · submit · lifecycle discovery | `--lifetime-for` `--taking` `--calling` `--hops` `--array` `--manifest` `--in-tree` `--out-of-tree` |
+| `files` | the target set / the import closure | `--target-only` `--import-only` |
 | `dag` | closure · layer slice · flattened-cycle twins | `--name` `--layer` `--scc` `--depth` `--loc` |
 
-`--name` filters, `--file` disambiguates a name defined in more than one place, `--port-only` /
-`--wrap-only` narrow any subject, and `--update` is the only writer.
+`--name` filters, `--file` disambiguates a name defined in more than one place, `--target-only` /
+`--import-only` narrow any subject, and `--update` is the only writer. `--in-tree` / `--out-of-tree`
+narrow an enumeration by whether an entry's home is inside the repository: `--import-only
+--out-of-tree` is the permanent FFI floor, `--import-only --in-tree` the remaining port backlog.
 
 `query <subject> --help` is the authority for what each flag means and for the record semantics
 behind it; `--update-help` prints the findings schema `--update` expects, `--schema` the record's
@@ -304,15 +314,16 @@ Four stages, run in this order the first time:
 |---|---|---|
 | `scaffold` | homes each C entity in the `.rs` that carries its `// Wraps:` / `// Replaces:` anchor, via `crates.json` | `--all` `--name` `--create` `--validate` `--file` `--dir` |
 | `bindgen` | composes the `<lib>-sys` FFI crates, partitioning the import surface by owning crate | `--libs` `--reset` |
-| `translate` | emits the wrappers, layer by layer, one agent per batch | `--name` `--file` `--dag-layer` `--transitive` `--skip` `--port-only` `--objective` `--max-syms` `--max-loc` `--max-types` `--min-fields` `--lifetime-for` `--dry-run` · `--model` `--billing` `--parallel` `--parallel-max` `--parallel-policy` `--override-base-prompt` `--no-console` `--no-file-log` |
+| `translate` | emits the wrappers, layer by layer, one agent per batch | `--name` `--file` `--dag-layer` `--transitive` `--skip` `--force` `--objective` `--max-syms` `--max-loc` `--max-types` `--min-fields` `--lifetime-for` `--dry-run` · `--model` `--billing` `--parallel` `--parallel-max` `--parallel-policy` `--override-base-prompt` `--no-override-base-prompt` `--no-console` `--no-file-log` |
 | `audit` | scans the emitted tree for `unsafe`, raw pointers and naked `ffi::`, as JSON on stdout | `--all` `--name` `--crate` `--mod` `--file` `--dir` |
 
 `translate` is the only stage that spawns agents; the other three are deterministic composers.
 
-`--objective wrap\|port\|review` says what to do with a selection, `--transitive` expands each name
-through its dependency closure, and `--max-syms`/`--max-loc` cap per-agent effort so a god object
-cannot blow one context. Start with `--dry-run`: a high-layer seed pulls in a large closure, and the
-plan reports the objective each batch will actually get.
+`--objective wrap\|port\|review` says what to do with a selection; a fourth, `raw`, is set by
+`--lifetime-for` and selects the lifetime tier's discovery arm. `--transitive` expands each name
+through its dependency closure, `--force` schedules items the selection would otherwise drop, and
+`--max-syms`/`--max-loc` cap per-agent effort so a god object cannot blow one context. Start with
+`--dry-run`: a high-layer seed pulls in a large closure.
 
 `<stage> --help` is the authority for what a flag means.
 

@@ -49,7 +49,7 @@ On macOS arm64 the CodeQL bundle needs Rosetta.
 ### 2. Bootstrap `crustify/`
 
 ```bash
-mkdir -p <repo>/crustify
+mkdir -p <repo>/crustify/targets/<target>/logs
 cp specs/gitignore <repo>/crustify/.gitignore
 git -C <repo> checkout -b crustify/<target>
 ```
