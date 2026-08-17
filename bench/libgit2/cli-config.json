@@ -1,0 +1,10 @@
+{
+  "deps": {
+    "crustify": "/opt/crustify-cli",
+    "crustify-prim": "/opt/crustify-prim"
+  },
+  "bins": {
+    "crustify-cli": "/opt/venv/bin/crustify-cli",
+    "crustify-oracle": "/opt/venv/bin/crustify-oracle"
+  }
+}
