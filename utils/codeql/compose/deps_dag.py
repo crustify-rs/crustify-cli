@@ -5,7 +5,7 @@ Builds one scope-agnostic directed graph whose
 nodes are **types** and **all symbols** (functions / macros / globals,
 including a type's lifecycle methods), where ``A -> B`` means "A needs B
 emitted first". Topo-sorted (Tarjan SCC → longest-path layers) it drives both
-the translate stage (wrap-scope subset) and, once it exists, a port stage (the whole graph, in
+the translate stage (import subset) and, once it exists, a port stage (the whole graph, in
 order). See ``docs/WRAP_STAGE_PLAN.md``.
 
 Relationships come straight from the analysis tree:
@@ -223,8 +223,8 @@ def _is_real(entry: dict, key: str = "name") -> bool:
 def _field_ctype_refs(entry: dict, keep_fields: set[str] | None = None) -> set[str]:
     """Type refs from a struct's fields.
 
-    ``keep_fields`` restricts to the named fields — the port-touched subset
-    for a wrap-scope struct, whose other fields are layout bound opaquely and
+    ``keep_fields`` restricts to the named fields — the target-touched subset
+    for an import struct, whose other fields are layout bound opaquely and
     must not order this target's work. None keeps every field (port scope).
     """
     refs: set[str] = set()
@@ -284,31 +284,37 @@ def _collect(analysis_root: Path,
              port_syms: set | None = None,
              port_fields: dict[str, set[str]] | None = None,
              codeql_dir: Path | None = None,
-             in_scope_types: set | None = None):
+             in_scope_types: set | None = None,
+             target_paths: set[str] | None = None,
+             seed_paths: set[str] | None = None):
     """Collect nodes/edges from the analysis tree, narrowed to one target.
 
     The tree is scope-agnostic and ACCUMULATES across targets: an entry that
-    was port-scope for an earlier target keeps the full body-level
+    was target-section for an earlier target keeps the full body-level
     ``depends_on`` it gained then. Building this target's graph from that
     unfiltered tree imports another target's body edges, which deepens the
     layering for work this target never does.
 
     So edges are narrowed per node against THIS target's scope:
 
-      - **port-scope symbol** — every edge. Its body is translated, so its
+      - **target symbol** — every edge. Its body is translated, so its
         callees and field-derived type uses are real dependencies.
-      - **wrap-scope symbol** — signature only. A binding is emitted from the
+      - **import symbol** — signature only. A binding is emitted from the
         signature alone: callee edges are dropped outright, and type edges
         keep only signature/opaque uses (``fields: []``).
-      - **wrap-scope struct** — only fields the port scope actually touches
+      - **import struct** — only fields the port scope actually touches
         (``port_fields``); the rest of the layout is never reached through
         this target and must not order its work.
 
     ``port_syms`` of None disables narrowing (whole-tree graph, the old
-    behaviour) — used by callers with no scope in hand.
+    behaviour) — used by callers with no scope in hand. ``anchor_paths``
+    (`scope.json`'s `wrap.anchors`) exempts a struct DEFINED in one of those
+    files from the wrap-struct field narrowing.
     """
     types: dict[str, TypeNode] = {}
     syms: dict[SymKey, SymNode] = {}
+    target_paths = target_paths or set()
+    seed_paths = seed_paths or set()
 
     tmeta, tedges, tcasts, talias, tgen = (collect_types_csv(codeql_dir) if codeql_dir
                                      else ({}, {}, {}, {}, {}))
@@ -344,7 +350,23 @@ def _collect(analysis_root: Path,
         # is keyed by TAG (it comes from `depends_on.types[].fields`, which
         # names no file), so a colliding tag pools both entities' touched sets
         # -- which can only over-keep a field, never drop one.
-        keep = None if port_fields is None else port_fields.get(tag, set())
+        #
+        # Except when the struct's DEFINITION sits in an anchor file: a visible
+        # definition in a header the config named makes the fields the API, so
+        # every one of them orders real work and the narrowing would drop the
+        # whole layout. Same rule the wrap closure's field-walk applies, for
+        # the same reason -- and load-bearing on a wrap-only target, where an
+        # empty port scope makes `port_fields` empty and would otherwise leave
+        # every wrap struct a dependency leaf.
+        # A struct whose definition is in a file the config NAMED keeps every
+        # field edge: for a target it is the layout being reimplemented, for a
+        # `files.import` seed it is a public value type whose fields ARE the
+        # API. Everything else orders only through what target code touches --
+        # which for a wrap campaign (no target) is nothing, so an opaque handle
+        # correctly orders no work at all.
+        keep = (None if port_fields is None
+                or (df and (df in target_paths or df in seed_paths))
+                else port_fields.get(tag, set()))
         for fname, tname, tdf in tedges.get(key, ()):
             if keep is not None and fname not in keep:
                 continue
@@ -376,7 +398,7 @@ def _collect(analysis_root: Path,
                 n.has_dep = True
                 dep = e["depends_on"] or {}
                 # `depends_on` is only ever emitted for an entry that was
-                # port-scope for SOME target; whether it is port-scope for
+                # target-section for SOME target; whether it is target-section for
                 # THIS one decides how much of it applies.
                 is_port = port_syms is None or key in port_syms
                 for d in dep.get("types") or []:
@@ -426,7 +448,7 @@ def collect_types_csv(codeql_dir: Path):
     ``def_file`` are declaration-only and cannot disagree about identity, so
     they fold into every definition of that name; a name with no definition
     anywhere keeps its lone ``(name, "")`` entity. Same rule as
-    ``wrap_closure.build_type_meta`` -- and deliberately so: two identity
+    ``import_closure.build_type_meta`` -- and deliberately so: two identity
     resolvers that drift are how the first collision survived a fix.
     """
     t1, t2 = codeql_dir / "t1", codeql_dir / "t2"
@@ -504,7 +526,7 @@ def _alias_map(analysis_root: Path, types: dict,
     # bare tag -> entity. A tag naming several entities resolves to the one a
     # foreign TU could actually reach: a struct defined inside a `.c` has no
     # linkage past that TU, so a header definition wins. Same rule as
-    # `wrap_closure.resolve` -- the alternative is picking by CSV order, which
+    # `import_closure.resolve` -- the alternative is picking by CSV order, which
     # is how `ossl_record_layer_st` came to mean the 10-field QUIC struct.
     by_tag: dict[str, list] = collections.defaultdict(list)
     for k in types:
@@ -945,7 +967,7 @@ def _emit_node(nodes, comp):
 def _populate_nfields(codeql_dir: Path, types: dict[str, TypeNode]) -> None:
     """Set each type's ``nfields`` to its **full** struct field count from the
     T1 ``fields.csv`` (``<crustify>/codeql/t1/fields.csv``, a sibling of the
-    analysis tree). This is the whole struct, NOT the port-accessed subset that
+    analysis tree). This is the whole struct, NOT the target-accessed subset that
     ``types.json``'s ``fields[]`` narrows to — a struct's translated surface
     (``define_ctype!`` + accessors) scales with its field layout, so a type's
     own LoC is its field count. fields.csv attributes anonymous-struct fields to
@@ -972,7 +994,7 @@ def _populate_nfields(codeql_dir: Path, types: dict[str, TypeNode]) -> None:
 def port_touched_fields(analysis_root: Path, port_syms: set) -> dict[str, set[str]]:
     """``{type tag: field names the port scope reads}``.
 
-    Derived from the port-scope symbols' own ``depends_on.types[].fields``,
+    Derived from the target-section symbols' own ``depends_on.types[].fields``,
     which is exactly "fields this function accesses" — the same quantity the
     types composer computes transiently as ``focus_by_key`` for the wrapper's
     focus. A type absent from the result is reached only opaquely.
@@ -1006,7 +1028,7 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
         port_syms = set()
         for kind in ("functions", "globals", "macros"):
             try:
-                port_syms |= _scope.load_port_entities(scope_json, kind)
+                port_syms |= _scope.load_entities(scope_json, _scope.TARGET, kind)
             except Exception:
                 pass
         port_fields = port_touched_fields(analysis_root, port_syms)
@@ -1026,7 +1048,7 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
         # `defined_in` to pair with, so it stays name-keyed and the membership
         # test accepts either form.
         in_scope_types = set()
-        for side in ("port", "wrap"):
+        for side in _scope.SECTIONS:
             for e in _sj.get(side, {}).get("types") or []:
                 df = e.get("defined_in")
                 in_scope_types.add((e["name"], df) if df else e["name"])
@@ -1034,7 +1056,11 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
         codeql_dir = Path(analysis_root).parent / "codeql"
     types, syms, talias = _collect(analysis_root, port_syms, port_fields,
                                    codeql_dir=codeql_dir,
-                                   in_scope_types=in_scope_types)
+                                   in_scope_types=in_scope_types,
+                                   target_paths=(_scope.load_target_paths(scope_json)
+                                                 if scope_json is not None else None),
+                                   seed_paths=(_scope.load_seed_paths(scope_json)
+                                               if scope_json is not None else None))
     _populate_nfields(codeql_dir, types)
     # A generator macro is already a symbol node; hang its family off it rather
     # than minting a synthetic type, which would collide with this very node on

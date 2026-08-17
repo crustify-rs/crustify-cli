@@ -49,12 +49,11 @@ produced run-to-run variability (see `docs/PITFALLS.md`
 
 Composers depend on the upstream layers in this order:
 
-1. **`CrustifyFileAnalyzer`** produces
-   `analysis/scope/port/files.json` (port-scope file set + per-file
-   include graph).
+1. **`CrustifyFileAnalyzer`** produces the target's file set + per-file
+   include graph.
 2. **`generate_port_scope.py`** regenerates `port_scope.qll` from
-   `port/files.json` so T2 queries that import it see the correct
-   port path set.
+   `scope.json`'s `target.files` so T2 queries that import it see the
+   correct path set.
 3. **Tier 1 + Tier 2 queries** run via `codeql query run` against
    the CodeQL database. Outputs are BQRS files; decode each to CSV
    via `codeql bqrs decode --format=csv`. The CSVs live in two
@@ -134,10 +133,11 @@ At a glance:
 | `opaque_in` (functions using opaquely) | ✓ | |
 | `fields[].locked_by`            |          | ✓     |
 
-### Wrap-scope inclusion gate
+### Import-section inclusion gate
 
-Composers emit a wrap-scope entry **only when** some port-side site
-reaches it. The reach signal is kind-specific:
+Composers emit an import entry **only when** some target-side site reaches it,
+or -- on a wrap campaign -- when `files.import` declares it. The reach signal is
+kind-specific:
 
 | Kind                   | Reach signal                                                |
 | ---------------------- | ----------------------------------------------------------- |
@@ -194,7 +194,7 @@ performs a `FieldAccess` on T is in `non_opaque_in`, never in
 `opaque_in` — regardless of how many other signature / local /
 cast mentions of T it also has). Verified empirically on the
 openssl-crustify-statem statem partition: zero disjointness
-violations across 73 wrap-scope struct entries.
+violations across 73 import-section struct entries.
 
 The composer's emission of `opaque_in` and `non_opaque_in` is
 **final**. The agent does NOT remove function names from either
@@ -207,7 +207,7 @@ never has to re-derive opaque/non-opaque from raw CSVs.
 
 The TU-bounded kinds `function_static`, `function_inline_tu`, and
 `global_static` are skipped entirely from the wrap manifest by C
-language rules — a port-side call edge to one of those would
+language rules — a target-side call edge to one of those would
 indicate a scope-rule mis-classification, not a real wrap entry.
 
 ## Versioning and the cpp-all API

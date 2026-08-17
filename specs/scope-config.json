@@ -1,0 +1,94 @@
+{
+  "_comment": [
+    "Example crustify/targets/<target>/scope-config.json (user-authored,",
+    "TARGET-tier). One per crustify invocation target. It names the files the",
+    "target covers and in which scope, plus a target-local refinement of what",
+    "is out of scope. Values below illustrate a run scoped to ssl/statem",
+    "inside an openssl checkout; substitute for other projects."
+  ],
+  "_comment_layout": [
+    "All crustify artifacts live under a single `crustify/` directory at the",
+    "repository root (which also marks the root). REPO-ROOT-tier artifacts are",
+    "project-wide: build.json + crates.json (user-authored),",
+    "the stem-grouped analysis tree",
+    "(analysis/<dir>/<stem>/{syms,types}.json), the CodeQL database",
+    "(codeql/{db,t1,t2}/), and the shared Rust crates (rust/<crate>/).",
+    "TARGET-tier artifacts live under crustify/targets/<target>/ and are",
+    "invocation-scoped: this scope-config.json, the derived scope.json, and",
+    "per-run agent logs (logs/<session>/).",
+    "",
+    "The repo root and the target id are CLI positionals",
+    "(`crustify-cli <repo_root> <target> ...`) and this file's own location",
+    "under `crustify/targets/<target>/` records the target. Neither is",
+    "restated here: a second copy can only drift from the invocation."
+  ],
+  "_comment_files": [
+    "The target's file sets, keyed by section. Repo-root-relative, always",
+    "explicit - there is no implicit directory walk. Entries are either:",
+    "  * a FILE      - `include/internal/statem.h`",
+    "  * a DIRECTORY, written with a trailing slash - `ssl/` - which expands",
+    "    to every source/header file beneath it",
+    "`out_of_scope.paths` applies to whatever a directory entry expands to.",
+    "Naming a file the build never compiled is harmless: scope.json is anchored",
+    "on the T1 tables, so uncompiled candidates simply drop out.",
+    "",
+    "THE TWO KEYS ARE MUTUALLY EXCLUSIVE. They pick the campaign:",
+    "",
+    "  `target`  what this target OWNS. Classification is DEFINITION-anchored:",
+    "            an entity is in the target iff its BODY lives in a named file",
+    "            (or, having no body, all its declarations do). Everything those",
+    "            entities REACH but that is not named is derived automatically",
+    "            into the sibling `import` section. Name the implementations AND",
+    "            the headers that define the types - headers outside the target",
+    "            tree are never discovered, and a header-only list would drop",
+    "            every function it merely declares.",
+    "",
+    "  `import`  an API to WRAP, with nothing owned. The target section composes",
+    "            empty and the import section is seeded off these files directly,",
+    "            on DECLARATION-site membership - the right test for a public",
+    "            header, whose declared bodies live in files this campaign does",
+    "            not own. This is how you wrap a whole library.",
+    "",
+    "Everything follows from that choice, with no per-item flag: a struct DEFINED",
+    "in a named file keeps its full field layout (its fields are the API), one",
+    "merely forward-declared stays an opaque handle; an owned symbol orders on its",
+    "body's callees, an imported one only on its signature. So `--transitive` over",
+    "an opaque type pulls the type and nothing else.",
+    "",
+    "Scope says what the target CONTAINS, never what will be done with it: port",
+    "or wrap is the translate stage's objective, chosen per wave by the",
+    "orchestrator. Narrowing to an API SURFACE is a SELECTION concern",
+    "(`translate --file include/openssl/ssl.h`).",
+    "",
+    "Ownership analysis is unaffected either way: ptr_args/ptr_ret come from the",
+    "T2 tables, which cover the whole database regardless of scope."
+  ],
+  "files": {
+    "target": [
+      "ssl/",
+      "include/openssl/ssl.h",
+      "include/internal/statem.h"
+    ]
+  },
+  "_comment_out_of_scope": [
+    "Target-local refinement of what crustify must NOT analyze. `paths` lists",
+    "repo-root-relative paths (directories with trailing `/` recurse; entries",
+    "without are exact-file matches) that the composer skips while expanding",
+    "`files`, even when a directory entry there covers them. Project-wide",
+    "exclusions (e.g. `apps/`, `fuzz/`) are implicit via not being named in",
+    "`files` - list them here only if a directory entry would otherwise pull",
+    "them in. `features` lists macro feature names (typically",
+    "`OPENSSL_NO_<FEATURE>` or equivalent) the user wants treated as",
+    "disabled. NOTE: like `build.json`'s `features` block, this list is",
+    "currently DOCUMENTATION ONLY - no composer reads it. Dead code is",
+    "filtered implicitly instead: scope.json is anchored on the T1 tables, so",
+    "a body elided by a disabled feature contributes no entities and its file",
+    "never appears in `files`."
+  ],
+  "out_of_scope": {
+    "paths": [],
+    "features": [
+      "OPENSSL_NO_DEPRECATED_3_0"
+    ]
+  }
+}

@@ -17,11 +17,25 @@ accessors on the type handles, and safe FFI wrappers for making FFI calls.
 
 ## Scope policy
 
-Wrap-scope types stay layout-compatible with C.
+Every item sits in one of two sections of `scope.json`, decided by
+`scope-config.json`'s `files` — which takes one of two mutually exclusive keys:
 
-Port-scope types initially do too, and get opacified once the C side no longer
-accesses their fields. They also get fully nativized: storage allocation and
-free become owned by Rust.
+- `files.target` names the code this campaign owns. An item is **target-scope**
+  when its body lives in one of those files, or, having no body anywhere, when
+  all its declarations do. Everything target code reaches that is not named
+  there is **import-scope**.
+- `files.import` names an API to wrap, owning nothing. Those files' declarations
+  seed the import section directly, and there is no target scope.
+
+**Import-scope** items stay C's: a safe wrapper over the FFI seam, layout
+compatible, with storage allocation and free still owned by C.
+
+**Target-scope** items are on their way to native Rust. They start
+layout-compatible and wrapped, get opacified once the C side no longer reads
+their fields, and end fully nativized — allocation and free owned by Rust.
+
+The section says which trajectory an item is on; `--objective` says what to do
+with it this wave, and it is handed to you.
 
 Rust consumers use the safe type's API, never raw pointers or `unsafe` blocks.
 
@@ -184,28 +198,29 @@ fully-checked Rust. This is load-bearing - the steps assume it.
 
 ## File contract (file-grained - load-bearing)
 
-The `.rs` module for each target and dependency (types/symbols) is found via the
-`crustify-cli scaffold` command, which reflects the pre-established item placement policy.
+One Rust module per C source file, shared across batches. Find the module for a
+target or a dependency (type / callback / symbol) with `crustify-cli scaffold`,
+which reflects the established placement policy.
 
-Each module is a shared, file-grained module - one Rust module per C source
-file, holding the following anchor kinds:
-- `// Replaces: <C_ITEM>` for port-scope items (functions / globals / types)
-- `// Wraps: <C_ITEM>` for wrap-scope items
-- `// Field: <C_ITEM>.<field>` for the `<C_ITEM>` type's `<field>` accessors
+Each item you own arrives as one todo line, laid in your own worktree:
 
-Each module includes anchors for many elements at once (across batches,
-wrap *and* port). Any one agent owns only the anchors in its workset; the rest
-belong to other batches and the other stage. Each anchor may be followed by
-a `// crustify:todo` placeholder marking remaining work, which gets deleted
-once the target is processed.
+- `// crustify:todo: <C_ITEM>` for a function / global / type
+- `// crustify:todo: <C_ITEM>.<field>` for that type's `<field>` accessor
 
-The per-anchor fill contract:
+A field item is always owner-qualified: a file-grained module holds many types,
+and two of them with a `data` field would otherwise collide on one line.
 
-- a target is located by its `// <Anchor>:` item anchor;
-- an assigned anchor is filled in place, every other left exactly as-is;
-- a filled anchor's `// <Anchor>: <C_ITEM>` line is promoted to a
-  `/// <Anchor>: <C_ITEM>{.<field>}` doc comment on the emitted item, and its
-  `// crustify:todo` is deleted (a surviving todo marks still-pending work).
+The module may also hold `///` anchors filled by earlier waves. Those are done -
+read them for context, never rewrite them.
+
+The fill contract, per item:
+
+- locate the item by its `// crustify:todo: <C_ITEM>{.<field>}` line;
+- REPLACE that line with a doc comment on the item you emit. You pick the verb
+  from what you did: `/// Wraps: <C_ITEM>{.<field>}` for a safe view over the
+  FFI seam, `/// Replaces: <C_ITEM>{.<field>}` for a native Rust translation;
+- the todo line does not survive alongside the doc comment. A surviving
+  `crustify:todo` is the only record that an item is still open.
 
 ## Re-export ported symbols
 

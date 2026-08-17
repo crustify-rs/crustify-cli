@@ -16,7 +16,7 @@ Model
   (:func:`load_type_meta` -> :func:`ordered_ops`).
 * **Unit** — the agent's working set. A named **type** forms a *type-unit* =
   the type + its in-scope ops (ops are scope-filtered: a wrap run bundles the
-  type's wrap-scope ops, a port run its port-scope ops, so the two stages
+  type's import-section ops, a port run its target-section ops, so the two stages
   partition a type's ops and both write its ``<type>.rs`` additively). A named
   **non-type** (free symbol or directly-named op) is atomic.
 * **Blind scheduling** — the scheduler does NOT inspect whether an element has
@@ -82,7 +82,7 @@ def resolve_names(
 
 
 def bare_gate(nodes: list[Node]) -> None:
-    """Refuse to schedule a port-scope symbol left unclassified
+    """Refuse to schedule any symbol left unclassified
     (``kind: null`` → ``subkind == "symbol"``). Moved here from the scaffolder:
     the bare kind only exists in the DAG, never in the fresh composer."""
     bad = sorted({(n.id, n.defined_in or "?") for n in nodes if n.is_bare})
@@ -131,7 +131,7 @@ class Unit:
 
     def label(self) -> str:
         # No field/op counts: `fields` here is the type's DECLARED list, while
-        # the scaffolder anchors only the port-touched subset, so the two
+        # the scaffolder anchors only the target-touched subset, so the two
         # disagree — `evp_keymgmt_st` reported 35 fields against 0 anchors on
         # disk. The agent works from the anchors, so a count taken from
         # anywhere else is at best noise and at worst an instruction to exceed
@@ -261,15 +261,18 @@ def pack(
     first (a lone symbol heavier than ``max_loc`` still gets its own batch — a
     function is never split).
 
-    ``scope_of`` partitions the pool by SCOPE, and unlike ``syms_by_file`` it is
-    not a policy choice. A symbol's objective is derived from its scope -- a
-    wrap-scope symbol gets a safe FFI view, a port-scope one gets translated --
-    and an agent is handed ONE objective for its whole batch, so a batch mixing
-    the two cannot be given a correct one. The default pool is GLOBAL per layer
-    (`None` key), which makes the mixing routine rather than rare: on the libgit2
-    `src` target, layer 0 carries 250 port-scope symbols beside 101 wrap-scope,
-    and layer 1 carries 321 beside 148. Passing ``scope_of`` splits them; leaving
-    it unset keeps the old single-objective behaviour.
+    ``scope_of`` partitions the pool by SECTION. It was once a correctness
+    requirement -- the objective used to be derived per symbol from its scope,
+    so a batch mixing sections could not be handed one correct verb. That
+    derivation is gone: the orchestrator supplies `--objective` and a run
+    carries one verb throughout, so a mixed batch is now perfectly answerable.
+    What remains is LOCALITY: target and import units are different work
+    (native translation versus a view over the seam), and keeping them in
+    separate batches gives an agent a coherent set. The default pool is GLOBAL
+    per layer (`None` key), and the mixing is routine rather than rare: on the
+    libgit2 `src` target, layer 0 carries 250 target symbols beside 101 import,
+    and layer 1 carries 321 beside 148. Passing ``scope_of`` splits them;
+    leaving it unset pools them together.
     Default ``False``: symbols pool by budget alone, so one agent may carry
     symbols from several sources. The defining file is not a write boundary —
     the scaffolder homes symbols by ``crates.json``, several sources routinely
@@ -467,11 +470,9 @@ class Stage:
     # one-type-per-batch behaviour for callers that do not set them.
     max_types: int = 1
     min_fields: int = 0
-    # `Batch -> verb`. The objective the emit seam will ACTUALLY hand this
-    # batch, which is not always `verb`: a symbol batch takes its scope's, so a
-    # wave invoked `wrap` ports its port-scope symbols. Wired by the caller to
-    # the same function the emit seam calls, so `--dry-run` cannot drift from
-    # what runs. Unset = single-objective caller, everything takes `verb`.
+    # `Batch -> verb`. The objective the emit seam will hand this batch. Wired
+    # by the caller to the same function the emit seam calls, so `--dry-run`
+    # cannot drift from what runs. Unset = everything takes `verb`.
     objective_of: Callable[["Batch"], str] | None = None
     shared_artifact_fn: Callable[[], None] | None = None  # serialized post-step
     # Worktree-isolation seam. When wired, EVERY agent runs in its own worktree,
@@ -604,6 +605,48 @@ def run(
     return failures
 
 
+def _place_batch_anchors(b: "Batch", layout, target, stage) -> None:
+    """Lay this batch's `// crustify:todo:` anchors, in ITS worktree.
+
+    Deliberately after the fork, not before. An anchor is a placeholder for work
+    one agent owes, so it belongs on that agent's branch and nowhere else: place
+    them up front in the shared tree and every sibling sees placeholders it is
+    not going to fill, which is both misleading context and a merge conflict
+    waiting on a file two agents now both have a reason to touch. Placed here,
+    the anchor lands on the branch that fills it.
+
+    `review` writes nothing. It re-examines emitted work, so an item with no
+    anchor has nothing to review — creating one would invite an agent to wrap it
+    under an objective that is not `wrap`, which is exactly the confusion the
+    objective split exists to prevent. Such items are reported and skipped.
+
+    A type brings its ACCESSOR anchors, from `_field_map` — the fields TARGET
+    code actually touches, not the declared layout. `Unit.fields` is the
+    declared list and is the wrong set: it is what the batch BUDGET counts, and
+    on an opaque type it would lay placeholders for accessors nobody owes
+    (`bio_st`: 16 declared, 0 touched), which then hold the type open forever.
+    """
+    from crustify.scaffold import place_anchors, _field_map
+    names = [u.node.id for u in b.units]
+    if not names:
+        return
+    review = getattr(stage, "verb", None) == "review"
+    fmap = _field_map(layout, target)
+    fields = {nm: f for nm in names if (f := fmap.get(nm))}
+    n, unanchored = place_anchors(layout, target, names, fields=fields,
+                                  emit=not review)
+    if review and unanchored:
+        print(f"[crustify-cli {stage.verb}] {len(unanchored)} item(s) in this "
+              f"batch have no anchor — nothing emitted to review: "
+              + ", ".join(sorted(unanchored)[:8])
+              + (" …" if len(unanchored) > 8 else ""))
+    elif unanchored:
+        print(f"[crustify-cli {stage.verb}] {len(unanchored)} item(s) have no "
+              f"home in crates.json and were left unanchored: "
+              + ", ".join(sorted(unanchored)[:8])
+              + (" …" if len(unanchored) > 8 else ""))
+
+
 def _isolated_wave(
     by_file: dict[str | None, list[Batch]], stage: Stage,
     parallelize: bool, parallel_max: int,
@@ -692,6 +735,7 @@ def _isolated_wave(
         for j, b in enumerate(chain):
             try:
                 wt = _fork(i0 + j, b)
+                _place_batch_anchors(b, Layout(wt), wt / rel, stage)
                 stage.emit_factory(wt / rel, Layout(wt))(b)   # bound to the worktree
             except BaseException as e:                        # noqa: BLE001
                 # Abort the rest of THIS chain (its later batches are ordered
@@ -758,8 +802,8 @@ def coalesce_waves(
     * a type-unit gets a batch to itself, so any union holding a type and
       anything else packs to >=2 and the run stops there;
     * ``scope_of`` partitions the pool, so a port+wrap union packs to >=2 —
-      which is the case that matters, since a port-scope unit above a
-      wrap-scope one has a real edge to it and co-scheduling would break it;
+      which is the case that matters, since a target-section unit above a
+      import one has a real edge to it and co-scheduling would break it;
     * ``max_syms`` / ``max_loc`` are already the split condition, so an
       oversized union cannot merge.
 
@@ -888,11 +932,9 @@ def schedule(
         return []
 
     if dry_run:
-        # The objective each batch will ACTUALLY be handed. `stage.verb` is the
-        # caller's, and a symbol batch overrides it with its scope's, so a wave
-        # invoked with the default `wrap` runs `port` over its port-scope
-        # symbols. Resolved through `stage.objective_of` — the same function the
-        # emit seam calls — so the plan cannot drift from what runs.
+        # The objective each batch will be handed. Resolved through
+        # `stage.objective_of` — the same function the emit seam calls — so the
+        # plan cannot drift from what runs.
         obj_of = stage.objective_of or (lambda _b: stage.verb)
         verb_of = {(u.node.id, u.node.defined_in): obj_of(b)
                    for b in all_batches for u in b.units}

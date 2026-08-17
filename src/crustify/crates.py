@@ -3,9 +3,9 @@
 ``crates.json`` is the placement oracle: it maps every in-scope C symbol/type
 to the unique Rust ``.rs`` that homes it. It is authored outside crustify — by
 hand, or by an orchestrator — against the layout in
-``templates/crates.json``; this module is the consumer-side read / lookup /
+``specs/crates.json``; this module is the consumer-side read / lookup /
 validate API the ``scaffold`` command uses against it. Schema
-authority: ``templates/crates.json``.
+authority: ``specs/crates.json``.
 
 Shape (eliding ``_comment`` keys)::
 
@@ -28,7 +28,7 @@ entity of an out-of-tree library); ``headers`` are the headers its members are
 declared or defined through. Scalar ``tu`` + plural ``headers`` is what lets a
 same-stem ``foo.c``/``foo.h`` pair be ONE Rust module instead of colliding.
 
-Field meaning: ``docs/schemas/crates.md``. Layout: ``templates/crates.json``.
+Field meaning: ``docs/schemas/crates.md``. Layout: ``specs/crates.json``.
 """
 
 from __future__ import annotations

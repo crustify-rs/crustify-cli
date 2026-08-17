@@ -8,7 +8,7 @@ longer absorbs its ops. The user supplies the dependency order (the DAG is
 what they read to choose it); a confirmation prompt lists first-layer deps.
 
 This module owns only the stage-specific pieces — the selection predicate
-(:func:`_selection_pred`), the wrap-bound-op index (:func:`_wrap_bound_ops`),
+(:func:`_selection_pred`), the lifecycle-op index (:func:`_lifecycle_ops`),
 the bindgen gate, and the emit seam to
 :class:`crustify.agents.translate.TranslateAgent`. Scope (wrap/port) is applied
 **here**, never in the DAG, via the same ``compose.scope`` classifier the
@@ -75,27 +75,41 @@ def _lifetime_by_sym(layout: "Layout") -> dict:
             if r.get("lifetime")}
 
 
-def _wrap_bound_ops(scope_json, entry_pair) -> dict:
-    """``op name -> the WRAP-scope type whose wrapper already binds it``.
+def _lifecycle_ops(entry_pair) -> dict:
+    """``op name -> the type whose wrapper emits it``, or ``None`` when it
+    belongs to no type.
 
-    A wrap-scope type's droppers / disposers / cloners are emitted BY that
-    type's wrapper, as the strategy a `CBox` / `CVec` selects its `CDropped` /
-    `CCloned` on. Scheduling one separately would emit a second, unrelated
-    surface for one C routine — different anchor, possibly different file, and
-    nothing downstream looks for the duplicate.
+    A lifecycle primitive is emitted BY the thing that owns it: a typed
+    dropper / disposer / cloner by its type's wrapper, as the strategy a
+    `CBox` / `CVec` selects its `CDropped` / `CCloned` on; an UNTYPED one
+    (`CRYPTO_free` acts on `void`, `OPENSSL_strdup` on `char *`) by the
+    `--lifetime-for` tier arm. Scheduling either as an ordinary symbol emits a
+    second, unrelated surface for one C routine — different anchor, possibly
+    different file, and nothing downstream looks for the duplicate.
 
-    A PORT-scope type binds nothing: its ops are ordinary symbols that no other
-    stage will take, so they stay schedulable. That asymmetry is the whole rule
-    — it is about who already emits the routine, not about which scope it is in.
+    Section-blind on purpose. Who already emits the routine is the question;
+    which section it sits in does not change the answer, and an untyped
+    primitive has no section-bearing owner to ask in the first place.
+
+    Two sources, because neither alone is complete. The type index catches a
+    typed op and names its owner. The symbols' own ``lifetime`` blocks catch
+    the untyped tiers, which belong to no type's method surface and so never
+    appear in the first — they map to ``None``, and the caller reports them
+    without an owner.
     """
     from crustify.dag import load_type_meta
-    wrap_tags = {e["name"]
-                 for e in ((scope_json.get("wrap") or {}).get("types") or [])}
-    out: dict[str, str] = {}
+    out: dict = {}
     for tag, (_fields, lifecycle) in load_type_meta(entry_pair).items():
-        if tag in wrap_tags:
-            for op in lifecycle:
-                out.setdefault(op, tag)
+        for op in lifecycle:
+            out.setdefault(op, tag)
+    for e in entry_pair[1]:
+        lf = e.get("lifetime")
+        if not isinstance(lf, dict):
+            continue
+        if lf.get("is_dropper") or lf.get("is_disposer") or lf.get("is_cloner"):
+            nm = e.get("name")
+            if nm:
+                out.setdefault(nm, None)
     return out
 
 
@@ -124,14 +138,14 @@ def _translate_eligible_pred(scope_json):
     scope** — port or wrap, type or symbol. Only an out-of-scope entity is
     rejected, by the gate in :func:`translate_types`.
 
-    Scope no longer routes: a port-scope symbol used to be refused as the port
+    Scope no longer routes: a target symbol used to be refused as the port
     stage's, but that stage is retired, so refusing it left the entity with no
     stage at all. Both halves now reach the same type and symbol agents; scope
-    remains a *filter* the caller opts into (`--port-only` / `--wrap-only`),
+    remains a *filter* the caller opts into (`--target-only` / `--import-only`),
     not a gate the stage imposes."""
     from compose import scope
-    is_wrap = scope.in_scope_pred(scope_json, "wrap")
-    is_port = scope.in_scope_pred(scope_json, "port")
+    is_wrap = scope.in_scope_pred(scope_json, scope.IMPORT)
+    is_port = scope.in_scope_pred(scope_json, scope.TARGET)
 
     def pred(n) -> bool:
         return is_wrap(n) or is_port(n)
@@ -147,7 +161,7 @@ def _selection_pred(scope_json, *, files: set[str]):
     two halves merged into one stage: what an agent DOES is the objective, and
     an item's scope is something the agent reads from the oracle to decide how
     to satisfy that objective. A caller who wants to see a layer split by scope
-    asks the oracle (`query dag --layer N --port-only`) and passes the names."""
+    asks the oracle (`query dag --layer N --target-only`) and passes the names."""
     eligible = _translate_eligible_pred(scope_json)
 
     def pred(n) -> bool:  # n: _schedule.Node
@@ -159,35 +173,27 @@ def _selection_pred(scope_json, *, files: set[str]):
 
 
 def batch_objective(batch, objective: str, scope_of=None) -> str:
-    """One objective per batch, because the prompt has one `{objective}`.
+    """The objective a batch is handed: the CALLER's, always.
 
-    A TYPE takes the caller's: a port-scope type is legitimately either
-    wrapped (layout-compatible while C still reads it) or nativized, and
-    which one depends on the opacification burn-down -- live state only the
-    orchestrator tracks.
+    This used to override it for a SYMBOL batch, substituting the unit's scope
+    on the reasoning that "an import symbol can never be ported (it is
+    foreign code) and a target one has no reason to stay wrapped". The
+    first half is false: on the ssl target 1735 of 1805 import-section symbols
+    are first-party code that a later wave will port, not foreign code. The
+    second ignores incremental porting, where a type is legitimately wrapped
+    while C still reads it and nativized once it does not.
 
-    A SYMBOL takes its SCOPE's, and the caller does not get a say: principles.md
-    settles it -- wrap-scope symbols get a safe view over the FFI surface,
-    port-scope ones are translated to native Rust. A wrap-scope symbol can
-    never be ported (it is foreign code) and a port-scope one has no reason
-    to stay wrapped for good, so exposing the choice would only be a way to
-    get it wrong. `_schedule.pack` keys the free-symbol pool by scope so the
-    question has a single answer here.
+    Scope says what the target CONTAINS; the objective says what to DO. Only
+    the orchestrator knows which -- it tracks the opacification burn-down and
+    the wave plan -- so it passes `--objective` and nothing downstream second-
+    guesses it. A run therefore carries one verb: select the units that share
+    an objective, run them, then select the next set.
 
-    `review` crosses both: it is a second visit to emitted work, whatever
-    that work was, so scope has nothing to say about it.
-
-    MODULE-LEVEL, and wired into `Stage.objective_of` as well as the emit seam,
-    so `--dry-run` reports the objective each batch will actually be handed.
-    While this lived inside the emit closure the plan could only print the
-    CALLER's verb, which for a port-scope symbol batch is not what runs: a wave
-    invoked with the default `wrap` showed `About to wrap:` over items the
-    scheduler then ported."""
-    if objective == "review" or not scope_of:
-        return objective
-    if any(u.kind == "type" for u in batch.units):
-        return objective
-    return scope_of(batch.members[0]) if batch.members else objective
+    Kept as a named function (rather than inlined) because `Stage.objective_of`
+    and the emit seam both call it, and `--dry-run` prints what it returns.
+    `scope_of` is accepted and ignored, so the Stage wiring need not change.
+    """
+    return objective
 
 
 def _translate_emit(
@@ -259,7 +265,7 @@ def translate_lifetime_for(
     routines that drop/dispose/clone ``spec`` and submits their `lifetime`
     blocks through the oracle, reading back with ``query symbols
     --lifetime-for <spec>`` whatever already exists. Candidates are collected
-    codebase-wide, wrap- and port-scope alike, because a primitive is a
+    codebase-wide, import- and target-section alike, because a primitive is a
     primitive wherever it is defined.
 
     What the blocks then BUY — the strategy ZST plus the smart-pointer
@@ -281,7 +287,7 @@ def translate_lifetime_for(
     a job the type wrapper owns, and land it in the wrong module.
 
     The ordinary scope-only analysis tree is the right input: the agent's
-    candidate set is wrap-scope by instruction
+    candidate set is import-section by instruction
     (`prompts/symbols.md`), so a primitive the target never
     reaches is not a gap.
     """
@@ -326,14 +332,34 @@ def translate_lifetime_for(
 
 #: `// Wraps: <name>` / `// Replaces: <name>`, at any comment depth and with an
 #: optional trailing gloss the wrapper may have added.
-_ANCHOR_RE = _re.compile(r"^\s*//+\s*(?:Wraps|Replaces):\s*([A-Za-z_]\w*)")
-#: `// Field: <owner>.<field>` — the per-accessor placeholder, OWNER-QUALIFIED
+#:
+#: `(?![\w.])` terminates the name: an ACCESSOR anchor is `<owner>.<field>`, so
+#: without it `/// Wraps: ssl_st.sess` reads as the anchor of `ssl_st` itself —
+#: and since nothing sits below a filled accessor, the owning type would be
+#: reported already-wrapped off one of its fields. `_FIELD_RE` owns that line.
+_ANCHOR_RE = _re.compile(
+    r"^\s*(?://+\s*(?:Wraps|Replaces):\s*([A-Za-z_]\w*)(?![\w.])"
+    r"|//\s*crustify:todo:\s*([A-Za-z_]\w*)(?![\w.]))")
+#: `<owner>.<field>` — the per-accessor anchor, OWNER-QUALIFIED
 #: (`prompts/principles.md`). Both halves are captured: the owner disambiguates a
 #: module that homes several types (37 of 75 in the openssl tree) which share
 #: field names, and the field half stays dotted for a flattened anonymous
 #: member (`ssl_session_st` . `ext.hostname`) — a C tag carries no dot, so the
 #: split is on the FIRST one.
-_FIELD_RE = _re.compile(r"^\s*//+\s*Field:\s*([A-Za-z_]\w*)\.(\S+)")
+#:
+#: Three spellings, because a tree spans conventions: the neutral placeholder
+#: (`// crustify:todo: T.f`, groups 3/4 — the line IS the placeholder), the verb
+#: an agent fills it with (`/// Wraps: T.f`), and the `// Field:` two-line shape
+#: a pre-neutral scaffold laid, whose placeholder sits BELOW it.
+_FIELD_RE = _re.compile(
+    r"^\s*(?://+\s*(?:Field|Wraps|Replaces):\s*([A-Za-z_]\w*)\.(\S+)"
+    r"|//\s*crustify:todo:\s*([A-Za-z_]\w*)\.(\S+))")
+#: The BARE legacy placeholder — the whole line, no name. It is what a
+#: pre-neutral scaffold laid under an unfilled `// Wraps: <name>`, and the only
+#: thing the two-line reader is allowed to accept below an anchor. A NAMED todo
+#: line belongs to its own item: `crustify:todo` as a substring would let the
+#: next item's placeholder, two lines down, hold this one open forever.
+_BARE_TODO_RE = _re.compile(r"^\s*//+\s*crustify:todo\s*$")
 
 
 def _closure_names(seeds: list[str], by_key, by_name, keep) -> list[str]:
@@ -344,7 +370,7 @@ def _closure_names(seeds: list[str], by_key, by_name, keep) -> list[str]:
     via a symbol is still collected (nothing in `ssl/` names `evp_rand_ctx_st`,
     but `RAND_bytes_ex` traffics in it) -- a types-only walk misses those, which
     is the whole reason a hand-written name list keeps coming up short. What is
-    KEPT is narrowed by `keep`, so a port-scope dep is traversed but never
+    KEPT is narrowed by `keep`, so a target dep is traversed but never
     scheduled: wrap must not take one (the scope gate below would refuse it)."""
     out, seen = [], set()
     stack = list(seeds)
@@ -365,10 +391,12 @@ def _closure_names(seeds: list[str], by_key, by_name, keep) -> list[str]:
 def _pending_names(names: list[str], layout, target: Path) -> tuple[list[str], list[str]]:
     """Split into (pending, already-wrapped) on the per-item `crustify:todo`.
 
-    `scaffold` lays every item as ``// Wraps: <name>`` followed by a
-    ``// crustify:todo`` placeholder; the wrapper deletes the placeholder when
-    it fills the item, so a SURVIVING one is the on-disk record that the item
-    is still open. Cheaper and more honest than tracking state elsewhere: it
+    `scaffold` lays every item as one ``// crustify:todo: <name>`` line; the
+    wrapper replaces it with a ``/// Wraps:`` or ``/// Replaces:`` doc comment
+    naming what it did, so a SURVIVING todo is the on-disk record that the item
+    is still open. (A tree scaffolded before the neutral anchor carries the
+    older two-line ``// Wraps: <name>`` + bare ``// crustify:todo`` shape; the
+    same test reads both, since it keys on the todo token.) Cheaper and more honest than tracking state elsewhere: it
     lives next to the code it describes and cannot drift from it."""
     from crustify import crates as _crates
     from crustify.scaffold import _TODO, _entries_for_names
@@ -400,9 +428,16 @@ def _pending_names(names: list[str], layout, target: Path) -> tuple[list[str], l
             hit = False
             for i, ln in enumerate(lines):
                 m = _ANCHOR_RE.match(ln)
-                if m and m.group(1) == nm:
+                # group(1) = a verbed anchor (`// Wraps:` / `/// Replaces:`),
+                # group(2) = the neutral `// crustify:todo: <name>`.
+                neutral = m.group(2) if m else None
+                if m and (m.group(1) or neutral) == nm:
                     hit = True
-                    if any(_TODO in l for l in lines[i + 1:i + 3]):
+                    # In the neutral form the anchor line IS the placeholder, so
+                    # matching it at all means the item is still open. In the
+                    # older two-line form the placeholder sits BELOW.
+                    if neutral or any(_BARE_TODO_RE.match(l)
+                                      for l in lines[i + 1:i + 3]):
                         open_ = True
                     break
             if not hit:
@@ -412,11 +447,11 @@ def _pending_names(names: list[str], layout, target: Path) -> tuple[list[str], l
             #
             # The ANCHOR'S EXISTENCE is the authorization -- no scope query
             # here. The scaffolder lays a `// Field:` anchor only for a field
-            # port-scope code touches, so every anchor present is one the
-            # wrapper owes. This used to intersect with a port-scope field set
+            # target code touches, so every anchor present is one the
+            # wrapper owes. This used to intersect with a target field set
             # because the scaffolder anchored every DECLARED field, and without
             # that filter an opaque type (`evp_pkey_st`: 21 anchors, 0
-            # port-scope) stayed pending forever on placeholders nobody would
+            # target-section) stayed pending forever on placeholders nobody would
             # fill. Narrowing emission removed the reason for it.
             #
             # Matching is OWNER-QUALIFIED: `f.group(1) == nm` keeps a sibling
@@ -426,8 +461,12 @@ def _pending_names(names: list[str], layout, target: Path) -> tuple[list[str], l
             if not open_:
                 for i, ln in enumerate(lines):
                     f = _FIELD_RE.match(ln)
-                    if (f and f.group(1) == nm
-                            and any(_TODO in l for l in lines[i + 1:i + 3])):
+                    if not f or (f.group(1) or f.group(3)) != nm:
+                        continue
+                    # Neutral form: the anchor line IS the placeholder. Verbed
+                    # or `// Field:`: the placeholder sits below, if at all.
+                    if f.group(3) or any(_BARE_TODO_RE.match(l)
+                                         for l in lines[i + 1:i + 3]):
                         open_ = True
                         break
         (pending if open_ else done).append(nm)
@@ -451,6 +490,7 @@ def translate_types(
     max_types: int | None = None,
     min_fields: int | None = None,
     dry_run: bool = False,
+    force: bool = False,
     emit_fn=None,
 ) -> None:
     """Translate the selected in-scope units via the ``--name`` scheduler.
@@ -492,24 +532,19 @@ def translate_types(
 
     entry_pair = (_manifests.entries(layout, target, "types", stage="wrap"),
                   _manifests.entries(layout, target, "symbols", stage="wrap"))
-    # Ops a wrap-scope type's own wrapper already emits — never scheduled
-    # separately. See :func:`_wrap_bound_ops`.
-    bound_ops = _wrap_bound_ops(scope_json, entry_pair)
+    # Ops an import type's own wrapper already emits — never scheduled
+    # separately. See :func:`_lifecycle_ops`.
+    bound_ops = _lifecycle_ops(entry_pair)
 
     sel_names = list(names or [])
     if dag_layer is not None:
         # e2e driver mode: EVERY in-scope unit at dag layer N — types (any
-        # in-scope) and wrap-scope free syms, minus macros and lifecycle
-        # primitives.
+        # in-scope) and free syms from either section, minus macros.
         #
-        # The primitive filter reads the `lifetime` blocks directly rather than
-        # the composer's folded-op set. The fold is derived from those same
-        # blocks, but the WRAP AGENT is what submits them: before a type is
-        # wrapped its ops carry no role, so the fold is empty exactly when the
-        # scheduler needs it and complete only afterwards. Reading the blocks at
-        # selection time has no such ordering problem, and catches the untyped
-        # tiers too (`CRYPTO_free` acts on `void`, so it belongs to no type's
-        # method surface and the fold never held it).
+        # Lifecycle primitives are NOT filtered here. They meet the same gate a
+        # named one does, below, which warns and names each — a layer sweep
+        # otherwise drops a hundred units without a word, and `--force` reads as
+        # having done nothing.
         #
         # `base_in_scope`, not the bare eligibility predicate: it carries the
         # `--file` narrowing.
@@ -517,8 +552,7 @@ def translate_types(
             n.id for n in by_key.values()
             if n.layer == dag_layer and base_in_scope(n)
             and not (n.node_kind == "symbol"
-                     and ((n.subkind or "").startswith("macro")
-                          or n.id in bound_ops))})
+                     and (n.subkind or "").startswith("macro"))})
     if transitive:
         _before = len(sel_names)
         sel_names = _closure_names(sel_names, by_key, by_name, base_in_scope)
@@ -538,10 +572,19 @@ def translate_types(
     # C-side readers are now gone. Only the default `wrap` objective filters
     # to items whose `// crustify:todo` placeholder still survives.
     if objective == "wrap":
-        sel_names, _done = _pending_names(sel_names, layout, target)
-        if _done:
-            print(f"[crustify-cli translate] skipping {len(_done)} already-wrapped "
-                  f"item(s); --objective review|port to act on them: "
+        _pending, _done = _pending_names(sel_names, layout, target)
+        if _done and not force:
+            sel_names = _pending
+            print(f"[crustify-cli translate] {len(_done)} selected item(s) already "
+                  f"have a FILLED anchor and were dropped — re-running an agent "
+                  f"over finished work usually means the selection was wrong. "
+                  f"--force re-schedules them, --skip drops them silently, "
+                  f"--objective review|port acts on them deliberately: "
+                  f"{', '.join(sorted(_done)[:8])}"
+                  + (" …" if len(_done) > 8 else ""))
+        elif _done:
+            print(f"[crustify-cli translate] --force: re-scheduling {len(_done)} "
+                  f"item(s) whose anchor is already filled: "
                   f"{', '.join(sorted(_done)[:8])}"
                   + (" …" if len(_done) > 8 else ""))
     if not sel_names:
@@ -593,24 +636,29 @@ def translate_types(
              if not _is_macro(n)}
     bad_oos = sorted(i for i, n in loose.items() if not in_scope(n))
     named_bound = sorted({i for i in loose if i in bound_ops})
-    if named_bound:
-        listing = "\n".join(f"  - {i}  (bound by `{bound_ops[i]}`)"
-                            for i in named_bound)
-        raise SystemExit(
-            f"translate: {len(named_bound)} selected symbol"
-            f"{'' if len(named_bound) == 1 else 's'} "
-            f"{'is' if len(named_bound) == 1 else 'are'} a lifecycle op of a "
-            f"WRAP-scope type — its wrapper emits it as the CDropped/CCloned "
-            f"strategy, so wrapping it here would be a second surface for one "
-            f"C routine:\n{listing}\n"
-            f"  Wrap the owning type instead. A PORT-scope type's ops carry no "
-            f"such binding and schedule normally.")
+    if named_bound and not force:
+        listing = "\n".join(
+            f"  - {i}" + (f"  (emitted by `{bound_ops[i]}`'s wrapper)"
+                          if bound_ops[i] else "  (untyped tier primitive)")
+            for i in named_bound)
+        print(f"[crustify-cli translate] dropped {len(named_bound)} lifecycle "
+              f"primitive(s): each is already emitted by its owner — a typed op "
+              f"by its type's wrapper, an untyped one by the `--lifetime-for` "
+              f"arm — so scheduling it here would be a second surface for one C "
+              f"routine. Wrap the owning type, or run the tier. --force "
+              f"schedules them anyway; --skip drops them silently:\n{listing}")
+        sel_names = [n for n in sel_names if n not in set(named_bound)]
+    elif named_bound:
+        print(f"[crustify-cli translate] --force: scheduling "
+              f"{len(named_bound)} lifecycle primitive(s): "
+              + ", ".join(named_bound[:8])
+              + (" …" if len(named_bound) > 8 else ""))
     if bad_oos:
         listing = "\n".join(f"  - {i}" for i in bad_oos)
         raise SystemExit(
             f"wrap: {len(bad_oos)} selected "
             f"{'entity is' if len(bad_oos)==1 else 'entities are'} out of scope "
-            f"(neither wrap- nor port-scope):\n{listing}")
+            f"(in neither the target nor the import section):\n{listing}")
 
     # Bindgen gate for the libraries actually being wrapped. A selected unit's
     # owning library is its crate in crates.json (crate name == link unit);
@@ -626,14 +674,15 @@ def translate_types(
     _check_bindgen(layout, target,
                    {lib for n in sel_nodes if (lib := _lib_of(n))})
 
-    # `Node -> "wrap" | "port"`, for the free-symbol pool key and the emit
-    # seam's objective. Wrap wins a tie: the one entity in this target that is
-    # in BOTH closures (`git_transport_cb`, a wrap-closure callback declared in
-    # the port header include/git2/transport.h) is reached through a
-    # function-pointer field, which is wrap work.
-    _is_wrap = scope.in_scope_pred(scope_json, "wrap")
+    # `Node -> scope.IMPORT | scope.TARGET`, the free-symbol pool key. Batching
+    # locality only -- it no longer picks an objective (see `batch_objective`).
+    # IMPORT wins a tie: the one entity in this target that is in BOTH sections
+    # (`git_transport_cb`, an import-side callback declared in the target header
+    # include/git2/transport.h) is reached through a function-pointer field,
+    # which is seam work.
+    _is_import = scope.in_scope_pred(scope_json, scope.IMPORT)
     def scope_of(n) -> str:
-        return "wrap" if _is_wrap(n) else "port"
+        return scope.IMPORT if _is_import(n) else scope.TARGET
 
     # Worktree isolation engages whenever the production emit is in play (a
     # caller-supplied emit_fn, e.g. a test double, opts out).

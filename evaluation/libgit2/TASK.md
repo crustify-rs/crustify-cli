@@ -3,7 +3,7 @@
 The user has chosen the following configuration:
 
 target repo: `https://github.com/libgit2/libgit2.git`, commit ddf3b5c85d86a389330b1d1dd90f08f60ae05fe4
-port-scope target: the whole `src/` dir of libgit2
+target: the whole `src/` dir of libgit2
 max-syms: default
 max-loc: default
 max-types: 1
@@ -26,20 +26,20 @@ Playbook toolchain is already installed.
 Three waves, in this order. Each is `--objective wrap`. Report the plan from
 `--dry-run` and wait for approval before spending on any of them.
 
-**1. The type wrap-closure.** Every wrap-scope type and callback, bottom-up by
+**1. The type wrap-closure.** Every import type and callback, bottom-up by
 its own wrap DAG layer:
 
 ```
-crustify-oracle /work/libgit2 src query types --wrap-only
-crustify-oracle /work/libgit2 src query dag --layer <L> --wrap-only
+crustify-oracle /work/libgit2 src query types --import-only
+crustify-oracle /work/libgit2 src query dag --layer <L> --import-only
 ```
 
 Wave one layer at a time, lowest first, using `--name`.
 
-**2. The wrap-scope symbols the port scope needs at port layers 0–2.** The
-functions and globals port-scope code calls but does not own. Select by `--name`.
+**2. The import symbols the target needs at layers 0–2.** The
+functions and globals target code calls but does not own. Select by `--name`.
 
-**3. The god objects.** The three port-scope types with more than 25 declared
+**3. The god objects.** The three target types with more than 25 declared
 fields, and their transitive closure:
 
 ```

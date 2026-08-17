@@ -1,0 +1,60 @@
+{
+  "_comment": [
+    "TARGET-tier scope definition for a WRAP-ONLY campaign over libxml2",
+    "v2.15.3. There is no port scope: nothing is translated to native Rust.",
+    "The deliverable is a safe Rust wrapper over the whole published C API,",
+    "so the target is defined by the headers that publish it."
+  ],
+  "_comment_files": [
+    "A WRAP campaign: `files.import` names the API to wrap, and there is no",
+    "target. The two keys are mutually exclusive - `target` names what this",
+    "target OWNS (imports are then derived from it), `import` names an API to",
+    "wrap (nothing is owned).",
+    "",
+    "Seeding off the public headers is what makes this expressible. Entity",
+    "classification is DEFINITION-anchored, so naming these headers under",
+    "`files.target` would admit only what they DEFINE - inline functions,",
+    "macros, value structs - and drop every function they merely DECLARE, whose",
+    "body sits in a root .c. As an IMPORT seed the test is declaration-site",
+    "membership instead, which is the right question for a public header: the",
+    "bodies live in files this campaign does not own, and 'does target code",
+    "reach it' has no answer when there is no target code.",
+    "",
+    "Consequences that fall out, with no objective flag anywhere: a struct",
+    "DEFINED in one of these headers keeps its full field layout (its fields",
+    "are the API), one merely forward-declared stays an opaque handle, symbols",
+    "order on their signatures rather than their bodies, and --transitive over",
+    "an opaque type pulls nothing it does not need.",
+    "",
+    "Ownership analysis is unaffected: ptr_args/ptr_ret come from the T2",
+    "tables, which cover the whole database regardless of scope, so the real",
+    "bodies are still what free/store behaviour is read from.",
+    "",
+    "45 headers, 1416 XMLPUBFUN declarations at this tag."
+  ],
+  "files": {
+    "import": [
+      "include/libxml/"
+    ]
+  },
+  "_comment_out_of_scope": [
+    "`paths` is empty: `files.import` names only include/libxml/, so the test",
+    "harness, fuzzers, Python bindings and examples are outside it by",
+    "construction and never enter.",
+    "",
+    "`features` is documentation only - no composer reads it. It lists the",
+    "LIBXML2_WITH_* options OFF in the configure line recorded in build.json."
+  ],
+  "out_of_scope": {
+    "paths": [],
+    "features": [
+      "LIBXML2_WITH_HTTP",
+      "LIBXML2_WITH_ICU",
+      "LIBXML2_WITH_LEGACY",
+      "LIBXML2_WITH_PYTHON",
+      "LIBXML2_WITH_READLINE",
+      "LIBXML2_WITH_TLS",
+      "LIBXML2_WITH_DOCS"
+    ]
+  }
+}

@@ -8,7 +8,7 @@ from crustify.agentlog import AgentLog, open_agent_log
 from crustify.artifact_store import ArtifactStore
 from crustify.layout import Layout
 
-# Package root — used to locate prompts/ and templates/.
+# Package root — used to locate prompts/.
 _PKG_ROOT = Path(__file__).parent.parent
 
 
@@ -268,9 +268,6 @@ class CrustifyAgent:
         from crustify import config as _cfg
         return {"target": self.target_rel, "repo_root": str(self.repo_root),
                 "git_base": _cfg.SESSION_BASE}
-
-    def _template(self, name: str) -> str:
-        return (_PKG_ROOT.parent / "templates" / name).read_text()
 
     def _repo_config(self) -> dict:
         """Repo-wide crustify config (``crustify/cli-config.json``): dep paths and

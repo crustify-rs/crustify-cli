@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Regenerate utils/codeql/port_scope.qll from a target's scope.json.
 
-Reads the target's port-scope file list (``scope.json``'s
-``port.files``, emitted by ``compose.scope_manifest``) and emits a
+Reads the target's file list (``scope.json``'s
+``target.files``, emitted by ``compose.scope_manifest``) and emits a
 CodeQL library file with the path set inlined as a string predicate.
 The library exports:
 
   - ``portFile(File f)`` — predicate that holds when ``f``'s
-    repository-relative path is in the port-scope set.
+    repository-relative path is in the target set.
   - ``portPath(string p)`` — predicate that holds when ``p`` (a
-    repository-relative path string) is in the port-scope set. Used
+    repository-relative path string) is in the target set. Used
     by callers that have a path string rather than a File entity.
 
 Usage:
@@ -35,9 +35,9 @@ from pathlib import Path
 
 
 def collect_port_paths(scope_json: Path) -> list[str]:
-    """Read scope.json's `port.files` and return the sorted unique path
-    list. Schema (v2): ``{"port": {"files": ["a/b.c", ...], ...}}`` —
-    mirrors ``compose.scope.load_port_paths``. Defensively also accepts
+    """Read scope.json's `target.files` and return the sorted unique path
+    list. Schema: ``{"target": {"files": ["a/b.c", ...], ...}}`` —
+    mirrors ``compose.scope.load_target_paths``. Defensively also accepts
     a list of ``{"path": ...}`` entries or bare strings under `files`."""
     data = json.loads(scope_json.read_text())
     port = data.get("port", {}) if isinstance(data, dict) else {}
@@ -61,11 +61,11 @@ def render_qll(paths: list[str]) -> str:
  * Regenerate with:
  *   python3 utils/codeql/generate_port_scope.py <target>
  *
- * Source of truth: the target's scope.json (its port.files)
+ * Source of truth: the target's scope.json (its target.files)
  *
  * Exports:
- *   - portFile(File f)   — f's relative path is in the port-scope set.
- *   - portPath(string p) — p is in the port-scope set.
+ *   - portFile(File f)   — f's relative path is in the target set.
+ *   - portPath(string p) — p is in the target set.
  *
  * Consumed by every query in utils/codeql/ that needs scope
  * partitioning. The path set is inlined here so queries are
@@ -117,7 +117,7 @@ def main() -> None:
     scope_json = args.scope_json
     if not scope_json.exists():
         print(f"error: {scope_json} not found. Run "
-              f"`crustify <repo> <target> analyze scope --port-only` first.",
+              f"the scope composer first (`crustify.scope.build`).",
               file=sys.stderr)
         sys.exit(1)
 
@@ -129,7 +129,7 @@ def main() -> None:
     output = render_qll(paths)
     target_qll = Path(__file__).parent / "port_scope.qll"
     target_qll.write_text(output)
-    print(f"wrote {target_qll} — {len(paths)} port-scope paths inlined")
+    print(f"wrote {target_qll} — {len(paths)} target-section paths inlined")
 
 
 if __name__ == "__main__":

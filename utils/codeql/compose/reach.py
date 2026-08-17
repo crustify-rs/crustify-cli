@@ -14,11 +14,11 @@ The reach problem decomposes into one rollup per edge kind:
 Each rollup needs to answer two kinds of question:
 
   - "For this WRAP entity, which PORT-SIDE sites reach it?"
-    → drives wrap-scope manifest inclusion + `called_by`/`ref`
+    → drives import-section manifest inclusion + `called_by`/`ref`
       population on wrap entries.
   - "For this PORT entity, which sites (port + wrap) reach it,
     and what does it itself reach?"
-    → drives port-scope manifest's `called_by` (inverse) +
+    → drives target-section manifest's `called_by` (inverse) +
       `depends_on` (forward).
 
 The class builds all indexes up front from the T2 CSVs, then exposes
@@ -319,7 +319,7 @@ class Reach:
         # `depends_on.syms` exactly like `callees_of` — a callback reached
         # through a struct field is named nowhere else in the invoker's record
         # (its `ptr_args` renders the pointee as `"(routine)"`, and the owning
-        # struct's `fields[]` is only the port-accessed subset).
+        # struct's `fields[]` is only the target-accessed subset).
         self._cb_invoked: dict[tuple[str, str], set[str]] = defaultdict(set)
         if not path.exists():
             return
@@ -337,8 +337,8 @@ class Reach:
 
     def port_callers_of(self, callee_name: str, callee_def_file: str) -> set[str]:
         """Port-side function names that CALL the given function.
-        Used to populate `called_by.call` for wrap-scope and
-        port-scope function entries alike.
+        Used to populate `called_by.call` for import-section and
+        target function entries alike.
         """
         return {
             caller for caller, caller_file in self._fc_inverse.get((callee_name, callee_def_file), set())
@@ -347,7 +347,7 @@ class Reach:
 
     def all_callers_of(self, callee_name: str, callee_def_file: str) -> set[str]:
         """Any-scope function names that CALL the given function.
-        Used by port-scope `called_by.call` since the port manifest
+        Used by target-section `called_by.call` since the port manifest
         is an inventory — callers may be port or wrap.
         """
         return {caller for caller, _ in self._fc_inverse.get((callee_name, callee_def_file), set())}
@@ -375,7 +375,7 @@ class Reach:
 
     def is_function_port_reachable(self, callee_name: str, callee_def_file: str) -> bool:
         """True iff this function is called OR addr-taken from any
-        port-side site. Wrap manifest inclusion gate for functions.
+        target-side site. Wrap manifest inclusion gate for functions.
         """
         if self.port_callers_of(callee_name, callee_def_file):
             return True
@@ -451,7 +451,7 @@ class Reach:
 
         Both keep the same shape — the inverse lookup is what
         `types_manifest.py` uses to ask "which (struct, field) pairs
-        carry type T?", joined against port-side field_accesses.
+        carry type T?", joined against target-side field_accesses.
         """
         self._ftu_forward: dict[tuple[str, str, str], set[tuple[str, str, str]]] = defaultdict(set)
         self._ftu_inverse: dict[tuple[str, str], set[tuple[str, str, str]]] = defaultdict(set)
@@ -482,17 +482,17 @@ class Reach:
     ) -> set[tuple[str, str, str]]:
         """Inverse: (struct, field) entries whose type references the
         given user type. Drives the field-driven port-reachability
-        gate — joined against port-side `field_accesses` to find
-        types transitively reached via a port-touched field.
+        gate — joined against target-side `field_accesses` to find
+        types transitively reached via a target-touched field.
         """
         return set(self._ftu_inverse.get((type_name, type_def_file), set()))
 
     def port_touched_fields(self) -> set[tuple[str, str, str]]:
-        """Every (struct, field) tuple that ANY port-side field
+        """Every (struct, field) tuple that ANY target-side field
         access references. Built lazily from the existing
         field_accesses index — no separate CSV needed. Used by the
         composer's `_wrap_port_reachable` to enumerate
-        port-touched fields for the field-type join.
+        target-touched fields for the field-type join.
         """
         if not hasattr(self, "_port_field_cache"):
             self._port_field_cache: set[tuple[str, str, str]] = set()
@@ -542,7 +542,7 @@ class Reach:
         return set(self._gtu_inverse.get((type_name, type_def_file), set()))
 
     def port_accessed_globals(self) -> set[tuple[str, str]]:
-        """Every (global_name, global_def_file) that any port-side
+        """Every (global_name, global_def_file) that any target-side
         access touches. Built lazily from the existing
         global_accesses index. Drives scenario 7 of the reach
         ruleset.
@@ -627,7 +627,7 @@ class Reach:
             lookup (`field_type_of`).
           - `(struct, def_file) → [(field, field_type, is_scalar, ptr_depth)]`
             ordered list of ALL declared fields (`struct_fields`),
-            used to compose the full layout for port-scope types.
+            used to compose the full layout for target types.
 
         `is_scalar` is parsed to bool at load time; `ptr_depth` to int
         (0 when the column is absent — a pre-`ptr_depth` extraction). The list preserves
@@ -667,8 +667,8 @@ class Reach:
         `(field_name, field_type, is_scalar, ptr_depth)` tuples. Empty when the
         struct isn't in fields.csv (no full-body definition, or
         anonymous declaring type). Used to compose the full field
-        layout for port-scope types (vs the access-narrowed subset
-        used for wrap-scope types).
+        layout for target types (vs the access-narrowed subset
+        used for import types).
         """
         return list(self._struct_field_list.get((struct_name, struct_def_file), []))
 

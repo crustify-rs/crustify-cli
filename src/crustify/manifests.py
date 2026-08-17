@@ -97,7 +97,7 @@ def analysis_state(entry: dict, kind: str, submitted: bool,
 
     `pending` lists the pointer slots carrying no ownership block — the
     entity's remaining work. ``keep`` narrows it to a field-name set, so under
-    `--port-only` / `--wrap-only` it counts only the fields that scope's code
+    `--target-only` / `--import-only` it counts only the fields that section's code
     touches and agrees with what `--fields` shows.
     """
     pending: list[str] = []

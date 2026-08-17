@@ -5,8 +5,8 @@ Mirrors `syms_manifest.py`'s seed + closure model, adapted to types:
   - **Port-scope types** (`defined_in ∈ scope.json`) are the porting
     subjects → **extended schema**: full declared-field layout. They
     will be rewritten as native Rust types.
-  - **Wrap-scope types** (reached by port code) get the **base
-    schema** with `fields[]` **narrowed to the port-accessed subset**
+  - **Import types** (reached by target code) get the **base
+    schema** with `fields[]` **narrowed to the target-accessed subset**
     (the FFI surface).
 
 Every struct entry (port and wrap) carries two consumer footprints,
@@ -40,7 +40,7 @@ a null skeleton. Composer fills name / type / ref / array; the type
 agent fills ops / lifecycle / placement (unchanged) plus every `ptr`
 block.
 
-Closure (seed mode): port-scope type seeds pull the transitive set of
+Closure (seed mode): target type seeds pull the transitive set of
 types referenced by their non-scalar fields (cycle-safe). Filter mode
 (`--scope`, no seed flags): emit all port types + all wrap types
 passing the 7-scenario reach gate.
@@ -263,7 +263,7 @@ def _compose_fields_full(
 def _port_touched_field_names(
     reach: Reach, struct_name: str, struct_def_file: str,
 ) -> list[str]:
-    """The field names port-scope code actually reaches into — the
+    """The field names target code actually reaches into — the
     deterministic per-target analysis surface handed to the type agent
     via `focus.fields`. Transient (target-specific): never persisted to
     the scope-agnostic manifest."""
@@ -281,7 +281,7 @@ def _compose_fields_wrap(
     reach: Reach, struct_name: str, struct_def_file: str,
     *, port_only: bool = True, by_name: dict[str, dict] | None = None,
 ) -> list[dict[str, Any]]:
-    """Access-narrowed field set for a wrap-scope type — only the
+    """Access-narrowed field set for an import type — only the
     fields some (port, when `port_only`) symbol actually reaches into.
     This is the FFI surface.
     """
@@ -334,8 +334,8 @@ def _type_consumers(
     op signal; opaque = lifecycle/forwarder candidates).
 
     `in_scope` (when not None) restricts both footprints to the
-    admitted symbol universe (port-defined ∪ port-reachable). Applied
-    for **wrap-scope** types, whose only relevant consumers are the
+    admitted symbol universe (port-defined ∪ target-reachable). Applied
+    for **import-section** types, whose only relevant consumers are the
     ones the port reaches. **Port-scope** types pass `in_scope=None` to
     keep the full cross-codebase footprint — required for ABI/layout
     completeness and to retain out-of-scope lifecycle ops (a wrap-side
@@ -421,37 +421,38 @@ def _type_keys_for(name: str, def_file: str, by_name: dict[str, dict]) -> list[t
     return keys
 
 
-def _wrap_port_reachable(
+def _import_reachable(
     reach: Reach, struct_name: str, struct_def_file: str,
-    by_name: dict[str, dict], port_paths: set[str],
+    by_name: dict[str, dict], target_paths: set[str],
 ) -> bool:
-    """7-scenario reach gate — a wrap type is included iff any fires."""
+    """7-scenario reach gate — an out-of-target type is included iff any
+    fires, i.e. iff the target actually touches it."""
     type_keys = _type_keys_for(struct_name, struct_def_file, by_name)
     if reach.port_field_access_files(struct_name, struct_def_file):
         return True
     for tname, tdef in type_keys:
         for _fn, fn_def_file in reach.functions_using_type(tname, tdef):
-            if fn_def_file in port_paths:
+            if fn_def_file in target_paths:
                 return True
         for _fn, fn_def_file in reach.functions_using_type_in_body(tname, tdef):
-            if fn_def_file in port_paths:
+            if fn_def_file in target_paths:
                 return True
     for tname, tdef in type_keys:
         for fn_name, fn_def_file in reach.functions_using_type(tname, tdef):
-            if fn_def_file not in port_paths and reach.is_function_port_reachable(fn_name, fn_def_file):
+            if fn_def_file not in target_paths and reach.is_function_port_reachable(fn_name, fn_def_file):
                 return True
-        # Body usage by a port-REACHABLE (non-port-file) function. wrap_closure
+        # Body usage by a target-REACHABLE (non-target-file) function. import_closure
         # pulls these in via depends_on.types (field_access_index over the
         # body), so WITHOUT this the per-type gate diverges from the wrap
-        # surface and the type lands in wrap.types with no record
+        # surface and the type lands in import.types with no record
         # (git_config_entry, git_error, git_pool_page, error_threadstate — used
-        # only in the bodies of port-reachable functions, never their
-        # signatures). No path guard: anything legitimately wrap-scope and
-        # needed by the port scope earns a record, external or not (an external
+        # only in the bodies of target-reachable functions, never their
+        # signatures). No path guard: anything legitimately import-section and
+        # needed by the target earns a record, external or not (an external
         # type like pthread_mutex_t is already admitted by-value via S5; the
         # scaffolder decides bindgen-vs-record home downstream, not this gate).
         for fn_name, fn_def_file in reach.functions_using_type_in_body(tname, tdef):
-            if fn_def_file not in port_paths and reach.is_function_port_reachable(fn_name, fn_def_file):
+            if fn_def_file not in target_paths and reach.is_function_port_reachable(fn_name, fn_def_file):
                 return True
     port_fields = reach.port_touched_fields()
     for tname, tdef in type_keys:
@@ -497,11 +498,11 @@ def _enum_skeleton(
 def _build_struct_entry(
     reach: Reach, name: str, def_file: str,
     declared_in: str | None, defined_in: str | None,
-    typedefs: list[str], is_port: bool,
+    typedefs: list[str], in_target: bool,
     by_name: dict[str, dict], kind: str = "struct",
 ) -> tuple[dict[str, Any], list[dict[str, Any]], set[str], list[str] | None]:
     """Build a struct-shaped manifest entry, its field-type forward edges, and
-    the transient port-touched field subset — the single path shared by the
+    the transient target-touched field subset — the single path shared by the
     named-struct loop, the anonymous-struct-typedef loop, and unions (`kind`
     "union" — same member layout / footprints, only the tag differs).
 
@@ -514,8 +515,8 @@ def _build_struct_entry(
 
     `ops` stays the skeleton's empty list — agent-populated from the consumer
     footprints below. Returns ``(entry, fields, forward, touched)``; ``touched``
-    (the wrap-only port-touched field subset, returned out-of-band via
-    focus_by_key) is None for port-scope types.
+    (the wrap-only target-touched field subset, returned out-of-band via
+    focus_by_key) is None for target types.
     """
     fields = _compose_fields_full(reach, name, def_file, by_name)
     entry = _struct_skeleton(name, typedefs, declared_in, defined_in, fields, kind)
@@ -526,7 +527,7 @@ def _build_struct_entry(
     entry["opaque_in"], entry["non_opaque_in"] = _type_consumers(
         reach, name, def_file, by_name, None,
     )
-    touched = None if is_port else _port_touched_field_names(reach, name, def_file)
+    touched = None if in_target else _port_touched_field_names(reach, name, def_file)
     forward = _forward_type_tags(fields, by_name)
     return entry, fields, forward, touched
 
@@ -542,7 +543,7 @@ def compose(
 
       - ``entries_by_dir``: ``{manifest_dir: [entries]}`` ready for the
         merge primitive.
-      - ``dir_scope``: ``{manifest_dir: "port" | "wrap"}`` parallel
+      - ``dir_scope``: ``{manifest_dir: TARGET | IMPORT}`` parallel
         map. Orchestrator consumers (the type wrapper's manifests-list
         input contract) read this to tag each manifest with its scope
         without persisting the tag to disk. Assumes a stem-group
@@ -554,8 +555,8 @@ def compose(
     """
     if filter_spec is None:
         filter_spec = FilterSpec()
-    port_paths = (
-        scope.load_port_paths(filter_spec.scope_json_path)
+    target_paths = (
+        scope.load_target_paths(filter_spec.scope_json_path)
         if filter_spec.scope_json_path is not None else set()
     )
     scope_enabled = filter_spec.scope_json_path is not None
@@ -563,20 +564,36 @@ def compose(
 
     # v2: port type classification is precomputed in scope.json's `types`
     # entity set; membership lookup on (name, def_file) replaces the
-    # per-row classify()/classify_type() pass. port_paths (files) still
+    # per-row classify()/classify_type() pass. target_paths (files) still
     # drives wrap-side reachability.
-    port_types_set = (
-        scope.load_port_entities(filter_spec.scope_json_path, "types")
+    tgt_types = (
+        scope.load_entities(filter_spec.scope_json_path, scope.TARGET, "types")
+        if filter_spec.scope_json_path is not None else set()
+    )
+    # The composed IMPORT surface, as an admission floor. `_import_reachable`
+    # asks its seven questions of the CodeQL edges directly; the closure ALSO
+    # admits a type through the transitive field-walk (a target struct's field
+    # whose type is private), which no scenario there covers. A scope.json
+    # entry with no manifest record is unschedulable, so the surface is
+    # authoritative: whatever it lists gets a record. Empty when scope.json is
+    # absent.
+    imtgt_types = (
+        scope.load_entities(filter_spec.scope_json_path, scope.IMPORT, "types")
         if filter_spec.scope_json_path is not None else set()
     )
 
+    def _in_import_surface(c: dict) -> bool:
+        return (c["name"], c["def_file"] or "") in imtgt_types or \
+            _import_reachable(reach, c["name"], c["def_file"], by_name,
+                              target_paths)
+
     types_rows = scope.load_csv(csv_dir_t1 / "types.csv")
     by_name = scope.build_types_index(types_rows)
-    reach = Reach(csv_dir_t2, port_paths, csv_dir_t1=csv_dir_t1)
+    reach = Reach(csv_dir_t2, target_paths, csv_dir_t1=csv_dir_t1)
     typedefs_for = _typedef_aliases_by_terminal(types_rows, by_name)
 
     # ---- Pass 1: enumerate candidate entries ----
-    # Each candidate: {entry, is_port, key, name, def_file, forward, target_file}
+    # Each candidate: {entry, in_target, key, name, def_file, forward, target_file}
     candidates: list[dict[str, Any]] = []
     # Deduped by (name, def_file), NOT name alone: a file-local struct
     # (e.g. `struct entry` in indexer.c) must not be masked by a distinct
@@ -585,7 +602,7 @@ def compose(
     seen: set[tuple[str, str]] = set()
 
     def _is_port(r: dict) -> bool:
-        return scope_enabled and (r["name"], r["def_file"]) in port_types_set
+        return scope_enabled and (r["name"], r["def_file"]) in tgt_types
 
     for r in types_rows:
         if r["kind"] not in {"struct", "union", "enum"}:
@@ -610,7 +627,7 @@ def compose(
         # loop's `target_file`.
         declared_in = scope.canonical_decl(decls)
         defined_in = r["def_file"] or None
-        is_port = _is_port(r)
+        in_target = _is_port(r)
 
         # Named struct/union/enum identity comes from the C tag here; the
         # anonymous-typedef loop below mirrors this via the same
@@ -622,12 +639,12 @@ def compose(
         else:
             entry, fields, forward, touched = _build_struct_entry(
                 reach, r["name"], r["def_file"], declared_in, defined_in,
-                typedefs_for.get(r["name"], []), is_port, by_name, r["kind"],
+                typedefs_for.get(r["name"], []), in_target, by_name, r["kind"],
             )
 
         entry["declared_in"] = decls          # full decl list on the stored field
         candidates.append({
-            "entry": entry, "is_port": is_port,
+            "entry": entry, "in_target": in_target,
             "key": (scope.entry_tag(entry), entry.get("defined_in") or ""),
             "name": r["name"], "def_file": r["def_file"],
             "forward": forward,
@@ -648,7 +665,7 @@ def compose(
                            "enum_anonymous"} or r["name"] in seen_td:
             continue
         seen_td.add(r["name"])
-        is_port = scope_enabled and (r["name"], r["def_file"]) in port_types_set
+        in_target = scope_enabled and (r["name"], r["def_file"]) in tgt_types
         decls = scope.parse_decl_files(r["decl_files"])
         # The entry's stored `declared_in` FIELD gets the FULL decl list (set
         # just before append) so the scaffolder reasons over every decl site
@@ -670,14 +687,14 @@ def compose(
         if unalias in {"struct_anonymous", "union_anonymous"}:
             entry, _fields, forward, touched = _build_struct_entry(
                 reach, r["name"], r["def_file"], declared_in, defined_in,
-                identity, is_port, by_name,
+                identity, in_target, by_name,
                 "union" if unalias == "union_anonymous" else "struct",
             )
         else:  # enum_anonymous
             entry = _enum_skeleton(r["name"], declared_in, defined_in, identity)
         entry["declared_in"] = decls          # full decl list on the stored field
         candidates.append({
-            "entry": entry, "is_port": is_port,
+            "entry": entry, "in_target": in_target,
             "key": (scope.entry_tag(entry), entry.get("defined_in") or ""),
             "name": r["name"], "def_file": r["def_file"],
             "forward": forward,
@@ -700,11 +717,11 @@ def compose(
             # from port code per the scope.json. `--unscoped` bypasses it (same
             # intent as the filter-mode branch below), so an explicitly named
             # type that no port file reaches is still emitted.
-            if scope_enabled and not filter_spec.unscoped and not c["is_port"]:
-                if not _wrap_port_reachable(reach, c["name"], c["def_file"], by_name, port_paths):
+            if scope_enabled and not filter_spec.unscoped and not c["in_target"]:
+                if not _in_import_surface(c):
                     continue
             seed_keys.add(c["key"])
-        # Transitive field-type closure. Seeded from port-scope seeds
+        # Transitive field-type closure. Seeded from target seeds
         # only (wrap seeds, like wrap symbol seeds, don't expand), but
         # once inside the closure we follow EVERY neighbour's forward
         # edges — including wrap types, via their port-narrowed fields
@@ -714,7 +731,7 @@ def compose(
         # (the named type only, no closure). See FilterSpec.expand_closure.
         closure_keys: set[tuple[str, str]] = set()
         if filter_spec.expand_closure():
-            worklist = [c for c in candidates if c["key"] in seed_keys and c["is_port"]]
+            worklist = [c for c in candidates if c["key"] in seed_keys and c["in_target"]]
             visited_tags: set[str] = set()
             while worklist:
                 c = worklist.pop()
@@ -736,14 +753,14 @@ def compose(
             # classifies port/wrap for the entries that qualify.
             if not scope_enabled or filter_spec.unscoped:
                 emit_keys.add(c["key"])
-            elif c["is_port"]:
+            elif c["in_target"]:
                 emit_keys.add(c["key"])
-            elif _wrap_port_reachable(reach, c["name"], c["def_file"], by_name, port_paths):
+            elif _in_import_surface(c):
                 emit_keys.add(c["key"])
 
-    # ---- Pass 4: emit, applying --port-only / --wrap-only ----
-    # Per-dir scope is tracked alongside emission: a dir is "port" if
-    # any of its emitted entries is port-scope, else "wrap". This
+    # ---- Pass 4: emit, applying --target-only / --import-only ----
+    # Per-dir section is tracked alongside emission: a dir is TARGET if
+    # any of its emitted entries belongs to it, else IMPORT. This
     # mirrors the convention used by syms_manifest.compose() and is
     # subject to the mixed-scope-in-one-dir limitation tracked in
     # docs/TODO.md.
@@ -756,18 +773,18 @@ def compose(
     for c in candidates:
         if c["key"] not in emit_keys:
             continue
-        if filter_spec.port_only and not c["is_port"]:
+        if filter_spec.port_only and not c["in_target"]:
             continue
-        if filter_spec.wrap_only and c["is_port"]:
+        if filter_spec.wrap_only and c["in_target"]:
             continue
         rel_dir = manifest_dir_for(c["target_file"])
         if rel_dir is None:
             continue
         entries_by_dir[rel_dir].append(c["entry"])
-        if c["is_port"]:
-            dir_scope[rel_dir] = "port"
+        if c["in_target"]:
+            dir_scope[rel_dir] = scope.TARGET
         else:
-            dir_scope.setdefault(rel_dir, "wrap")
+            dir_scope.setdefault(rel_dir, scope.IMPORT)
         if c.get("touched") is not None:
             focus_by_key[(scope.entry_tag(c["entry"]), c["entry"].get("defined_in") or "")] = \
                 c["touched"]
@@ -803,7 +820,7 @@ _COMMENT = (
     "Factual skeleton emitted by compose/types_manifest.py. Port-scope "
     "types (defined_in in scope.json) carry the full declared-field "
     "layout and will be ported to native Rust. Wrap-scope types carry "
-    "the base schema with `fields[]` narrowed to the port-accessed "
+    "the base schema with `fields[]` narrowed to the target-accessed "
     "subset (FFI surface). Each field: {name} (scalar single) | "
     "{name,type,ref,array?} (value/array) | "
     "{name,type,ref:pointer,ptr:{…},array?} (pointer). `ptr` ownership "
@@ -816,7 +833,7 @@ _COMMENT = (
     "(touchers that access a field — layout users) and `opaque_in` "
     "(touchers that hold the type opaquely — forwarders, ctors, "
     "wrappers). Wrap types restrict both to the in-scope universe "
-    "(port-defined ∪ port-reachable); port types keep the full "
+    "(port-defined ∪ target-reachable); port types keep the full "
     "footprint. The agent fills each pointer field's `ptr` ownership block and "
     "any guarded field's `locked_by`; a type stores NO lifecycle of its own -- "
     "which routines drop/dispose/clone it is reverse-derived from the acting "
@@ -853,7 +870,7 @@ def main() -> None:
     wrap_dirs = 0
     for rel_dir, entries in sorted(entries_by_dir.items()):
         total += len(entries)
-        if dir_scope.get(rel_dir) == "port":
+        if dir_scope.get(rel_dir) == scope.TARGET:
             port_dirs += 1
         else:
             wrap_dirs += 1

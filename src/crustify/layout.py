@@ -129,9 +129,11 @@ class Layout:
 
     def config(self, target: Path) -> Path:
         """The target's authored SCOPE definition (``scope-config.json``):
-        ``target``, ``port_files``, ``out_of_scope``. Input to the scope
+        ``files`` (``{port, wrap}``) and ``out_of_scope``. Input to the scope
         composer, which derives the sibling ``scope.json`` — a separate file so
-        a recompute of that derived output can never clobber it."""
+        a recompute of that derived output can never clobber it. The repo root
+        and the target id are CLI positionals, and this file's own location
+        records the target, so neither is restated inside it."""
         return self.target_dir(target) / "scope-config.json"
 
     def scope(self, target: Path) -> Path:
@@ -144,7 +146,7 @@ class Layout:
         cache (:mod:`crustify.cache`).
 
         Target-tier because the graph is: its edges are narrowed by scope, so a
-        wrap-scope node contributes only its signature and the layering differs
+        import node contributes only its signature and the layering differs
         per target."""
         return self.target_dir(target) / "deps-dag.json"
 

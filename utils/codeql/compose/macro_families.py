@@ -22,7 +22,7 @@ extracted build says nothing about whether it is a template — conditional
 compilation decides that. The relation is emitted for every minting macro and
 the judgement is the agent's.
 
-**Scope** is the macro's own. `wrap_closure` admits a generator regardless of
+**Scope** is the macro's own. `import_closure` admits a generator regardless of
 call-site reachability (it expands at file scope, never from a function body),
 and `wrap._is_macro` exempts it from "macros are bindgen's" — the generic its
 instances alias is Rust this stage writes.

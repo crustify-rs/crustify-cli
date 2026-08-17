@@ -2,7 +2,7 @@
 
 Field meaning for `<repo_root>/crustify/crates.json` — the whole-repo
 crate/module decomposition and the placement oracle. Layout example:
-[`templates/crates.json`](../../templates/crates.json).
+[`specs/crates.json`](../../specs/crates.json).
 
 Target-agnostic and cumulative: "which unique Rust `.rs` homes this C entity",
 independent of porting progress. Port/wrap status and per-target scope live in
@@ -73,8 +73,8 @@ for placement; `tu`/`headers` disambiguate.
 |---|---|---|
 | `functions` | yes | |
 | `globals` | yes | |
-| `types` | yes | plus one `// Field:` anchor per field |
-| `callbacks` | yes | function-pointer typedefs; verb follows scope like any other member |
+| `types` | yes | plus one owner-qualified anchor per field |
+| `callbacks` | yes | function-pointer typedefs; anchored like any other member |
 | `macros` | **no** | homed for library attribution only |
 
 Macros are the one deliberate exclusion from porting and wrapping: their whole
@@ -111,8 +111,8 @@ match. Resolve in order:
 1. **stem-partner** — the header shares a stem with a TU
    (`include/internal/quic_ackm.h` ↔ `ssl/quic/quic_ackm.c`). Take that TU's
    crate and module, and co-home both in one `.rs`.
-2. **scope** — no partner: port-scope → the crate being ported, wrap-scope →
-   the crate that defines the entities it declares.
+2. **section** — no partner: target-section → the crate that owns it,
+   import-section → the crate that defines the entities it declares.
 
 An orphan header (no stem-partner, e.g. `include/openssl/types.h`) takes a
 module named for its own stem, so it stays one `.rs` rather than being folded
@@ -129,15 +129,18 @@ Invariants:
 
 ## anchors
 
-`scaffold --create` lays one anchor per member plus a `crustify:todo`
-placeholder; the wrap/port agent fills it, promotes `//` → `///`, and drops the
-todo.
+The scheduler lays one anchor per member of a batch, in that agent's worktree,
+resolving each member's home through this file. The agent replaces the line with
+a doc comment naming what it emitted.
 
 | anchor | for |
 |---|---|
-| `// Replaces: <name>` | port-scope member |
-| `// Wraps: <name>` | wrap-scope member |
-| `// Field: <name>` | one per field of a type member |
+| `// crustify:todo: <name>` | a member, unfilled |
+| `// crustify:todo: <name>.<field>` | one per field of a type member |
+| `/// Wraps: <name>{.<field>}` | filled — a safe view over the FFI seam |
+| `/// Replaces: <name>{.<field>}` | filled — a native Rust translation |
 
-Field anchors follow the type composer's scope shaping: a wrap-scope type
-carries only the port-touched fields, a port-scope type its full layout.
+A field item is owner-qualified because a file-grained module holds many types.
+Which fields a type carries follows the composer's section shaping: an
+import-section type carries the fields target code touches, a target-section
+type its full layout.

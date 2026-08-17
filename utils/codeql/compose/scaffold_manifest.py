@@ -104,6 +104,12 @@ _SKIP_CRATES: frozenset[str] = frozenset()
 # ``// crustify:todo`` placeholder; the scheduler treats todo-absent as "done"
 # and ``--reset`` resets the anchor's region. Anchors are laid for the symbol
 # subkinds the wrap/port stages actually emit; the rest are filtered out.
+#: The unfilled anchor token. An item anchor is ONE line, ``<_TODO>: <item>``,
+#: with no verb: scaffold runs before translate and cannot know whether the
+#: agent will wrap the item or replace it — that is `--objective`, chosen per
+#: wave by the orchestrator. The agent promotes the line to ``/// Wraps:`` or
+#: ``/// Replaces:`` according to what it did. The item is owner-qualified for
+#: a field (``Type.field``), since a file-grained module holds many types.
 _TODO = "// crustify:todo"
 _MANAGED = "//! crustify:managed"
 
@@ -188,8 +194,8 @@ class TypeMod(NamedTuple):
     stem: str            # snake module name (pre-collision-resolution)
     tag: str             # C type tag (entry["name"])
     typedef: str | None  # public typedef, if any
-    scope: str | None    # "port" / "wrap" / None (unknown)
-    fields: tuple = ()   # field names (each gets a `// Field:` accessor anchor)
+    scope: str | None    # scope.TARGET / scope.IMPORT / None (unknown)
+    fields: tuple = ()   # field names (each gets its own accessor anchor)
 
 
 # ======================================================================
@@ -198,7 +204,7 @@ class TypeMod(NamedTuple):
 # Every element is anchored where it *lives* — port elements by ``defined_in``,
 # wrap elements by their **import header** (the precise ``scope.json.wrap``
 # surface). A type is just an item anchor among its file's other items, so
-# multiple types share one file and a wrap type's port-scope ops cannot be
+# multiple types share one file and an import type's target-side ops cannot be
 # misplaced into the wrong crate (the failure mode of the earlier, now-removed
 # per-``<type>.rs`` model).
 # ======================================================================
@@ -242,7 +248,7 @@ def _load_wrap_routing(
         doc = scope._doc(scope_json_path)
     except (OSError, ValueError):
         return sym_via, type_via
-    w = doc.get("wrap") or {}
+    w = doc.get(scope.IMPORT) or {}
     for bucket in ("functions", "globals", "macros"):
         for r in w.get(bucket, []):
             via = r.get("declared_in") or []
@@ -261,7 +267,7 @@ def _wrap_home_header(decls: list[str], defined_in: str) -> str:
     return scope.canonical_decl(decls) or defined_in
 
 
-def _classify_symbols(syms_by_dir, port_files, want):
+def _classify_symbols(syms_by_dir, target_files, want):
     """Yield ``(name, defined_in, decls, verb, scope_label)`` for every
     anchorable symbol, routed file-grained. Classification is (``function_*``/``global_*`` →
     ``Replaces``; macros skipped entirely — bindgen owns them); routing is
@@ -287,7 +293,7 @@ def _classify_symbols(syms_by_dir, port_files, want):
                 # which library owns them, but nothing anchors them to a .rs.
                 continue
             if kind.startswith(("function_", "global_")):
-                yield name, df, decls, "Replaces", scope.classify(df, decls, port_files)
+                yield name, df, decls, "Replaces", scope.classify(df, decls, target_files)
 
 
 def _crate_by_mdir(analysis_root: Path | None) -> dict[str, str]:
@@ -324,7 +330,7 @@ def compose_files(
     if filter_spec is None:
         filter_spec = FilterSpec()
     scope_json = filter_spec.scope_json_path
-    port_files = scope.load_port_paths(scope_json) if scope_json else set()
+    target_files = scope.load_target_paths(scope_json) if scope_json else set()
     sym_via, type_via = _load_wrap_routing(scope_json)
     want = set(crate_filter) if crate_filter else None
 
@@ -373,7 +379,7 @@ def compose_files(
         tag = entry.get("name") or entry.get("type")
         if not tag:
             return
-        if scope_label == "wrap":
+        if scope_label == scope.IMPORT:
             st = home(type_via.get(tag) or _wrap_home_header(
                 _decls(entry.get("declared_in")), entry.get("defined_in") or ""))
         else:
@@ -395,11 +401,11 @@ def compose_files(
         if crate in _SKIP_CRATES or (want is not None and crate not in want):
             continue
         for entry in entries:
-            add_type(entry, _entry_scope(entry, port_files) if port_files else "wrap")
+            add_type(entry, _entry_scope(entry, target_files) if target_files else scope.IMPORT)
 
     for name, df, decls, verb, scope_label in _classify_symbols(
-            syms_by_dir, port_files, want):
-        if scope_label == "wrap":
+            syms_by_dir, target_files, want):
+        if scope_label == scope.IMPORT:
             tf = sym_via.get((name, df)) or _wrap_home_header(decls, df)
         else:
             tf = df
@@ -415,9 +421,9 @@ def compose_files(
 
 def _type_block(tm: "TypeMod") -> str:
     """One type's anchor block: the ``// Replaces:`` item anchor followed by its
-    ``// Field:`` accessor anchors. Shared by the fresh-stub and reconcile paths.
+    field accessor anchors. Shared by the fresh-stub and reconcile paths.
 
-    A field anchor is OWNER-QUALIFIED (``// Field: <tag>.<field>``, per
+    A field anchor is OWNER-QUALIFIED (``<tag>.<field>``, per
     ``docs/AGENTS.md``). Unqualified, it only identifies its type by POSITION --
     the nearest preceding item anchor -- and position is not reliable here: a
     module routinely homes several types (37 of 75 in the openssl tree) which
@@ -430,25 +436,25 @@ def _type_block(tm: "TypeMod") -> str:
     so the owner is everything before the FIRST one.
 
     No ``[typedef: ...]`` / ``(<scope>)`` annotations: nothing ever parsed them,
-    the scope is already carried by the verb (``Replaces`` = port, ``Wraps`` =
+    the section is read from the oracle, not the anchor (``Replaces`` = 
     wrap) and could contradict it, and their only real effect was forcing the
     anchor-name matcher to exclude ``[`` and ``(``.
     """
-    block = f"// Replaces: {tm.tag}\n{_TODO}"
+    block = f"{_TODO}: {tm.tag}"
     for f in tm.fields:
-        block += f"\n// Field: {tm.tag}.{f}\n{_TODO}"
+        block += f"\n{_TODO}: {tm.tag}.{f}"
     return block
 
 
 def _sym_block(a: "SymAnchor") -> str:
     loc = f" ({Path(a.file).name})" if a.file else ""
-    return f"// {a.verb}: {a.name}{loc}\n{_TODO}"
+    return f"{_TODO}: {a.name}{loc}"
 
 
 def _file_stub(st: FileStub) -> str:
     """Render one source file's module: a managed header, then every type (as a
     ``// Replaces:`` *item* anchor — files hold many types now — each followed by
-    its ``// Field:`` accessor anchors), then the file's free functions / mirrored
+    its field accessor anchors), then the file's free functions / mirrored
     macros. All ``//`` line comments so the unfilled stub compiles."""
     head = (
         f"//! `{st.src_label}` — generated module (file-grained).\n"
@@ -473,7 +479,7 @@ def _file_stub(st: FileStub) -> str:
 # for already-done work.
 #
 # ``Wraps`` was missing here while every other reader accepted it, so this
-# matcher alone could not see a wrap-scope anchor. ``Mirrors`` was present here
+# matcher alone could not see an import-section anchor. ``Mirrors`` was present here
 # and nowhere else — no emitter, no other reader, no anchor in any tree — so it
 # is gone; the verb set is exactly what the scaffolder writes.
 _ANCHOR_RE = re.compile(
@@ -655,9 +661,9 @@ def _op_ownership(
     return owner
 
 
-def _entry_scope(entry: dict[str, Any], port_files: set[str]) -> str:
+def _entry_scope(entry: dict[str, Any], target_files: set[str]) -> str:
     """port iff the type's defining file (or first declaring header) is in
-    the port-scope set; else wrap."""
+    the target set; else import."""
     df = entry.get("defined_in")
     if not df:
         decls = entry.get("declared_in")
@@ -665,7 +671,7 @@ def _entry_scope(entry: dict[str, Any], port_files: set[str]) -> str:
             df = decls[0] if decls else None
         elif isinstance(decls, str):
             df = decls
-    return "port" if df in port_files else "wrap"
+    return scope.TARGET if df in target_files else scope.IMPORT
 
 
 # -------------------------------------------------------------------- writing
@@ -785,7 +791,7 @@ def _merge_module_block(path: Path, header: str, entries: list[str]) -> bool:
 
 
 def _field_names(entry: dict[str, Any]) -> tuple[str, ...]:
-    """Field names of a type entry — each gets a `// Field:` accessor anchor so
+    """Field names of a type entry — each gets its own accessor anchor so
     the per-field workload is budget-split (``--max-fields``) and tracked like
     ops. Fields come from the structural composer, so this is available without
     an on-disk read (unlike ops)."""

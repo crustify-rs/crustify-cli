@@ -31,7 +31,7 @@ tmp
 codeql
 
 # Machine-local: absolute paths to the crustify and crustify-prim checkouts,
-# and to each tool binary. Author one per machine from templates/cli-config.json.
+# and to each tool binary. Author one per machine from specs/cli-config.json.
 cli-config.json
 
 # Evaluation artefacts. The TABLES under evaluation/ are tracked (see below).
@@ -53,7 +53,7 @@ evaluation/**/manifests/
 #
 #   crates.json                    the placement oracle (`.rs` home per entity)
 #   build.json                     the build descriptor the extraction runs on
-#   targets/*/scope-config.json    the authored port-scope definition
+#   targets/**/scope-config.json   the authored scope definition
 #   analysis/                      the manifests, carrying the agent-submitted
 #                                  judgement fields (ownership / lifetime /
 #                                  locking) that only a paid rerun reproduces
@@ -75,7 +75,15 @@ evaluation/**/manifests/
 # and logs/ are derived. Re-including one file from an excluded tree needs the
 # descend-then-re-exclude ladder below, because git cannot re-include a file
 # whose parent directory is excluded.
+#
+# TWO depths, because a target id of `.` (the whole repository — the usual
+# shape for a wrap-only campaign over a library's entire public API) has no
+# subdirectory: `Layout.target_dir` resolves it to `targets/` itself, so its
+# config sits FLAT at `targets/scope-config.json`. With only the nested rule,
+# that file matched `targets/*`, was never re-included, and vanished from every
+# commit without a word — the one authored artifact of the whole target.
 targets/*
+!targets/scope-config.json
 !targets/*/
 targets/*/*
 !targets/*/scope-config.json

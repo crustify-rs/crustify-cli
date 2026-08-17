@@ -34,7 +34,7 @@ dirs never collide and clobber each other's ``<stage>.log``.
 TRANSLATE_MAX_SYMS: int = 50
 """Per-batch unit budget for the translate stage — wired as the scheduler's
 ``max_syms``. It bounds the free-symbol pooling per file
-(how many wrap-scope free syms ride one ``wrap syms`` agent). Was
+(how many import-section free syms ride one ``wrap syms`` agent). Was
 ``WRAP_MAX_OPS`` — renamed to reflect its true dual role now that op sets are
 small."""
 
@@ -44,7 +44,7 @@ TRANSLATE_MAX_LOC: int = 1000
 
 The count cap guards the many-tiny-symbols case; this one guards the
 few-huge-functions case, which only started applying to this stage when
-port-scope symbols became schedulable here: their bodies are translated, not
+target-section symbols became schedulable here: their bodies are translated, not
 faceted, so a batch of a few large functions can blow an agent's context while
 the symbol *count* is still well under the other cap.
 
@@ -79,7 +79,7 @@ anything. A 30-field type meets the floor alone and gets the batch to itself,
 which is the old behaviour for exactly the types that earned it.
 
 DECLARED fields, which is what the dag carries (a type node's ``loc`` is its
-field count). It overcounts: the scaffolder anchors only the port-touched
+field count). It overcounts: the scaffolder anchors only the target-touched
 subset, so ``evp_keymgmt_st`` reads 35 fields against 0 anchors on disk. That
 makes this a coarse floor, not a work estimate — which is why the type cap
 above is the binding one in practice.
@@ -91,7 +91,7 @@ above is the binding one in practice.
 # ---------------------------------------------------------------------------
 # Used by the port orchestrator (``crustify.port``) to bound the working set
 # handed to a single ``CrustifyPort`` agent. The orchestrator bin-packs
-# port-scope DAG nodes within a dependency layer under these caps; a scheduled
+# target-section DAG nodes within a dependency layer under these caps; a scheduled
 # type folds its lifecycle op-set into the symbol count, so
 # a type and its methods ride one batch. The agent receives a fixed working set
 # and is unaware it is capped.

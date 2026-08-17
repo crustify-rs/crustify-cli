@@ -74,7 +74,7 @@ def scaffold(
             raise SystemExit(
                 f"scaffold: crates.json is empty ({layout.crates_json}). It is the "
                 f"placement oracle and is authored outside this stage — populate it "
-                f"(see templates/crates.json for the schema) before scaffolding.")
+                f"(see specs/crates.json for the schema) before scaffolding.")
         entries = _all_entries(doc)
     elif name:
         _require_one_home(doc, name, file)
@@ -135,7 +135,7 @@ def _in_scope_names(layout, target: Path) -> set[str]:
     except SystemExit:
         return set()
     names: set[str] = set()
-    for section in (doc.get("port") or {}), (doc.get("wrap") or {}):
+    for section in (doc.get("target") or {}), (doc.get("import") or {}):
         for group in ("functions", "globals", "macros", "types"):
             for e in section.get(group) or []:
                 for key in ("name", "type"):
@@ -145,18 +145,17 @@ def _in_scope_names(layout, target: Path) -> set[str]:
 
 
 def _scope_map(layout, target: Path) -> dict[str, str]:
-    """``name -> "port" | "wrap"`` from scope.json — the anchor-verb selector: a
-    wrap-scope item anchors as ``// Wraps:``, a port-scope one as ``// Replaces:``.
-    Types key on ``name`` (port) / ``type`` (wrap); functions/globals on ``name``.
-    Port is applied second so it wins on the (rare) overlap. Empty when scope
-    cannot be composed -> everything falls back to ``Replaces``."""
+    """``name -> scope.TARGET | scope.IMPORT`` from scope.json — which section an
+    item sits in. Types key on ``name``, with a ``type`` fallback for un-migrated
+    records; functions/globals on ``name``. TARGET is applied second so it wins
+    on the (rare) overlap. Empty when scope cannot be composed."""
     from crustify import scope as _scope_mod
     try:
         doc = _scope_mod.build(layout, target, stage="scaffold")
     except SystemExit:
         return {}
     out: dict[str, str] = {}
-    for sec in ("wrap", "port"):   # port second -> overrides on overlap
+    for sec in ("import", "target"):   # target second -> overrides on overlap
         section = doc.get(sec) or {}
         for group in ("functions", "globals", "types"):
             for e in section.get(group) or []:
@@ -171,7 +170,7 @@ def _port_touched(layout, target) -> dict[str, set] | None:
     scope cannot be resolved (then every field is anchored, as before).
 
     Delegates to the oracle rather than re-deriving from the CSVs: the same
-    answer `query types --fields --port-only` gives, so an anchor set and the
+    answer `query types --fields --target-only` gives, so an anchor set and the
     field workset an agent is handed can never disagree. `scope_touched_index`
     is one pass over both access edges, cached — the per-type
     `_scope_touched_fields` would rescan them once per type.
@@ -188,22 +187,22 @@ def _port_touched(layout, target) -> dict[str, set] | None:
         _scope_mod.build(layout, target, stage="scaffold")
     except SystemExit:
         return None
-    idx = scope_touched_index(layout, target, "port")
+    idx = scope_touched_index(layout, target, "target")
     return {tag: {f for s in by_file.values() for f in s}
             for tag, by_file in idx.items()} or None
 
 
 def _field_map(layout, target=None) -> dict[str, list[str]]:
     """``type tag -> [field names]`` from the analysis tree's ``types.json`` — the
-    source for a type's ``// Field:`` accessor anchors (crates.json / scope.json
-    carry no field lists). Empty when the analysis tree is absent.
+    source for a type's field accessor anchors (crates.json / scope.json carry no
+    field lists). Empty when the analysis tree is absent.
 
-    Narrowed to the fields PORT-scope code actually touches, because an anchor
-    is a request for an ACCESSOR and only the port side consumes one. The
+    Narrowed to the fields TARGET-section code actually touches, because an
+    anchor is a request for an ACCESSOR and only the target side consumes one. The
     manifest's ``fields`` is the full declared layout for every type -- this
     function used to take it verbatim on the belief that the type composer had
     already scope-shaped it, which it never did. The cost of that was concrete:
-    ``bio_st`` carried 16 anchors against 0 port-touched fields, ``ossl_provider_st``
+    ``bio_st`` carried 16 anchors against 0 target-touched fields, ``ossl_provider_st``
     30 against 0, and agents filled them, so two thirds of the accessors emitted
     tree-wide serve only code inside the type's own module.
 
@@ -211,8 +210,8 @@ def _field_map(layout, target=None) -> dict[str, list[str]]:
     struct, which the type's own definition anchor covers. This governs only
     which fields are owed a public accessor.
 
-    The narrowing is near-total for wrap-scope types (53 of 1,223 fields
-    port-touched) and near-nil for port-scope ones (2,158 of 2,214): a ported
+    The narrowing is near-total for import-section types (53 of 1,223 fields
+    target-touched) and near-nil for target ones (2,158 of 2,214): a ported
     type is translated wholesale, so its own ported code touches its fields.
     """
     out: dict[str, list[str]] = {}
@@ -364,7 +363,7 @@ def _materialize(layout, entries: list[dict],
     except Exception:
         generators = set()
     field_map = field_map or {}
-    created = updated = preserved = links = 0
+    created = preserved = links = 0
     for e in entries:
         crate_dir = layout.repo_root / e["crate_path"]
         rs = _safe_rs(e["rs"])
@@ -373,17 +372,14 @@ def _materialize(layout, entries: list[dict],
             rs_path.parent.mkdir(parents=True, exist_ok=True)
             rs_path.write_text(_stub(e, scope_map, field_map, generators))
             created += 1
-        elif _merge_anchors(rs_path, e, scope_map, field_map, generators):
-            # File already there but newly-homed members lack an anchor —
-            # `--create` is additive/idempotent (the
-            # docstring contract), so add the missing ones rather than leaving
-            # them unscaffolded.
-            updated += 1
         else:
+            # Already materialized. Nothing to top up: members are anchored by
+            # the SCHEDULER, in the worktree of the agent that owes them, so a
+            # newly-homed member needs no scaffold rerun to become reachable.
             preserved += 1
         links += _wire(crate_dir, rs)
-    return (f"{created} stub(s) created, {updated} updated, "
-            f"{preserved} preserved, {links} module link(s)")
+    return (f"{created} stub(s) created, {preserved} preserved, "
+            f"{links} module link(s)")
 
 
 def _crustify_prim(layout) -> Path:
@@ -412,7 +408,7 @@ def _crustify_prim(layout) -> Path:
         raise SystemExit(
             f"scaffold: no `deps.crustify-prim` in {p}. Every generated "
             f"Cargo.toml needs the wrap-primitive crate's absolute path; set "
-            f"it from templates/cli-config.json.")
+            f"it from specs/cli-config.json.")
     return Path(dep)
 
 
@@ -515,73 +511,44 @@ def _ensure_workspace_lints(ws_toml: Path) -> None:
         'module_inception = "allow"\n')
 
 
-def _merge_anchors(rs_path: Path, e: dict,
-                   scope_map: dict[str, str] | None = None,
-                   field_map: dict[str, list[str]] | None = None,
-                   generators: set[str] | None = None) -> int:
-    """Add anchors missing from the existing managed `.rs`: for each member, its
-    item anchor by scope (`// Wraps:` wrap / `// Replaces:` port) + todo (macros
-    are anchored only when they are template generators), plus a type's `// Field:` accessor anchors. Idempotent
-    (skips anchors already present, filled `///` or not). Returns the number of
-    anchors added."""
-    scope_map = scope_map or {}
-    field_map = field_map or {}
-    text = rs_path.read_text()
-    added = 0
-    new: list[str] = []
-    for kind in ("types", "functions", "callbacks", "globals", "macros"):
-        for nm in e["members"].get(kind) or []:
-            # Only a template generator among macros — see `_stub`.
-            if kind == "macros" and nm not in (generators or set()):
-                continue
-            # Verb-agnostic match (won't duplicate a fresh-composed anchor of
-            # either verb).
-            if not re.search(
-                    rf"(?m)^\s*//+\s*(?:Replaces|Wraps):\s*{re.escape(nm)}\b", text):
-                verb = "Wraps" if scope_map.get(nm) == "wrap" else "Replaces"
-                new += [f"// {verb}: {nm}", _TODO, ""]
-                if kind == "types":
-                    for fld in field_map.get(nm, ()):
-                        new += [f"// Field: {nm}.{fld}", _TODO, ""]
-                added += 1
-            elif kind == "types" and field_map.get(nm):
-                # The type is already anchored, but a field can ENTER port scope
-                # after the file was written (scope-config change, or a composer
-                # fix that made previously-invisible accesses visible). Anchor
-                # the newcomers so the type stops reading as complete.
-                #
-                # Appended at the end of the file rather than slotted next to
-                # its neighbours: by now an agent has promoted anchors to `///`,
-                # moved them into `impl` blocks and forked some in two, so there
-                # is no position that is right in general — whereas the end of
-                # the file is always valid, and `// crustify:todo` is a plain
-                # comment, so it is inert wherever it lands. The agent moves it
-                # when it fills it.
-                #
-                # Presence is an exact match on the OWNER-QUALIFIED name, so no
-                # positional attribution is needed and none of its failure modes
-                # apply: another type's identically-named field, or an
-                # intervening symbol anchor, cannot be mistaken for this one.
-                for fld in field_map.get(nm, ()):
-                    if not _has_field_anchor(text, nm, fld):
-                        new += [f"// Field: {nm}.{fld}", _TODO, ""]
-                        added += 1
-    if new:
-        if not text.endswith("\n"):
-            text += "\n"
-        text += "\n".join(new) + "\n"
-    if added:
-        rs_path.write_text(text)
-    return added
-
 
 _TODO = "// crustify:todo"  # matches _schedule._TODO; a surviving one = pending
+
+#: The unfilled item anchor. ONE line naming the item, with no verb: it is laid
+#: by the SCHEDULER, inside the worktree of the agent that owes it, and even
+#: there the verb is unknown -- that is `--objective`, and the orchestrator
+#: picks it per wave. The agent promotes this to `/// Wraps: <item>` or `/// Replaces: <item>`
+#: according to what it actually did, which is the only moment the verb is
+#: knowable. The item is OWNER-QUALIFIED for a field (`Type.field`): a
+#: file-grained module holds many types, and two of them with a `data` field
+#: would otherwise collide on one line. A C identifier cannot contain a dot, so
+#: the dot also discriminates a field anchor from a symbol one.
+def _todo_anchor(item: str) -> str:
+    return f"{_TODO}: {item}"
+
+
+#: Matches an item anchor in EITHER form — the neutral todo scaffold now emits,
+#: or a `Wraps:`/`Replaces:` line at any comment depth (`//` unfilled from an
+#: older scaffold, `///` once an agent has filled it). Readers must accept both:
+#: a tree scaffolded before the neutral form carries thousands of the old shape,
+#: and re-emitting anchors over filled work would be destructive.
+#:
+#: The name is terminated explicitly rather than with `\b`, for the reason
+#: :func:`_has_field_anchor` documents one level down: a filled ACCESSOR anchor
+#: is `<tag>.<field>`, and `\b` is satisfied by the `.`, so `Wraps: ssl_st.sess`
+#: would read as an anchor for `ssl_st` and the type's own placeholder would
+#: never be laid. A trailing gloss is still allowed — it is separated by space.
+def _anchor_re(nm: str) -> "re.Pattern[str]":
+    q = re.escape(nm)
+    return re.compile(
+        rf"(?m)^\s*(?://+\s*(?:Replaces|Wraps):\s*{q}(?:\s|$)"
+        rf"|{re.escape(_TODO)}:\s*{q}\s*$)")
 
 def _has_field_anchor(text: str, tag: str, fld: str) -> bool:
     """Is ``<tag>.<fld>`` already anchored in ``text``, filled or not?
 
     One exact match, because the anchor names its own owner
-    (``prompts/principles.md``: ``// Field: <C_ITEM>.<field>``). The unqualified form
+    (``prompts/principles.md``: ``// crustify:todo: <C_ITEM>.<field>``). The unqualified form
     this replaced could only be attributed by POSITION, which needed a walk that
     tracked the enclosing item anchor and had two failure modes -- a sibling
     type in the same module with the same field name, and a symbol's anchor
@@ -592,24 +559,28 @@ def _has_field_anchor(text: str, tag: str, fld: str) -> bool:
     ``.``, so ``ssl_session_st.ext`` would match ``ssl_session_st.ext.hostname``
     and a genuinely missing anchor would be skipped.
     """
+    q = rf"{re.escape(tag)}\.{re.escape(fld)}"
     return re.search(
-        rf"(?m)^\s*//+\s*Field:\s*{re.escape(tag)}\.{re.escape(fld)}(?:\s|$)",
+        rf"(?m)^\s*(?://+\s*(?:Field|Wraps|Replaces):\s*{q}(?:\s|$)"
+        rf"|{re.escape(_TODO)}:\s*{q}\s*$)",
         text) is not None
 
 
 def _stub(e: dict, scope_map: dict[str, str] | None = None,
           field_map: dict[str, list[str]] | None = None,
           generators: set[str] | None = None) -> str:
-    # Each member is laid as an item anchor whose verb is its scope — `// Wraps:`
-    # for a wrap-scope item, `// Replaces:` for a port-scope one (a native Rust
-    # item: type / function / global) — followed by a `crustify:todo` placeholder.
+    # Each member is laid as one neutral `// crustify:todo: <item>` line. The
+    # verb is not knowable here — scaffold runs before translate, and whether an
+    # item is wrapped or replaced is `--objective`, chosen per wave by the
+    # orchestrator. The agent promotes the line to `/// Wraps:` or
+    # `/// Replaces:` according to what it did.
     # Macros are NOT anchored: bindgen owns their `ffi::` bindings /
     # `crustify_<NAME>` shims and the C `#define` stays, so the port/wrap stages
     # never fill a macro -- with one exception. A TEMPLATE GENERATOR expands to a
     # whole aggregate, and the generic its instances alias is Rust this stage
     # writes, so it gets an anchor like any other item. `generators` is the set
     # `compose.macro_families` recognises; the same carve-out exists in
-    # `wrap._is_macro` and in the wrap closure's admission gate. A type additionally gets one `// Field: <name>` accessor
+    # `wrap._is_macro` and in the import closure's admission gate. A type additionally gets one accessor
     # anchor per field, laid right after the item anchor so it binds to it as
     # the owner. The wrap/port AGENT locates each by its anchor,
     # fills it, and promotes `//` -> `///` while dropping the todo. This is the
@@ -633,11 +604,10 @@ def _stub(e: dict, scope_map: dict[str, str] | None = None,
         for nm in m.get(kind) or []:
             if kind == "macros" and nm not in generators:
                 continue
-            verb = "Wraps" if scope_map.get(nm) == "wrap" else "Replaces"
-            lines += [f"// {verb}: {nm}", _TODO, ""]
+            lines += [_todo_anchor(nm), ""]
             if kind == "types":
                 for fld in field_map.get(nm, ()):
-                    lines += [f"// Field: {nm}.{fld}", _TODO, ""]
+                    lines += [_todo_anchor(f"{nm}.{fld}"), ""]
             any_member = True
     if not any_member:
         lines.append("// (no members homed here yet)")
@@ -693,7 +663,7 @@ def _safe_rs(rs: str) -> str:
     runs collapsed to ``_`` (``pack-objects.rs`` → ``pack_objects.rs``). Applied
     at the filesystem boundary so ``crates.json`` stays C-faithful while the
     emitted tree (files, ``pub mod`` declarations, query output) is valid Rust.
-    Node→module resolution keys on the ``// Replaces:`` anchors, not file names,
+    Node→module resolution keys on the anchors, not file names,
     so renaming is transparent to the scheduler."""
     out = []
     for seg in Path(rs).parts:
@@ -707,3 +677,78 @@ def _safe_rs(rs: str) -> str:
 
 def _full_rs(layout, crate_path: str, rs: str) -> str:
     return str(layout.repo_root / crate_path / _safe_rs(rs))
+
+
+def place_anchors(layout, target: Path, names: list[str], *,
+                  fields: dict[str, list[str]] | None = None,
+                  emit: bool = True) -> tuple[int, list[str]]:
+    """Insert a `// crustify:todo: <item>` line for every `names` entry that has
+    no anchor yet, in the `.rs` `crates.json` homes it at.
+
+    This is the LAZY replacement for the scaffolder's up-front anchor pass. The
+    scaffolder still materializes crates, empty modules and the `mod` tree —
+    one-time, single-threaded work whose absence would break compilation — but
+    it no longer writes an anchor per in-scope entity. On a wrap campaign over
+    libcrypto that was ~25k placeholders, almost all of them for items a given
+    wave never touches, and it forced an idempotent re-reconcile of a tree
+    agents had already edited on every rerun.
+
+    Called by the scheduler AFTER a batch's worktree exists and against that
+    worktree's `Layout`, so an agent sees exactly the anchors for its own units
+    and none of its siblings'. Two agents therefore cannot both be looking at a
+    placeholder only one of them owes, and the anchor lands on the branch that
+    fills it.
+
+    `emit=False` reports without writing — the review path, which has nothing to
+    do for an item nobody has wrapped yet.
+
+    Returns `(inserted, unanchored)`: how many lines were written, and the names
+    that have no anchor and did not get one.
+    """
+    from crustify import crates as _crates
+    doc = _crates.load(layout)
+    fields = fields or {}
+    def _rs_path(e: dict) -> Path:
+        # `crate_path` is repo-root-relative (`crustify/rust/<crate>`), not
+        # relative to `layout.rust` — joining it there double-prefixes.
+        cp = Path(e["crate_path"] or "")
+        return (cp if cp.is_absolute() else layout.repo_root / cp) / e["rs"]
+
+    homes: dict[Path, list[str]] = {}
+    unanchored: list[str] = []
+    for nm in names:
+        entries, missing = _entries_for_names(doc, [nm])
+        if missing:
+            unanchored.append(nm)
+            continue
+        for e in entries:
+            homes.setdefault(_rs_path(e), []).append(nm)
+    inserted = 0
+    for rs_path, items in homes.items():
+        if not rs_path.exists():
+            unanchored += items
+            continue
+        text = rs_path.read_text()
+        add: list[str] = []
+        for nm in items:
+            # An ACCESSOR is tested with `_has_field_anchor`, not `_anchor_re`:
+            # it is the one that also reads the pre-neutral `// Field: T.f`
+            # shape, and a tree carries thousands of those, most already FILLED.
+            # Testing the accessor with the item matcher lays a fresh
+            # placeholder over a finished accessor — `ssl_session_st` alone had
+            # 41 of them, and the agent would re-emit every one.
+            wanted = [(nm, None)] + [(f"{nm}.{f}", f) for f in fields.get(nm, ())]
+            for item, fld in wanted:
+                anchored = (_has_field_anchor(text, nm, fld) if fld
+                            else _anchor_re(item).search(text))
+                if anchored or any(l == _todo_anchor(item) for l in add):
+                    continue
+                if not emit:
+                    unanchored.append(item)
+                    continue
+                add += [_todo_anchor(item), ""]
+        if add:
+            sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+            rs_path.write_text(text + sep + "\n".join(add) + "\n")
+            inserted += sum(1 for l in add if l)
+    return inserted, unanchored

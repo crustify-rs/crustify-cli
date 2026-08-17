@@ -8,7 +8,7 @@
   `callback · gate-missed` for one the wrap gate did not admit. A callback
   declares no fields, so its four field columns read `—`
 - `fields` — all declared fields (T1 `fields.csv`)
-- `port` / `port ptr` — fields a port-scope function touches / of those,
+- `port` / `port ptr` — fields a target function touches / of those,
   pointers; read off the scaffolded `// Field: <tag>.<field>` anchors
 - `wrapped` — fields given an accessor (promoted `/// Field:` anchors), counted
   as DISTINCT `type.field` paths; `—` = wrapped with no field accessor (opaque)

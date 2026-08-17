@@ -1,7 +1,7 @@
 """Deterministically scaffold the ``-sys`` FFI crates from the analysis tree.
 
 The **bindgen** stage is composer-only (no LLM). It partitions the target's
-wrap-scope (FFI) surface by owning crate into one ``<lib>-sys`` crate per
+import-section (FFI) surface by owning crate into one ``<lib>-sys`` crate per
 link artifact (``libssl-sys``, ``libcrypto-sys``, …) and emits, per crate,
 only what the analysis tree already states as fact:
 
@@ -319,18 +319,18 @@ def compose(
     # Keyed (name|type, defined_in); sym and type buckets resolved separately so
     # a name can't cross-match the wrong kind.
     sj = filter_spec.scope_json_path
-    wrap_sym_keys = (scope.scope_membership(
-        sj, "wrap", kinds=("functions", "globals", "macros")) if sj else None)
-    wrap_type_keys = (scope.scope_membership(
-        sj, "wrap", kinds=("types",)) if sj else None)
+    import_sym_keys = (scope.scope_membership(
+        sj, scope.IMPORT, kinds=("functions", "globals", "macros")) if sj else None)
+    import_type_keys = (scope.scope_membership(
+        sj, scope.IMPORT, kinds=("types",)) if sj else None)
     sym_records, type_records = records
     wrap_syms = _load_inscope_annotated(
         syms_by_dir, sym_records, "syms.json", "symbols", "name",
-        keys=wrap_sym_keys,
+        keys=import_sym_keys,
     )
     wrap_types = _load_inscope_annotated(
         types_by_dir, type_records, "types.json", "types", "name",
-        keys=wrap_type_keys,
+        keys=import_type_keys,
     )
 
     # Alias → owning lib, and alias → all-names (tag + typedefs), over every
@@ -458,7 +458,7 @@ def compose(
     # crate graph. A per-reference walk cannot substitute for it: it would only
     # see types reached from a crate's own WRAP entities and so miss a foreign
     # type embedded by a PORT struct (`rio_poll_builder_st.pfds: pollfd` — that
-    # struct is port-scope for the ssl target, so no wrap loop ever visits it).
+    # struct is target-section for the ssl target, so no wrap loop ever visits it).
     # Every wrap type homed to a declared dep is blocklisted, referenced or not,
     # so bindgen imports it from the dep's `-sys` instead of re-minting it.
     # Filtered to deps that actually emit a `-sys` (an empty foreign crate — e.g.

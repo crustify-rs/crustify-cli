@@ -208,7 +208,7 @@ and the [principles](docs/principles.md) document.
   - Identify the `bindgen` bindings of your items; add if any missing
   - Analyze pointer ownership and type lifetimes and submit findings to `ownership-store.json` via
     `crustify-oracle`
-  - Emit safe wrappers for wrap-scope items / port to native Rust port-scope items
+  - Emit safe wrappers for import items / port to native Rust target items
   - Write unit tests in Rust, run the _safety audit_ pass (see below), fix issues
   - Re-export ported items, build and run original tests
   - Commit changes, merge in parent branch, fix conflicts, purge worktree once landed
@@ -303,7 +303,7 @@ Four stages, run in this order the first time:
 | stage | does | flags |
 |---|---|---|
 | `scaffold` | homes each C entity in the `.rs` that carries its `// Wraps:` / `// Replaces:` anchor, via `crates.json` | `--all` `--name` `--create` `--validate` `--file` `--dir` |
-| `bindgen` | composes the `<lib>-sys` FFI crates, partitioning the wrap-scope surface by owning crate | `--libs` `--reset` |
+| `bindgen` | composes the `<lib>-sys` FFI crates, partitioning the import surface by owning crate | `--libs` `--reset` |
 | `translate` | emits the wrappers, layer by layer, one agent per batch | `--name` `--file` `--dag-layer` `--transitive` `--skip` `--port-only` `--objective` `--max-syms` `--max-loc` `--max-types` `--min-fields` `--lifetime-for` `--dry-run` · `--model` `--billing` `--parallel` `--parallel-max` `--parallel-policy` `--override-base-prompt` `--no-console` `--no-file-log` |
 | `audit` | scans the emitted tree for `unsafe`, raw pointers and naked `ffi::`, as JSON on stdout | `--all` `--name` `--crate` `--mod` `--file` `--dir` |
 
@@ -375,7 +375,7 @@ Symbols — the wrap closure of port layers 0–2:
 
 ### 2. Transitively wrap god objects
 
-Goal: pick three port-scope types with a large field surface and wrap their entire transitive
+Goal: pick three target types with a large field surface and wrap their entire transitive
 dependency closure, bottom layer up. This is the shape a real port takes.
 
 Both targets were run with three seeds of ≥25 declared fields.
@@ -390,7 +390,7 @@ Both targets were run with three seeds of ≥25 declared fields.
 | depth | 8 layers | 12 layers |
 | share of port scope | 10.2% of 646 types | 9.0% of 399 types |
 
-**libgit2** — 68 units, port and wrap scope; the 7 wrap-scope types experiment 1 already wrapped are
+**libgit2** — 68 units, port and wrap scope; the 7 import types experiment 1 already wrapped are
 excluded so the two experiments do not count the same agent twice:
 
 | layer | types | $ | $/type | $/line | wall (longest agent) | lines |

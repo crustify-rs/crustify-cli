@@ -6,7 +6,7 @@ become fully owned by the Rust world.
 You build safe wrappers using the smart pointers and lifetime traits from the `crustify-prim` framework. 
 Your surface is the types' definition, lifecycle, and field accessors.
 
-The scheduler decided what to wrap and in what order - every type you depend on is either in your target
+The scheduler decided what to process and in what order - every type you depend on is either in your target
 set or already wrapped on disk, except fallback edges due to cut SCCs.
 
 <!-- PRINCIPLES -->
@@ -15,11 +15,13 @@ set or already wrapped on disk, except fallback edges due to cut SCCs.
 
 ## Inputs
 
-- `{repo_root}`: top level repo that the targeted port-scope elements belong to.
+- `{repo_root}`: the C project's repository root. Repo-relative paths resolve
+  against it, and the crustify artifacts live under `<repo_root>/crustify/`.
 
-- `{target}`: dir path to the port-scope elements targeted by this session. Although the
-  target dir may include several files, only a subset of them may be port-scope. Use the
-  `crustify-oracle` skill to obtain the port and wrap closures relevant for your session.
+- `{target}`: the repo-relative id this session runs under, which locates its
+  `crustify/targets/<target>/scope-config.json`. The scope is that config's
+  `files`, which may name paths outside this dir. Use the `crustify-oracle`
+  skill to obtain the target and import sections your session works over.
 
 - `{workspace_root}`: shared Cargo workspace, homing modules and
   translations across multiple port sessions.
@@ -52,8 +54,7 @@ submit your findings through the oracle.
 ### Locate your files
 
 Use `crustify-cli scaffold` to locate the `.rs` module of your target set and their
-anchors, as well as the module of their deps (types, callbacks). Since your target
-set may be containing port- or wrap-scope types then you may deal with both types of anchros.
+TODO anchors, as well as the module of their deps (types, callbacks).
 
 Find the generated `bindings.rs` for the `<lib>-sys` crate of the crate that homes your
 target set (their crate's `-sys` companion). It exposes the FFI structs and the C functions
@@ -73,15 +74,12 @@ that's the case, rebuild / reconfigure the target in your worktree to obtain the
 **`review`.** If our objective is `review` then you act as the **LLM-as-a-Judge** assessing the
 quality and accuracy of the agent-owned ownership and lifecycle analysis from `crustify-oracle`,
 and of the emitted Rust code for your target set; note that your target set may contain both safe
-wrappers or and ported items. For both, verify their claims against our principles and instructions and if
+wrappers and ported items. For both, verify their claims against our principles and instructions and if
 you notice any inconsistencies, submit your new findings through the oracle, and fix / extend its
 existing Rust code if necessary, justifying why they fix the existing state.
 
 **`wrap`.** If your objective is `wrap` then you must emit safe wrappers for your target set.
-First, use `crustify-oracle` to determine whether your type job is wrap- or port-scope.
-Second, confirm that your type must stay layout-compatible with the C-side definition and its storage allocation /
-deallocation must still be owned by C. These are either wrap- or port-scope structs that cross the FFI boundary
-and are accessed / allocated / deallocated by the functions that have not been ported yet to Rust.
+Confirm via `crustify-oracle` that this type still needs to stay layout-compatible with C.
 For this objective you proceed via the `Wrap the type` section below.
 
 **`port`.** If your objective is `port` then you may nativize your target set to Rust, either only the layout,
@@ -98,11 +96,11 @@ proceed with just `Port the layout` section below.
 
 #### Establish the scope of your wrappers
 
-**Fields.** You wrap your type's fields that are **wrap- or port-scope only**,
-i.e. touched by port-scope symbols, leaving the out-of-scope ones untouched.
+**Fields.** You wrap your type's fields that are **target-scope only**,
+i.e. touched by target-scope symbols, leaving the rest untouched.
 
 **Lifetime primitives.** You identify **all** lifetime primitives of your type,
-regarless whether they are wrap- or port- or out-of-scope.
+regarless whether they are target- or import- or out-of-scope.
   
 #### Emit safe wrappers
 
@@ -137,7 +135,7 @@ regarless whether they are wrap- or port- or out-of-scope.
   type requires parametric args for expressing lifetimes or sub-types, then implement it
   manually, preserving the guidelines and practices of the crate.
 
-  Keep port-scope lifecycle primitives in C until the type can be fully owned by Rrust via
+  Keep target-scope lifecycle primitives in C until the type can be fully owned by Rrust via
   the `Own Storage` arm below.
   
 **Multi-drop types.** If a type has multiple destructors / releasers, emit safe wrappers
@@ -152,7 +150,7 @@ regarless whether they are wrap- or port- or out-of-scope.
   layout-compatible strategies even if the trait is stateful, and reach for non-ZST
   strategies only when really necessary.
   
-**Field accessors.** For each port-scope field, read its ownership analysis (if pointer)
+**Field accessors.** For each target-scope field, read its ownership analysis (if pointer)
   using the `crustify-oracle` skill and emit getters/setters following the established
   safety discipline and principles.
 

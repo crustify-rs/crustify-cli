@@ -4,7 +4,7 @@ Each stem group lists every symbol (function, macro, global, or callback — a
 function-pointer typedef) defined or declared in its file(s).
 
 **Scope gates EMISSION, never CONTENT.** Which records are emitted (and
-how they're tagged / post-filtered by `--port-only` / `--wrap-only`) is a
+how they're tagged / post-filtered by `--target-only` / `--import-only`) is a
 scope decision; every record that IS emitted carries its full
 codebase-wide composition. This mirrors the type manifest, whose
 `opaque_in` / `non_opaque_in` footprints are COMPLETE for port AND wrap.
@@ -34,7 +34,7 @@ per-arg/return ownership.
 Per-source-file partitioning rule lives in `path_partition.py`.
 The merge primitive (`manifest_merge.merge_manifest_file`) handles
 cross-target evolution via field-level union — a wrap entry that
-gains port-scope additions in a later target invocation gets the new
+gains target-section additions in a later target invocation gets the new
 fields added without overwriting any composer-filled or
 agent-annotated fields already present.
 
@@ -139,7 +139,7 @@ def _callback_deps(
          direct callees. This is the only source for a callback reached
          through a STRUCT FIELD (`s->psk_server_callback(...)`): the invoker
          names the typedef nowhere in its own record, and the owning struct's
-         `fields[]` is only the port-accessed subset. Pass `invoked=False` for
+         `fields[]` is only the target-accessed subset. Pass `invoked=False` for
          a callback's own entry -- a typedef invokes nothing.
 
     `defined_in` is always null -- a callback is a header typedef with no
@@ -635,7 +635,7 @@ def _base_callback(
 
     A callback has no def_file (a header typedef) and is never ported to native
     Rust (it becomes an `extern "C" fn` type), so it is always wrap-shape;
-    inclusion is the wrap-reach gate (`_wrap_port_reachable`) in `compose`.
+    inclusion is the import-reach gate (`_import_reachable`) in `compose`.
     """
     name = row["name"]
     decl_file = _first_decl(row["decl_files"])
@@ -681,7 +681,7 @@ def _base_callback(
 def _forward_syms_of(
     name: str, def_file: str, reach: Reach,
 ) -> set[tuple[str, str]]:
-    """Return the one-hop forward symbol set of a port-scope symbol.
+    """Return the one-hop forward symbol set of a target symbol.
 
     Union of every direct edge type CodeQL captures:
 
@@ -723,7 +723,7 @@ def compose(
         repo-relative path (e.g. `Path("ssl/statem/statem")`). The
         caller writes one `syms.json` per dir under the analysis
         tree root.
-      - ``dir_scope``: ``{manifest_dir: "port" | "wrap"}`` parallel
+      - ``dir_scope``: ``{manifest_dir: TARGET | IMPORT}`` parallel
         map. Orchestrator consumers (e.g. the symbol wrapper's
         manifests-list input contract) read this to tag each
         manifest with its scope without persisting the tag to disk.
@@ -740,17 +740,17 @@ def compose(
         the "raw symbol inventory" mode for naïve queries.
       - **Scope.json + seed mode** (`scope_json_path` set AND any
         of `dirs`/`files`/`names` set): entries matching the seed
-        predicate become seeds. From port-scope seeds, the composer
+        predicate become seeds. From target seeds, the composer
         computes a one-hop forward closure and adds touched symbols
-        to the output. **Seed admission gate**: a wrap-scope seed
-        is admitted only if it is wrap-reachable from port code per
+        to the output. **Seed admission gate**: an import seed
+        is admitted only if it is reachable from target code per
         the scope.json. Port-scope seeds emit with port additions;
         wrap seeds + closure emit as base shape.
       - **Scope.json + filter mode** (`scope_json_path` set, no
         seed flags): emit every reachable entry. Port-scope entries
-        emit with port additions; wrap-scope entries emit as base.
+        emit with port additions; import entries emit as base.
 
-    `--port-only` / `--wrap-only` post-filters apply in every mode
+    `--target-only` / `--import-only` post-filters apply in every mode
     (they're emitted-shape filters).
     """
     if filter_spec is None:
@@ -758,29 +758,43 @@ def compose(
     # Unscoped (repo-wide): still classify port/wrap via scope.json, but never
     # DROP an out-of-scope entry. The default keeps the reachability gate.
     unscoped = filter_spec.unscoped
-    port_paths = (
-        scope.load_port_paths(filter_spec.scope_json_path)
+    target_paths = (
+        scope.load_target_paths(filter_spec.scope_json_path)
         if filter_spec.scope_json_path is not None
         else set()
     )
-    scope_enabled = bool(port_paths) or filter_spec.scope_json_path is not None
+    scope_enabled = bool(target_paths) or filter_spec.scope_json_path is not None
 
     # v2: port/wrap classification is precomputed in scope.json's entity
     # sets (including the header-macro carve-out). Look up (name, def_file)
     # membership instead of re-running classify()/entry_scope() per row.
-    # port_paths (the file list) is retained for Reach (file-level
+    # target_paths (the file list) is retained for Reach (file-level
     # port-reachability).
     _sj = filter_spec.scope_json_path
-    port_funcs = scope.load_port_entities(_sj, "functions") if _sj else set()
-    port_globals_set = scope.load_port_entities(_sj, "globals") if _sj else set()
-    port_macros_set = scope.load_port_entities(_sj, "macros") if _sj else set()
+    tgt_funcs = scope.load_entities(_sj, scope.TARGET, "functions") if _sj else set()
+    tgt_globals = scope.load_entities(_sj, scope.TARGET, "globals") if _sj else set()
+    tgt_macros = scope.load_entities(_sj, scope.TARGET, "macros") if _sj else set()
+    # The composed IMPORT surface, as an admission floor — the same role
+    # `_in_import_surface` plays on the type side. The reach gates below ask
+    # "does target code reach this", which has no answer for a WRAP campaign
+    # (`files.import`): there is no target code, and the surface was seeded off
+    # the named headers instead. A scope.json entry with no manifest record is
+    # unschedulable, so whatever the section lists gets one.
+    imp_keys = (
+        (scope.load_entities(_sj, scope.IMPORT, "functions")
+         | scope.load_entities(_sj, scope.IMPORT, "globals")
+         | scope.load_entities(_sj, scope.IMPORT, "macros"))
+        if _sj else set())
+
+    def _in_import(r: dict) -> bool:
+        return (r.get("name"), r.get("def_file") or "") in imp_keys
 
     funcs = scope.load_csv(csv_dir_t1 / "functions.csv")
     macros = scope.load_csv(csv_dir_t1 / "macros.csv")
     globals_ = scope.load_csv(csv_dir_t1 / "globals.csv")
     types = scope.load_csv(csv_dir_t1 / "types.csv")
     by_name = scope.build_types_index(types)
-    reach = Reach(csv_dir_t2, port_paths)
+    reach = Reach(csv_dir_t2, target_paths)
     # Names defined in >1 file are file-local statics reusing a name; their
     # body field-accesses must be disambiguated by def_file (PITFALLS:
     # multidef conflation leaked unrelated types into depends_on.types).
@@ -811,13 +825,13 @@ def compose(
     candidates: list[dict[str, Any]] = []
 
     for r in funcs:
-        is_port = scope_enabled and (r["name"], r["def_file"]) in port_funcs
-        if scope_enabled and not is_port and not unscoped:
+        in_target = scope_enabled and (r["name"], r["def_file"]) in tgt_funcs
+        if scope_enabled and not in_target and not unscoped:
             if r["linkage"] in _WRAP_DISALLOWED_FN_KINDS:
                 continue
-            if not seed_mode and not reach.is_function_port_reachable(
-                r["name"], r["def_file"],
-            ):
+            if not seed_mode and not _in_import(r) \
+                    and not reach.is_function_port_reachable(
+                        r["name"], r["def_file"]):
                 continue
         base = _base_function(r, reach)
         # Scope gates EMISSION only: every record we DO emit is composed
@@ -831,25 +845,25 @@ def compose(
         )
         # `forward` drives the one-hop closure -- that IS emission, so it stays
         # gated on port scope.
-        fwd = _forward_syms_of(r["name"], r["def_file"], reach) if is_port else None
+        fwd = _forward_syms_of(r["name"], r["def_file"], reach) if in_target else None
         target_file = r["def_file"] or _first_decl(r["decl_files"])
         candidates.append({
             "base": base,
             "port_add": port_add,
-            "is_port": is_port,
+            "in_target": in_target,
             "forward": fwd,
             "key": (base["name"], base.get("defined_in") or ""),
             "target_file": target_file,
         })
 
     for r in globals_:
-        is_port = scope_enabled and (r["name"], r["def_file"]) in port_globals_set
-        if scope_enabled and not is_port and not unscoped:
+        in_target = scope_enabled and (r["name"], r["def_file"]) in tgt_globals
+        if scope_enabled and not in_target and not unscoped:
             if r["linkage"] in _WRAP_DISALLOWED_GLOBAL_KINDS:
                 continue
-            if not seed_mode and not reach.is_global_port_reachable(
-                r["name"], r["def_file"],
-            ):
+            if not seed_mode and not _in_import(r) \
+                    and not reach.is_global_port_reachable(
+                        r["name"], r["def_file"]):
                 continue
         base = _base_global(r)
         # content: codebase-wide
@@ -858,12 +872,12 @@ def compose(
         # function's callees do (a dispatch table pulls in its handlers).
         fwd = ({(n, df or "") for n, df in reach.addr_targets_of(r["name"], r["def_file"])}
                | {(gn, gd or "") for gn, gd, _k in
-                  reach.globals_used_by(r["name"], r["def_file"])}) if is_port else None
+                  reach.globals_used_by(r["name"], r["def_file"])}) if in_target else None
         target_file = r["def_file"] or _first_decl(r["decl_files"])
         candidates.append({
             "base": base,
             "port_add": port_add,
-            "is_port": is_port,
+            "in_target": in_target,
             "forward": fwd,
             "key": (base["name"], base.get("defined_in") or ""),
             "target_file": target_file,
@@ -875,20 +889,21 @@ def compose(
         # header is in port scope — anything still in C may `#include` it.
         # Only a TU-local `.c` macro is genuinely "ported": it has no external
         # consumer and bindgen can't see it, so it's inlined into its TU's
-        # Rust translation. Hence a macro is port-scope iff it's defined in a
+        # Rust translation. Hence a macro is target-section iff it's defined in a
         # `.c` (etc.) file that's in scope.
-        is_port = scope_enabled and (r["name"], r["def_file"]) in port_macros_set
-        if scope_enabled and not is_port and not seed_mode and not unscoped:
-            if not reach.is_macro_port_reachable(r["name"], r["def_file"]):
+        in_target = scope_enabled and (r["name"], r["def_file"]) in tgt_macros
+        if scope_enabled and not in_target and not seed_mode and not unscoped:
+            if not _in_import(r) and not reach.is_macro_port_reachable(
+                    r["name"], r["def_file"]):
                 continue
         base = _base_macro(r)
         port_add = _port_additions_macro(r, reach)    # content: codebase-wide
-        fwd = set() if is_port else None
+        fwd = set() if in_target else None
         target_file = r["def_file"]
         candidates.append({
             "base": base,
             "port_add": port_add,
-            "is_port": is_port,
+            "in_target": in_target,
             "forward": fwd,
             "key": (base["name"], base.get("defined_in") or ""),
             "target_file": target_file,
@@ -904,9 +919,9 @@ def compose(
     # point at a node that does not exist. A callback is signature-shaped and
     # never ported (it becomes an `extern "C" fn` type), so it is
     # always wrap; inclusion is the wrap-reach gate (filter mode) or a direct
-    # --name seed (seed mode). The same `_wrap_port_reachable` gate that admits
+    # --name seed (seed mode). The same `_import_reachable` gate that admits
     # wrap structs admits a callback (it is keyed by type name).
-    from .types_manifest import _wrap_port_reachable  # noqa: E402 (avoid import cycle)
+    from .types_manifest import _import_reachable  # noqa: E402 (avoid import cycle)
     seen_cb: set[str] = set()
     for r in types:
         if r["kind"] != "typedef" or not _is_callback_typedef(r["name"], by_name):
@@ -915,14 +930,15 @@ def compose(
         if not name or name.startswith("(") or name in seen_cb:
             continue
         seen_cb.add(name)
-        if scope_enabled and not seed_mode and not _wrap_port_reachable(
-                reach, name, "", by_name, port_paths):
+        if scope_enabled and not seed_mode and (name, "") not in imp_keys \
+                and not _import_reachable(
+                    reach, name, "", by_name, target_paths):
             continue
         base = _base_callback(r, reach, by_name)
         candidates.append({
             "base": base,
             "port_add": None,
-            "is_port": False,         # FFI typedef — never ported
+            "in_target": False,         # FFI typedef — never ported
             "forward": None,          # type-deps don't expand the symbol closure
             "key": (base["name"], ""),
             "target_file": _first_decl(r["decl_files"]),
@@ -930,8 +946,8 @@ def compose(
 
     # Pass 2: identify seeds (seed mode only). When scope.json is
     # provided, apply the **seed admission gate**: a candidate is
-    # admitted as a seed only if it's port-scope OR wrap-reachable
-    # from port code per the scope.json. Without scope.json, no
+    # admitted as a seed only if it's target-section OR reachable
+    # from target code per the scope.json. Without scope.json, no
     # gate (every match is admitted).
     seed_keys: set[tuple[str, str]] = set()
     dropped_seeds: list[str] = []
@@ -940,11 +956,12 @@ def compose(
             if not is_seed(c["base"], filter_spec):
                 continue
             # Wrap-scope seed admission gate: a non-port seed must be reachable
-            # from port code per the scope.json. `--unscoped` bypasses it (same
-            # intent as the Pass-1 enumeration drop above), so an explicitly
-            # named primitive that no port file calls is still emitted. Any seed
-            # the gate drops is logged below (never silently omitted).
-            if scope_enabled and not unscoped and not c["is_port"]:
+            # from the target, per the scope.json.
+            # `--unscoped` bypasses it (same intent as the Pass-1 enumeration
+            # drop above), so an explicitly named primitive that no port file
+            # calls is still emitted. Any seed the gate drops is logged below
+            # (never silently omitted).
+            if scope_enabled and not unscoped and not c["in_target"]:
                 name = c["base"]["name"]
                 def_file = c["base"].get("defined_in") or ""
                 kind = c["base"].get("kind") or ""
@@ -953,8 +970,8 @@ def compose(
                 elif kind and kind.startswith("global"):
                     reachable = reach.is_global_port_reachable(name, def_file)
                 elif kind == "callback":
-                    reachable = _wrap_port_reachable(
-                        reach, name, "", by_name, port_paths)
+                    reachable = _import_reachable(
+                        reach, name, "", by_name, target_paths)
                 else:
                     # Macros (kind=null until agent classification).
                     reachable = reach.is_macro_port_reachable(name, def_file)
@@ -965,7 +982,7 @@ def compose(
     if dropped_seeds:
         print(
             f"syms: {len(set(dropped_seeds))} seed(s) dropped -- named but not "
-            f"port-reachable from scope.json (re-run with --unscoped to include "
+            f"target-reachable from scope.json (re-run with --unscoped to include "
             f"them): {sorted(set(dropped_seeds))}"
         )
 
@@ -977,7 +994,7 @@ def compose(
     closure_keys: set[tuple[str, str]] = set()
     if seed_mode and scope_enabled and filter_spec.expand_closure():
         for c in candidates:
-            if c["key"] in seed_keys and c["is_port"] and c["forward"]:
+            if c["key"] in seed_keys and c["in_target"] and c["forward"]:
                 for fwd_key in c["forward"]:
                     if fwd_key not in seed_keys:
                         closure_keys.add(fwd_key)
@@ -988,8 +1005,8 @@ def compose(
     #
     # Per-dir scope is tracked alongside the entry emission. The
     # contract assumes a stem-group manifest dir carries entries of
-    # a single scope only — `"port"` if any emitted entry is port-
-    # shaped, otherwise `"wrap"`. This holds for stem-grouped manifest
+    # a single section only — the TARGET if any emitted entry belongs to
+    # it, otherwise IMPORT. This holds for stem-grouped manifest
     # dirs whose files all sit on one side of scope.json. The
     # mixed-scope-in-one-dir case (a stem-group split by
     # `config.out_of_scope.paths`) is a known limitation tracked in
@@ -1002,12 +1019,12 @@ def compose(
             is_closure_entry = (not is_seed_entry) and (c["key"] in closure_keys)
             if not (is_seed_entry or is_closure_entry):
                 continue
-            emit_port_shape = is_seed_entry and c["is_port"]
+            emit_port_shape = is_seed_entry and c["in_target"]
         else:
             # Filter mode: emit all candidates passing wrap-reach.
-            emit_port_shape = c["is_port"]
+            emit_port_shape = c["in_target"]
 
-        # --port-only / --wrap-only post-filters.
+        # --target-only / --import-only post-filters.
         if filter_spec.port_only and not emit_port_shape:
             continue
         if filter_spec.wrap_only and emit_port_shape:
@@ -1016,7 +1033,7 @@ def compose(
         entry = dict(c["base"])
         # No port/wrap shape fork: an emitted record always carries its
         # codebase-wide composition. `emit_port_shape` below survives only as
-        # the SCOPE classification -- it drives the --port-only/--wrap-only
+        # the SCOPE classification -- it drives the --target-only/--import-only
         # post-filters and the dir_scope tag, never the content.
         if c["port_add"] is not None:
             entry.update(c["port_add"])
@@ -1024,12 +1041,12 @@ def compose(
         if rel_dir is None:
             continue
         entries_by_dir[rel_dir].append(entry)
-        # Promote dir to "port" the first time we see a port entry
-        # under it; default to "wrap" otherwise.
+        # Promote dir to TARGET the first time we see a target entry
+        # under it; default to IMPORT otherwise.
         if emit_port_shape:
-            dir_scope[rel_dir] = "port"
+            dir_scope[rel_dir] = scope.TARGET
         else:
-            dir_scope.setdefault(rel_dir, "wrap")
+            dir_scope.setdefault(rel_dir, scope.IMPORT)
 
     # Stable sort by (kind, name) per dir.
     def _sort_key(e: dict[str, Any]) -> tuple[str, str]:
@@ -1093,7 +1110,7 @@ def main() -> None:
     for rel_dir, entries in sorted(entries_by_dir.items()):
         after = len(entries)
         total += after
-        if dir_scope.get(rel_dir) == "port":
+        if dir_scope.get(rel_dir) == scope.TARGET:
             port_dirs += 1
         else:
             wrap_dirs += 1
@@ -1103,7 +1120,7 @@ def main() -> None:
             kinds[e.get("kind") or "macro_unclassified"] += 1
     print(
         f"syms: {len(entries_by_dir)} manifest dirs "
-        f"({port_dirs} port-scope, {wrap_dirs} wrap-scope), "
+        f"({port_dirs} target-section, {wrap_dirs} import-section), "
         f"{total} entries → {args.out_root}"
     )
     for k, c in sorted(kinds.items()):
