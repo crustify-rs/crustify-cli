@@ -30,8 +30,8 @@ Three waves, in this order. Each is `--objective wrap`. Report the plan from
 its own wrap DAG layer:
 
 ```
-crustify-oracle /work/libgit2 src query types --import-only
-crustify-oracle /work/libgit2 src query dag --layer <L> --import-only
+crustify-oracle /work/<libgit2-checkout> src query types --import-only
+crustify-oracle /work/<libgit2-checkout> src query dag --layer <L> --import-only
 ```
 
 Wave one layer at a time, lowest first, using `--name`.
@@ -45,7 +45,7 @@ L0->L2 calls but does not own. Select by `--name`.
 fields, and their transitive closure:
 
 ```
-crustify-cli /work/libgit2 src translate \
+crustify-cli /work/<libgit2-checkout> src translate \
     --name git_indexer git_packbuilder git_repository \
     --transitive --objective wrap --dry-run
 ```
@@ -56,7 +56,7 @@ Wait for the user's go before promoting a session branch and proceeding with the
 
 ## Recording
 
-Record results in `/work/wrappers-results.md`
+Record results in `/work/wrappers-results.md` and use the exact format of the template.
 
 After each wave: `utils/log_cost.py` over the per-agent `<stage>.usage.json`
 for cost, the session branch diff for what landed, and `audit` for the unsafe
