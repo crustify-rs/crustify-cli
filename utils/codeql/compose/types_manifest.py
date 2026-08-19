@@ -20,7 +20,7 @@ the functions that touch the type by whether they access a field:
 Both footprints carry the COMPLETE cross-codebase set for port AND wrap
 types — scope-agnostic, like the manifest as a whole. The per-target scope
 view (narrowing to the in-scope universe) is applied at READ time by
-`query --methods`, never baked here. The footprints are the deterministic
+`query types --users`, never baked here. The footprints are the deterministic
 candidate pool from which the type wrapper derives lifecycle + per-field
 accessors (no `ops` list on a concrete type).
 
@@ -523,7 +523,7 @@ def _build_struct_entry(
     # Consumer footprints, partitioned opaque vs non-opaque — the COMPLETE
     # cross-codebase footprint for both port and wrap types (scope-agnostic,
     # like the manifest as a whole). The per-target scope view is applied at
-    # READ time by `query --methods` (filter to scope.json), not baked here.
+    # READ time by `query types --users` (filter to scope.json), not baked here.
     entry["opaque_in"], entry["non_opaque_in"] = _type_consumers(
         reach, name, def_file, by_name, None,
     )

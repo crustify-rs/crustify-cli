@@ -63,20 +63,21 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
     from the manifest (dag-free). With no `--name` they enumerate (filtered by
     scope / `--file`) as a name list; with `--name T` they
     introspect one entry — always the WHOLE record (several names → several
-    records). On a type, `--fields`/`--ops` print its windowable lists
+    records). On a type, `--fields`/`--lifecycle-ops` print its windowable lists
     (`facets`). The .rs module of an entry is found via
     `crustify-cli <target> scaffold --name <X>`, not here."""
     sc = p.add_mutually_exclusive_group()
     sc.add_argument("--imported-only", action="store_true", dest="imported_only",
                     help="Narrow to the IMPORT section — what the target reaches "
                          "but does not name: enumeration → import entries; "
-                         "--ops/--methods → import functions; --fields/--field-touchers "
+                         "--lifecycle-ops/--users → imported functions; "
+                         "--fields/--field-touchers "
                          "→ fields touched by import code. (Facets are complete "
                          "by default.)")
     sc.add_argument("--targeted-only", action="store_true", dest="targeted_only",
                     help="Narrow to the TARGET section — what "
                          "`scope-config.json`'s `files` names: enumeration → target "
-                         "entries; --ops/--methods → target functions; "
+                         "entries; --lifecycle-ops/--users → targeted functions; "
                          "--fields/--field-touchers → fields touched by target code. "
                          "(Facets are complete by default.) Says nothing about what "
                          "will be DONE with them — that is `translate --objective`.")
@@ -123,15 +124,23 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
                                 "narrows to the fields THIS CAMPAIGN's targeted code reaches "
                                 "(--imported-only does not apply here); "
                                 "'[]' if none.")
-        facet.add_argument("--ops", action="store_true",
-                           help="Introspect a type: its method surface "
-                                "(lifecycle ops), lifecycle-first.")
-        facet.add_argument("--methods", action="store_true",
+        facet.add_argument("--lifecycle-ops", action="store_true",
+                           dest="lifecycle_ops",
+                           help="Introspect a type: its LIFECYCLE surface only — "
+                                "the droppers, field-disposers and cloners, "
+                                "reverse-derived from the symbols whose `lifetime` "
+                                "block acts on an arg of this type, ordered "
+                                "lifecycle-first then alphabetically. This is the "
+                                "canonical windowable list the translate scheduler "
+                                "co-emits with the type. A strict subset of --users.")
+        facet.add_argument("--users", action="store_true",
                            help="Introspect a type: its COMPLETE footprint — the "
                                 "opaque_in ∪ non_opaque_in functions (every function "
-                                "tree-wide that touches the type, incl. out-of-scope); "
+                                "tree-wide that USES the type, as a handle or through "
+                                "a field, incl. out-of-scope); "
                                 "--targeted-only/--imported-only intersect with that section's "
-                                "functions; '[]' if none.")
+                                "functions; '[]' if none. Wider than --lifecycle-ops, "
+                                "and unordered.")
         facet.add_argument("--field-touchers", action="store_true",
                            dest="field_touchers",
                            help="Introspect a type: {field: [touchers]} — ALL "
@@ -162,19 +171,42 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
                  "SPEC (tag / typedef / `void` / `string`). Pair with --calling "
                  "to keep only those that reach a lifecycle primitive. No --name "
                  "needed.")
+        # The raw use-graph closure around a symbol. Distinct from `query dag
+        # --name F --depth N`, which walks the ORDERING graph: scope-narrowed
+        # (an imported symbol contributes no callees at all) and carrying the
+        # layering. These two walk the graph the C actually wrote.
+        facet.add_argument(
+            "--callees", action="store_true", dest="callees",
+            help="Introspect a symbol: what it reaches, out to --depth hops "
+                 "(default 1 = direct). The raw use graph from the composer's "
+                 "depends_on.syms — codebase-wide, NOT narrowed by scope, so it "
+                 "answers on a `wrap` campaign where `query dag` deliberately "
+                 "shows nothing. Nodes come back as {name, defined_in}: the walk "
+                 "is keyed on that pair, so same-named file-local statics never "
+                 "merge. Needs --name; --file picks one of several.")
+        facet.add_argument(
+            "--callers", action="store_true", dest="callers",
+            help="Introspect a symbol: what reaches IT, out to --depth hops — "
+                 "the inverse of --callees over the same index, same output "
+                 "shape. Needs --name.")
         p.add_argument(
             "--calling", default=None, metavar="FN[,FN...]", dest="calling",
             help="Narrow --taking to symbols that reach one of these routines "
-                 "within --hops call hops (via the composer's depends_on.syms). "
+                 "within --depth hops (via the composer's depends_on.syms). "
                  "A dropper/cloner must ultimately reach a raw primitive -- but "
                  "the top-level one often does so through a helper, so >1 hop is "
                  "the norm (e.g. ASN1_STRING_free -> "
-                 "ossl_asn1_string_free_internal -> CRYPTO_free is 2 hops).")
+                 "ossl_asn1_string_free_internal -> CRYPTO_free is 2 hops). "
+                 "Matches on NAME (a caller cannot know which file a helper was "
+                 "defined in); each hit is reported with the file it resolved to.")
         p.add_argument(
-            "--hops", type=int, default=1, metavar="N", dest="hops",
-            help="Call-hop depth for --calling (default 1). NOT capped -- every "
-                 "function transitively reaches malloc/free, so depth is a "
-                 "precision/recall trade the caller owns.")
+            "--depth", type=int, default=1, metavar="N", dest="depth",
+            help="Hop depth for --callees / --callers / --calling (default 1 = "
+                 "direct edges only). Cycles are safe -- the walk is an "
+                 "iterative BFS over a visited set, so a recursive cluster "
+                 "terminates like anything else. NOT capped: every function "
+                 "transitively reaches malloc, so depth is a precision/recall "
+                 "trade the caller owns, and what a large one costs is output.")
         p.add_argument(
             "--array", action="store_true", dest="array",
             help="With --lifetime-for/--taking: keep only args whose ptr carries "
@@ -216,8 +248,12 @@ def _add_query_command(sub) -> None:
         "type's destructor in another scope is readable, submittable through "
         "--update, and comes back from --lifetime-for. Scope gates emission, "
         "not content: an emitted record's depends_on / used_by are "
-        "codebase-wide whatever its scope, so an import node's "
-        "depends_on.syms is populated and safe to walk. Submit through "
+        "codebase-wide whatever its scope, so an imported node's "
+        "depends_on.syms is populated and safe to walk. "
+        "Every graph walk here (--callees / --callers / --calling) is keyed on "
+        "(name, defined_in), never on the bare name, and reports both halves: "
+        "same-named file-local statics are distinct nodes, and merging them "
+        "would step between unrelated functions at every hop. Submit through "
         "--update, never by editing a file."
     )
     _add_query_flags(
@@ -363,8 +399,8 @@ def _dispatch_query(args: argparse.Namespace, target: Path) -> None:
         out_of_tree=bool(getattr(args, "out_of_tree", False)),
         in_tree=bool(getattr(args, "in_tree", False)),
         fields=bool(getattr(args, "fields", False)),
-        ops=bool(getattr(args, "ops", False)),
-        methods=bool(getattr(args, "methods", False)),
+        lifecycle_ops=bool(getattr(args, "lifecycle_ops", False)),
+        users=bool(getattr(args, "users", False)),
         field_touchers=bool(getattr(args, "field_touchers", False)),
         update=getattr(args, "update", None),
         update_help=bool(getattr(args, "update_help", False)),
@@ -374,7 +410,9 @@ def _dispatch_query(args: argparse.Namespace, target: Path) -> None:
         lifetime_for=getattr(args, "lifetime_for", None),
         taking=getattr(args, "taking", None),
         calling=getattr(args, "calling", None),
-        hops=int(getattr(args, "hops", 1) or 1),
+        callees=bool(getattr(args, "callees", False)),
+        callers=bool(getattr(args, "callers", False)),
+        depth=int(getattr(args, "depth", 1) or 1),
         array=bool(getattr(args, "array", False)),
     )
 

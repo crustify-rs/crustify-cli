@@ -42,8 +42,8 @@ def query(
     out_of_tree: bool = False,
     in_tree: bool = False,
     fields: bool = False,
-    ops: bool = False,
-    methods: bool = False,
+    lifecycle_ops: bool = False,
+    users: bool = False,
     field_touchers: bool = False,
     update: str | None = None,
     update_help: bool = False,
@@ -54,7 +54,9 @@ def query(
     lifetime_for: str | None = None,
     taking: str | None = None,
     calling: str | None = None,
-    hops: int = 1,
+    callees: bool = False,
+    callers: bool = False,
+    depth: int = 1,
     array: bool = False,
 ) -> None:
     """Read-only oracle over types / symbols, resolved from the composer
@@ -64,7 +66,7 @@ def query(
                            or whole records with ``--with-details``.
       * ``--name T``     → **introspect** one — a summary record by default,
                            the whole record with ``--with-details``;
-                           ``--fields`` / ``--ops`` (types) print
+                           ``--fields`` / ``--lifecycle-ops`` (types) print
                            its windowable lists. (The entry's ``.rs`` module is
                            found via ``scaffold --name``, not here.)
       * ``--name A B …`` → several records at once (no facet).
@@ -92,12 +94,27 @@ def query(
     if taking is not None:
         if subject != "symbols":
             raise SystemExit("query: --taking applies to symbols only.")
-        _taking(target, taking, calling, hops, array)
+        _taking(target, taking, calling, depth, array)
         return
     name_list = list(names or [])
-    type_facets = fields or ops or methods or field_touchers
+    # --callees / --callers: the raw use-graph closure around a symbol. Needs a
+    # --name (there is no closure without a seed) and is symbols-only.
+    if callees or callers:
+        if subject != "symbols":
+            raise SystemExit("query: --callees/--callers apply to symbols only.")
+        if not name_list:
+            raise SystemExit(
+                "query symbols: --callees/--callers need at least one --name — "
+                "they walk out from a seed. Use --file to pick one of several "
+                "same-named statics.")
+        _call_closure(target, name_list, files,
+                      direction="callees" if callees else "callers", depth=depth)
+        return
+    type_facets = fields or lifecycle_ops or users or field_touchers
     if type_facets and kind != "type":
-        raise SystemExit("query symbols: --fields/--ops/--methods/--field-touchers apply to types only.")
+        raise SystemExit(
+            "query symbols: --fields/--lifecycle-ops/--users/--field-touchers "
+            "apply to types only.")
     if imported_only and (fields or field_touchers):
         raise SystemExit(
             "query types: --imported-only does not apply to --fields / "
@@ -112,7 +129,8 @@ def query(
             f"query {subject}: facets / --manifest / --update need exactly one --name.")
     if name_list:
         _introspect(target, kind=kind, names=name_list, files=files,
-                    fields=fields, ops=ops, methods=methods, field_touchers=field_touchers,
+                    fields=fields, lifecycle_ops=lifecycle_ops, users=users,
+                    field_touchers=field_touchers,
                     update=update, manifest=manifest,
                     imported_only=imported_only, targeted_only=targeted_only)
     else:
@@ -207,38 +225,85 @@ def _entry_pair(layout, target) -> tuple[list, list]:
             _entries(layout, target, "symbols"))
 
 
-def _callee_index(layout, target) -> dict:
-    """name -> set(callee names), from the composer's `depends_on.syms`. Since
-    scope gates emission and not content, this is codebase-wide for every
-    emitted record."""
-    idx: dict = {}
-    for s in _entries(layout, target, "symbols"):
-        cs = {d.get("name") for d in (s.get("depends_on") or {}).get("syms") or []}
-        if cs:
-            idx.setdefault(s.get("name"), set()).update(cs)
-    return idx
+def _call_indexes(layout, target) -> tuple[dict, dict]:
+    """``(callees, callers)``, both keyed AND valued on ``(name, origin)``.
+
+    Built from the composer's ``depends_on.syms``, so it is the *use* graph,
+    slightly wider than pure calls: a symbol's macro expansions, global reads
+    and callback references are edges here too — which is what a
+    lifecycle-primitive hunt wants.
+
+    Keyed by :func:`~compose.scope.origin_key`, never by the bare name. A
+    name-only index pools every same-named file-local static into one bucket:
+    `free_it` in `a.c` inherits `free_it`-in-`b.c`'s callees, and the walk then
+    steps between two unrelated functions at every hop. This is the same key
+    the dag nodes and the scope entries use, so all three collide correctly.
+
+    Built over :func:`_universe_entries`, not the scoped set: a call-graph walk
+    must not stop at the scope line. The routine that actually frees the bytes
+    routinely sits in a section this target does not own, and it is exactly the
+    node the walk is looking for.
+    """
+    from compose.scope import origin_key
+
+    callees: dict = {}
+    callers: dict = {}
+    for e in _universe_entries(layout, target, "symbols"):
+        nm = e.get("name")
+        if not nm:
+            continue
+        src = origin_key(nm, e.get("defined_in"), e.get("declared_in"))
+        for d in (e.get("depends_on") or {}).get("syms") or []:
+            if not d.get("name"):
+                continue
+            dst = origin_key(d["name"], d.get("defined_in"), d.get("declared_in"))
+            callees.setdefault(src, set()).add(dst)
+            callers.setdefault(dst, set()).add(src)
+    return callees, callers
 
 
-def _reaches(start: str, targets: set, idx: dict, hops: int) -> set:
-    """Which of `targets` are reachable from `start` within `hops` call hops.
-    Hops are NOT capped by the tool -- a caller asking for depth is trusted."""
-    if hops < 1:
-        return set()
-    hit: set = set()
-    seen = {start}
-    frontier = {start}
-    for _ in range(hops):
+def _bfs(seeds, idx: dict, depth: int) -> dict:
+    """``{(name, origin): hop}`` reachable from `seeds` within `depth` hops,
+    the seeds themselves excluded. Each node carries its MINIMAL distance.
+
+    Iterative with a visited set, so a cyclic call graph terminates and a large
+    `depth` costs result SIZE, never a recursion. It is not capped either:
+    every function transitively reaches malloc, so how deep to go is a
+    precision/recall trade the caller owns.
+    """
+    out: dict = {}
+    seen = set(seeds)
+    frontier = set(seeds)
+    for hop in range(1, max(int(depth), 0) + 1):
         nxt: set = set()
-        for fn in frontier:
-            for c in idx.get(fn, ()):  # noqa: SIM118
-                hit |= {c} & targets
+        for k in frontier:
+            for c in idx.get(k, ()):  # noqa: SIM118
                 if c not in seen:
                     seen.add(c)
+                    out[c] = hop
                     nxt.add(c)
         if not nxt:
             break
         frontier = nxt
-    return hit
+    return out
+
+
+def _node(key) -> dict:
+    """A ``(name, origin)`` key as the JSON object every walk emits. Both halves
+    always, because the name alone is a query and not an identity."""
+    return {"name": key[0], "defined_in": key[1] or None}
+
+
+def _reaches(start, targets: set, idx: dict, depth: int) -> set:
+    """Which nodes NAMED in `targets` are reachable from the ``(name, origin)``
+    key `start` within `depth` hops, returned as keys.
+
+    The traversal is keyed on ``(name, origin)``; `targets` matches on the NAME
+    alone, because `--calling` names routines and a caller has no way to know
+    which file a helper it is hunting was defined in. Hits come back as full
+    keys, so the answer is unambiguous even where the question was not.
+    """
+    return {k for k in _bfs([start], idx, depth) if k[0] in targets}
 
 
 def _type_aliases(layout, target, type_name: str) -> set:
@@ -259,51 +324,117 @@ _LIFETIME_FIELD = {"is_dropper": "dropped_by",
 
 
 def _taking(target: Path, spec: str, calling: str | None,
-            hops: int, array_only: bool) -> None:
+            depth: int, array_only: bool) -> None:
     """CANDIDATE discovery for lifetime-primitive identification (the inverse of
     `--lifetime-for`, which reads flags that already exist).
 
     Every symbol with an ARG matching `spec` -- a type tag/typedef, or the
     `void` / `string` keyword. `--calling` narrows to those that reach one of
-    the named routines within `--hops` call hops (a dropper/cloner must
-    ultimately reach a raw primitive; the top-level one often does so via a
-    helper, so hops > 1 is the norm). `--array` keeps only args whose ptr
-    carries an `array` shape. Prints JSON."""
+    the named routines within `--depth` hops (a dropper/cloner must ultimately
+    reach a raw primitive; the top-level one often does so via a helper, so
+    depth > 1 is the norm). `--array` keeps only args whose ptr carries an
+    `array` shape. Prints JSON.
+
+    Both the candidate and each thing it reaches are reported as
+    ``{name, defined_in}``: the walk is keyed on that pair, so collapsing the
+    answer back to a bare name would re-introduce exactly the same-named-static
+    conflation the keying exists to prevent."""
+    from compose.scope import origin_key
     from crustify.layout import Layout
 
     layout = Layout.discover(target)
     aliases = (_type_aliases(layout, target, spec) if spec not in _SPEC_KEYWORDS
                else {spec})
     want = {c.strip() for c in (calling or "").split(",") if c.strip()}
-    idx = _callee_index(layout, target) if want else {}
+    idx = _call_indexes(layout, target)[0] if want else {}
     rows = []
-    if True:
-        for s in _entries(layout, target, "symbols"):
-            hits = [a for a in s.get("ptr_args") or []
-                    if _arg_matches_spec(a, spec, aliases)
-                    and (not array_only or _arg_is_array(a))]
-            if not hits:
-                continue
-            reached = sorted(_reaches(s.get("name"), want, idx, hops)) if want else []
-            if want and not reached:
-                continue
-            rows.append({
-                "symbol": s.get("name"),
-                "defined_in": s.get("defined_in"),
-                "args": [{"position": a.get("position"), "name": a.get("name"),
-                          "type": a.get("type"), "depth": a.get("depth")}
-                         for a in hits],
-                **({"reaches": reached} if want else {}),
-            })
+    for s_ in _entries(layout, target, "symbols"):
+        hits = [a for a in s_.get("ptr_args") or []
+                if _arg_matches_spec(a, spec, aliases)
+                and (not array_only or _arg_is_array(a))]
+        if not hits:
+            continue
+        key = origin_key(s_.get("name"), s_.get("defined_in"),
+                         s_.get("declared_in"))
+        reached = sorted(_reaches(key, want, idx, depth)) if want else []
+        if want and not reached:
+            continue
+        rows.append({
+            "symbol": s_.get("name"),
+            "defined_in": s_.get("defined_in"),
+            "args": [{"position": a.get("position"), "name": a.get("name"),
+                      "type": a.get("type"), "depth": a.get("depth")}
+                     for a in hits],
+            **({"reaches": [_node(k) for k in reached]} if want else {}),
+        })
     rows.sort(key=lambda r: (r["symbol"], r["defined_in"] or ""))
     print(json.dumps({
         "taking": spec,
         "matched_aliases": sorted(aliases),
         "calling": sorted(want) or None,
-        "hops": hops if want else None,
+        "depth": depth if want else None,
         "array_only": array_only,
         "count": len(rows),
         "candidates": rows,
+    }, indent=2))
+
+
+def _call_closure(target: Path, names: list[str], files, *,
+                  direction: str, depth: int) -> None:
+    """``query symbols --callees|--callers --name F [--depth N]`` — the raw
+    use-graph closure around one or more symbols.
+
+    NOT the same answer as ``query dag --name F --depth N``, and the difference
+    is the point. The dag's ``deps.syms`` are the ORDERING graph: narrowed by
+    scope (an imported symbol contributes no callees at all, by design) and
+    carrying the layering the translate stage schedules on. This is the graph as
+    the C actually wrote it — codebase-wide, unnarrowed, and available on a
+    `wrap` campaign where the dag deliberately shows nothing.
+
+    ``--depth`` defaults to 1 (direct edges only). Cycles are not a hazard: the
+    walk is an iterative BFS over a visited set, so a self-recursive or mutually
+    recursive cluster terminates at the requested depth like anything else. What
+    a large depth costs is output — past a handful of hops nearly everything
+    reaches nearly everything, through malloc if nothing else.
+
+    Seeds resolve by NAME (narrowed by ``--file``); every match is walked and
+    the results unioned at their minimal depth, with the seed set echoed back so
+    a name that resolved to more than one entity is visible rather than silently
+    merged.
+    """
+    from compose.scope import origin_key
+    from crustify.layout import Layout
+
+    layout = Layout.discover(target)
+    callees, callers = _call_indexes(layout, target)
+    idx = callees if direction == "callees" else callers
+
+    want_names = set(names or [])
+    want_files = set(files or [])
+    seeds: set = set()
+    for e in _universe_entries(layout, target, "symbols"):
+        if e.get("name") not in want_names:
+            continue
+        key = origin_key(e["name"], e.get("defined_in"), e.get("declared_in"))
+        if want_files and (key[1] or "") not in want_files:
+            continue
+        seeds.add(key)
+    if not seeds:
+        raise SystemExit(
+            f"query symbols --{direction}: no symbol named "
+            f"{', '.join(sorted(want_names))!r}"
+            + (f" defined in {', '.join(sorted(want_files))}" if want_files else "")
+            + ".")
+
+    hops = _bfs(seeds, idx, depth)
+    rows = sorted(((h, k) for k, h in hops.items()),
+                  key=lambda p: (p[0], p[1][0], p[1][1] or ""))
+    print(json.dumps({
+        "direction": direction,
+        "seeds": [_node(k) for k in sorted(seeds)],
+        "depth": depth,
+        "count": len(rows),
+        "reached": [{**_node(k), "depth": h} for h, k in rows],
     }, indent=2))
 
 
@@ -508,21 +639,22 @@ def _enumerate(
 
 
 def _introspect(
-    target: Path, *, kind: str, names, files, fields, ops, manifest,
-    imported_only, targeted_only, methods=False, field_touchers=False,
+    target: Path, *, kind: str, names, files, fields, lifecycle_ops, manifest,
+    imported_only, targeted_only, users=False, field_touchers=False,
     update=None,
 ) -> None:
     """One named entity's record (summary / whole), or — for a single type —
-    its windowable ``--fields`` / ``--ops`` / ``--methods`` / ``--field-touchers``
-    lists, the ``--manifest`` types.json that homes it, or a ``--update``
-    findings ingest. (The entry's ``.rs`` module is found via ``scaffold
-    --name``.)"""
+    its windowable ``--fields`` / ``--lifecycle-ops`` / ``--users`` /
+    ``--field-touchers`` lists, the ``--manifest`` types.json that homes it, or
+    a ``--update`` findings ingest. (The entry's ``.rs`` module is found via
+    ``scaffold --name``.)"""
     from crustify import dag as D
 
-    if fields or ops or methods or field_touchers or manifest or update is not None:
+    if (fields or lifecycle_ops or users or field_touchers or manifest
+            or update is not None):
         layout, node, by_key = _resolve(target, kind=kind, name=names[0],
                                         files=files,
-                                        with_ops=bool(ops or methods))
+                                        with_ops=bool(lifecycle_ops or users))
         if manifest:
             # One store for the whole repo now -- the per-stem manifest an
             # entity used to home in is gone. Kept because agents call it to
@@ -536,7 +668,7 @@ def _introspect(
             else:
                 _update_sym(layout, target, node.id, node.defined_in, update)
             return
-        if methods:
+        if users:
             # The type's COMPLETE footprint: opaque_in ∪ non_opaque_in — every
             # function tree-wide that touches the type (as a handle or a field).
             # Returned whole by default (the footprint spans the whole codebase,
@@ -583,7 +715,7 @@ def _introspect(
             win = objs
             print(json.dumps(win, indent=2))
             return
-        # --ops: names only, lifecycle-first, scope-filterable via scope.json
+        # --lifecycle-ops: names only, lifecycle-first, scope-filterable via scope.json
         # membership (same oracle as enumeration / wrap / port).
         op_pred = lambda _n: True            # noqa: E731
         if imported_only or targeted_only:
@@ -699,9 +831,19 @@ def _field_touchers(layout, target, tag: str, defined_in: str | None, *,
     ALL declared fields by default; --targeted-only/--imported-only narrow the FIELD set
     to the ones touched by that scope's code. Each field's toucher set is the
     COMPLETE, UNfiltered set of functions that access it — read straight from the
-    raw ``t2/field_accesses`` edge, NOT the target-section ``depends_on`` inversion.
+    raw ``t2/field_accesses`` edge, NOT the targeted-section ``depends_on`` inversion.
     So a toucher that is itself out of scope (while the field is touched in-scope
-    via raw ``obj->field``) still surfaces as a candidate."""
+    via raw ``obj->field``) still surfaces as a candidate.
+
+    A toucher is reported as ``{name, defined_in}``, keyed on the pair and never
+    on the bare name. `field_accesses.csv` gives both halves — ``enclosing_name``
+    is the accessing function and ``access_file`` is the file the access
+    expression sits in, which for a body access IS that function's defining file
+    — and without the second half two same-named file-local statics collapse
+    into one entry that names a function the caller then cannot find. The type
+    side of the row was already keyed this way (``struct_def_file``); this is the
+    other end of the same edge.
+    """
     import csv as _csv
     from collections import defaultdict
 
@@ -720,13 +862,14 @@ def _field_touchers(layout, target, tag: str, defined_in: str | None, *,
                     continue
                 fld, fn = r.get("field_name"), r.get("enclosing_name")
                 if fld and fn:
-                    complete[fld].add(fn)
+                    complete[fld].add((fn, r.get("access_file") or ""))
 
     keep = _field_keep_set(layout, target, tag, defined_in,
                                    targeted_only=targeted_only)
     scoped = set(declared) if keep is None else {f for f in declared if f in keep}
 
-    out = {f: sorted(complete.get(f, set())) for f in sorted(scoped)}
+    out = {f: [_node(k) for k in sorted(complete.get(f, set()))]
+           for f in sorted(scoped)}
     print(json.dumps({"name": tag, "fields": out}, indent=2))
 
 
@@ -1699,7 +1842,7 @@ def _resolve(target, *, kind: str, name: str, files: list[str] | None,
     """``(layout, node, by_key)`` for one type/symbol, resolved from the composed
     records (never the dag — see the note above). For a *type*, ``by_key`` is
     populated with the type's op nodes so :func:`dag.ordered_ops` can serve
-    ``--ops`` — it selects them out of ``by_key`` by lifecycle name, the dag
+    ``--lifecycle-ops`` — it selects them out of ``by_key`` by lifecycle name, the dag
     storing none. Raises ``SystemExit`` on miss/ambiguity.
 
     ``with_ops=False`` skips that: reverse-deriving the lifecycle needs the

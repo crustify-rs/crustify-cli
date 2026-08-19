@@ -8,7 +8,7 @@ routing query's reads through the scheduler made an oracle look like it depended
 on a stage it has nothing to do with.
 
 The ordering in particular is shared ON PURPOSE — :func:`ordered_ops` is the one
-definition both the scheduler and ``query types --ops`` consume, so the two
+definition both the scheduler and ``query types --lifecycle-ops`` consume, so the two
 never disagree on a type's op set or its order.
 """
 from __future__ import annotations
@@ -196,7 +196,7 @@ def ordered_ops(node: Node, by_key: dict[SymKey, Node], lifecycle: set[str],
     """A type's ops as the **canonical, windowable list**: the symbol nodes named
     by ``lifecycle`` that are ``in_scope``, ordered **lifecycle-first**
     (droppers/disposers/cloners) then alphabetical. This is the single ordering
-    both the scheduler and ``query types --name T --ops`` consume.
+    both the scheduler and ``query types --name T --lifecycle-ops`` consume.
 
     Membership comes from ``lifecycle`` — the op-name set reverse-derived from
     the analysis tree's ``lifetime`` records (:func:`load_type_meta` for the

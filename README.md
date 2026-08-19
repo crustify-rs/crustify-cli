@@ -297,8 +297,8 @@ Four query subjects, each with its own modes:
 
 | subject | modes | flags |
 |---|---|---|
-| `types` | enumerate · introspect · submit | `--fields` `--ops` `--methods` `--field-touchers` `--manifest` `--in-tree` `--out-of-tree` |
-| `symbols` | enumerate · introspect · submit · lifecycle discovery | `--lifetime-for` `--taking` `--calling` `--hops` `--array` `--manifest` `--in-tree` `--out-of-tree` |
+| `types` | enumerate · introspect · submit | `--fields` `--lifecycle-ops` `--users` `--field-touchers` `--manifest` `--in-tree` `--out-of-tree` |
+| `symbols` | enumerate · introspect · submit · lifecycle discovery · call-graph closure | `--lifetime-for` `--taking` `--calling` `--callees` `--callers` `--depth` `--array` `--manifest` `--in-tree` `--out-of-tree` |
 | `files` | the targeted set / the imported closure | `--targeted-only` `--imported-only` |
 | `dag` | closure · layer slice · flattened-cycle twins | `--name` `--layer` `--scc` `--depth` `--loc` `--full` |
 
@@ -308,6 +308,10 @@ narrow an enumeration by whether an entry's home is inside the repository: `--im
 --out-of-tree` is the permanent FFI floor, `--imported-only --in-tree` the remaining port backlog.
 `query dag --full` recomposes scope as if `campaign_objective` were `port`, so a `wrap` campaign can
 read the body-deep graph without editing its config.
+
+`query symbols --callees` / `--callers` walk the **raw use graph** the C wrote — codebase-wide,
+unnarrowed, keyed `(name, defined_in)` — while `query dag --name` walks the **ordering graph**,
+scope-narrowed and layered. `--depth` bounds both (default 1 = direct edges); cycles terminate.
 
 `query <subject> --help` is the authority for what each flag means and for the record semantics
 behind it; `--update-help` prints the findings schema `--update` expects, `--schema` the record's
