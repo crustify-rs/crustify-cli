@@ -4,14 +4,14 @@ composer imports.
 The classification rule is the definition-anchored rule documented
 in `utils/codeql/README.md`:
 
-  An entity belongs to the TARGET iff EITHER:
+  An entity is TARGETED iff EITHER:
     1. (Primary path) It has a definition in the CodeQL database AND
-       that definition's file is in `scope.json`'s `target.files`, OR
+       that definition's file is in `scope.json`'s `targeted.files`, OR
     2. (Fallback for entities with no definition in the DB) It has
        no definition in the database AND all its declarations live
        in target files.
 
-  Otherwise the entity is an IMPORT — reached, not named.
+  Otherwise the entity is IMPORTED — reached, not named.
 
 For typedefs an additional rule applies: a typedef inherits the
 scope of its terminal underlying user type, walking the `aliases`
@@ -45,18 +45,18 @@ def classify(def_file: str, decl_files: list[str], target_paths: set[str]) -> st
       decl_files: list of repository-relative paths of all
         declaration entries (typically the headers carrying
         `extern` / forward declarations). May be empty.
-      target_paths: the target's file set (`scope.json`'s `target.files`).
+      target_paths: the target's file set (`scope.json`'s `targeted.files`).
 
-    Returns :data:`TARGET` or :data:`IMPORT`.
+    Returns :data:`TARGETED` or :data:`IMPORTED`.
     """
     if def_file:
-        return TARGET if def_file in target_paths else IMPORT
+        return TARGETED if def_file in target_paths else IMPORTED
     # Fallback: no def in DB, classify by declarations.
     if not decl_files:
         # No def AND no decls — treat as an import (unknown origin, safer
         # to surface as a boundary entity than to silently claim it).
-        return IMPORT
-    return TARGET if all(d in target_paths for d in decl_files) else IMPORT
+        return IMPORTED
+    return TARGETED if all(d in target_paths for d in decl_files) else IMPORTED
 
 
 _C_TU_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".cu")
@@ -85,8 +85,8 @@ def entry_scope(
     if (kind or "").startswith("macro"):
         home = def_file or (decl_files[0] if decl_files else "")
         if home.endswith(_C_TU_SUFFIXES) and home in target_paths:
-            return TARGET
-        return IMPORT
+            return TARGETED
+        return IMPORTED
     return classify(def_file, decl_files, target_paths)
 
 
@@ -225,47 +225,50 @@ def _doc(scope_src) -> dict:
 
 
 #: The two sections of a composed `scope.json`, as constants rather than bare
-#: strings. Both words are already spoken for elsewhere — `target` is the CLI
-#: positional and `build.json`'s output filename, `import` shades into
-#: `#include` — so a literal is ambiguous at a glance where `scope.TARGET` is
-#: not. The pair they replace was worse: `"port"` and `"wrap"` are ALSO
-#: objective values, audit stage labels and scheduler pool keys, so a sweep
-#: over those literals could not tell a section key from a verb.
-TARGET = "target"
-IMPORT = "import"
-SECTIONS = (TARGET, IMPORT)
+#: strings. The words are PARTICIPLES on purpose: `target` is the CLI positional
+#: and `build.json`'s output filename, and `import` shades into `#include`, so
+#: either bare noun is ambiguous at a glance — `targeted` / `imported` name what
+#: was DONE to an entity by the scope composer and collide with nothing. The
+#: pair before them was worse still: `"port"` and `"wrap"` are ALSO
+#: `campaign_objective` / `--objective` values, audit stage labels and scheduler
+#: pool keys, so a sweep over those literals could not tell a section key from a
+#: verb.
+TARGETED = "targeted"
+IMPORTED = "imported"
+SECTIONS = (TARGETED, IMPORTED)
 
 
-def load_target_paths(scope_json) -> set[str]:
-    """The target's own file set — every file `scope-config.json`'s `files`
-    named that the build actually compiled.
+def load_targeted_paths(scope_json) -> set[str]:
+    """The campaign's own file set — every file `scope-config.json`'s
+    `impl_files` + `api_headers` named that the build actually compiled. EMPTY
+    on a `wrap` campaign, which owns nothing.
 
     Composer-emitted by `compose.scope_manifest.compose()`; the `files` list is
     anchored on the CodeQL T1 tables, so an `#ifdef`-elided file is absent:
 
         {"target": {"files": [...], "functions": [...], ...}}
 
-    Every other file an in-scope entity reaches is an IMPORT and lands in the
-    sibling section. Note this says nothing about what will be DONE with those
-    files — port or wrap is the translate stage's objective, not a property of
-    the scope.
+    Every other file an in-scope entity reaches is IMPORTED and lands in the
+    sibling section. The section says what the campaign COVERS;
+    `campaign_objective` says what it is FOR, and the per-wave `translate
+    --objective` says what one agent does with one selection.
     """
-    return set(_doc(scope_json).get(TARGET, {}).get("files", []))
+    return set(_doc(scope_json).get(TARGETED, {}).get("files", []))
 
 
 def load_seed_paths(scope_json) -> set[str]:
-    """The files `scope-config.json`'s `files.import` named, expanded — echoed
-    into the manifest as `import.seeds`.
+    """The files `scope-config.json`'s `api_headers` named, expanded — echoed
+    into the manifest as `imported.seeds`.
 
-    Empty for a target campaign, where the import section is DERIVED from the
-    target. Non-empty for a wrap campaign, where those files ARE the section's
-    seed: it is what tells a consumer that a struct defined in one of them is a
+    Empty for a PORT campaign, where the imported section is DERIVED as the
+    closure of the targeted one. Non-empty for a WRAP campaign, where those
+    files ARE the section's seed: it is what tells a consumer that a struct defined in one of them is a
     public value type (full field layout) rather than an opaque handle."""
-    return set(_doc(scope_json).get(IMPORT, {}).get("seeds", []))
+    return set(_doc(scope_json).get(IMPORTED, {}).get("seeds", []))
 
 
 def load_entities(scope_json, section: str, kind: str) -> set[tuple[str, str]]:
-    """The entity set of `section` (:data:`TARGET` | :data:`IMPORT`) for `kind`
+    """The entity set of `section` (:data:`TARGETED` | :data:`IMPORTED`) for `kind`
     (``"functions"`` | ``"globals"`` | ``"macros"`` | ``"types"``), as
     ``(name, defined_in)`` keys.
 
@@ -300,8 +303,8 @@ def scope_membership(
     scope_json, section: str, *,
     kinds: tuple[str, ...] = _SCOPE_KINDS,
 ) -> set[tuple[str, str]]:
-    """Unified membership key set for ``section`` (:data:`TARGET` |
-    :data:`IMPORT`):
+    """Unified membership key set for ``section`` (:data:`TARGETED` |
+    :data:`IMPORTED`):
     ``{(name, origin)}`` via :func:`origin_key`, so a candidate is in scope iff
     its own ``origin_key`` is in the set. Needs both ``defined_in`` and
     ``declared_in`` on every scope entry (the latter is the def_file-empty
@@ -548,11 +551,11 @@ def _selftest(csv_dir: Path, scope_json: Path) -> None:
     for sanity-checking against a known database while developing
     downstream composers.
     """
-    tgt = load_target_paths(scope_json)
+    tgt = load_targeted_paths(scope_json)
     print(f"target paths: {len(tgt)}")
 
     fns = load_csv(csv_dir / "functions.csv")
-    pf = sum(1 for r in fns if classify(r["def_file"], parse_decl_files(r["decl_files"]), tgt) == TARGET)
+    pf = sum(1 for r in fns if classify(r["def_file"], parse_decl_files(r["decl_files"]), tgt) == TARGETED)
     print(f"functions: total={len(fns)}  target={pf}  import={len(fns) - pf}")
 
     macs = load_csv(csv_dir / "macros.csv")
@@ -560,12 +563,12 @@ def _selftest(csv_dir: Path, scope_json: Path) -> None:
     print(f"macros:    total={len(macs)}  target={pm}  import={len(macs) - pm}")
 
     gls = load_csv(csv_dir / "globals.csv")
-    pg = sum(1 for r in gls if classify(r["def_file"], parse_decl_files(r["decl_files"]), tgt) == TARGET)
+    pg = sum(1 for r in gls if classify(r["def_file"], parse_decl_files(r["decl_files"]), tgt) == TARGETED)
     print(f"globals:   total={len(gls)}  target={pg}  import={len(gls) - pg}")
 
     types = load_csv(csv_dir / "types.csv")
     by_name = build_types_index(types)
-    pt = sum(1 for r in types if classify_type(r, by_name, tgt) == TARGET)
+    pt = sum(1 for r in types if classify_type(r, by_name, tgt) == TARGETED)
     print(f"types:     total={len(types)}  target={pt}  import={len(types) - pt}")
 
 
@@ -575,6 +578,6 @@ if __name__ == "__main__":
     ap.add_argument("--csv-dir", type=Path, required=True,
                     help="Directory containing T1 CSVs (functions.csv, macros.csv, globals.csv, types.csv).")
     ap.add_argument("--scope-json", type=Path, required=True,
-                    help="Path to the target's scope.json (its `target.files`).")
+                    help="Path to the target's scope.json (its `targeted.files`).")
     args = ap.parse_args()
     _selftest(args.csv_dir, args.scope_json)

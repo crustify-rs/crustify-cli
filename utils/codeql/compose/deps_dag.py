@@ -64,8 +64,8 @@ Nothing is dropped: external/libc symbols and builtins referenced by
 ``builtin``) so the topo order is complete. The builtin→Rust lowering table
 is deferred — builtins are only *tagged* here.
 
-Scope (port/wrap) is NOT stored — it is derived by the orchestrators from
-``scope.json`` at schedule time. Read-only, deterministic, no CodeQL.
+Scope (targeted/imported) is NOT stored — it is derived by the orchestrators
+from ``scope.json`` at schedule time. Read-only, deterministic, no CodeQL.
 """
 from __future__ import annotations
 
@@ -297,19 +297,27 @@ def _collect(analysis_root: Path,
 
     So edges are narrowed per node against THIS target's scope:
 
-      - **target symbol** — every edge. Its body is translated, so its
+      - **targeted symbol** — every edge. Its body is translated, so its
         callees and field-derived type uses are real dependencies.
-      - **import symbol** — signature only. A binding is emitted from the
+      - **imported symbol** — signature only. A binding is emitted from the
         signature alone: callee edges are dropped outright, and type edges
         keep only signature/opaque uses (``fields: []``).
-      - **import struct** — only fields the port scope actually touches
+      - **imported struct** — only fields the targeted scope actually touches
         (``port_fields``); the rest of the layout is never reached through
-        this target and must not order its work.
+        this target and must not order its work. EXCEPT when its definition
+        sits in a file the config named — a targeted file, or a wrap
+        campaign's ``api_headers`` seed — where the layout IS the API and
+        every field edge is kept.
+
+    On a WRAP campaign the targeted section is empty, so EVERY symbol takes
+    the signature-only path and every struct outside ``seed_paths`` orders no
+    field work at all: exactly how an imported item behaves on a port
+    campaign, which is the point. ``query dag --full`` is the escape hatch —
+    it recomposes scope with ``campaign_objective`` forced to ``port`` so the
+    same tree can be read body-deep.
 
     ``port_syms`` of None disables narrowing (whole-tree graph, the old
-    behaviour) — used by callers with no scope in hand. ``anchor_paths``
-    (`scope.json`'s `wrap.anchors`) exempts a struct DEFINED in one of those
-    files from the wrap-struct field narrowing.
+    behaviour) — used by callers with no scope in hand.
     """
     types: dict[str, TypeNode] = {}
     syms: dict[SymKey, SymNode] = {}
@@ -351,19 +359,19 @@ def _collect(analysis_root: Path,
         # names no file), so a colliding tag pools both entities' touched sets
         # -- which can only over-keep a field, never drop one.
         #
-        # Except when the struct's DEFINITION sits in an anchor file: a visible
+        # Except when the struct's DEFINITION sits in a named file: a visible
         # definition in a header the config named makes the fields the API, so
         # every one of them orders real work and the narrowing would drop the
-        # whole layout. Same rule the wrap closure's field-walk applies, for
-        # the same reason -- and load-bearing on a wrap-only target, where an
-        # empty port scope makes `port_fields` empty and would otherwise leave
-        # every wrap struct a dependency leaf.
+        # whole layout. Same rule the import closure's field-walk applies, for
+        # the same reason -- and load-bearing on a wrap campaign, where an
+        # empty targeted scope makes `port_fields` empty and would otherwise
+        # leave every imported struct a dependency leaf.
         # A struct whose definition is in a file the config NAMED keeps every
-        # field edge: for a target it is the layout being reimplemented, for a
-        # `files.import` seed it is a public value type whose fields ARE the
-        # API. Everything else orders only through what target code touches --
-        # which for a wrap campaign (no target) is nothing, so an opaque handle
-        # correctly orders no work at all.
+        # field edge: on a port campaign it is the layout being reimplemented,
+        # on a wrap campaign an `api_headers` seed is a public value type whose
+        # fields ARE the API. Everything else orders only through what targeted
+        # code touches -- which on a wrap campaign (nothing targeted) is
+        # nothing, so an opaque handle correctly orders no work at all.
         keep = (None if port_fields is None
                 or (df and (df in target_paths or df in seed_paths))
                 else port_fields.get(tag, set()))
@@ -398,14 +406,16 @@ def _collect(analysis_root: Path,
                 n.has_dep = True
                 dep = e["depends_on"] or {}
                 # `depends_on` is only ever emitted for an entry that was
-                # target-section for SOME target; whether it is target-section for
-                # THIS one decides how much of it applies.
+                # targeted by SOME target; whether it is targeted by THIS one
+                # decides how much of it applies. On a wrap campaign nothing is,
+                # so every symbol takes the signature-only branch.
                 is_port = port_syms is None or key in port_syms
                 for d in dep.get("types") or []:
                     if not d.get("type"):
                         continue
-                    # A wrap node keeps signature/opaque uses (fields: []) and
-                    # drops field-derived ones: it binds the type, never reads it.
+                    # An imported node keeps signature/opaque uses (fields: [])
+                    # and drops field-derived ones: it binds the type, never
+                    # reads it.
                     if is_port or not d.get("fields"):
                         n.dep_on_types.add(d["type"])
                 if is_port:
@@ -1028,7 +1038,7 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
         port_syms = set()
         for kind in ("functions", "globals", "macros"):
             try:
-                port_syms |= _scope.load_entities(scope_json, _scope.TARGET, kind)
+                port_syms |= _scope.load_entities(scope_json, _scope.TARGETED, kind)
             except Exception:
                 pass
         port_fields = port_touched_fields(analysis_root, port_syms)
@@ -1057,7 +1067,7 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
     types, syms, talias = _collect(analysis_root, port_syms, port_fields,
                                    codeql_dir=codeql_dir,
                                    in_scope_types=in_scope_types,
-                                   target_paths=(_scope.load_target_paths(scope_json)
+                                   target_paths=(_scope.load_targeted_paths(scope_json)
                                                  if scope_json is not None else None),
                                    seed_paths=(_scope.load_seed_paths(scope_json)
                                                if scope_json is not None else None))

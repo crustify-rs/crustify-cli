@@ -145,9 +145,9 @@ def _in_scope_names(layout, target: Path) -> set[str]:
 
 
 def _scope_map(layout, target: Path) -> dict[str, str]:
-    """``name -> scope.TARGET | scope.IMPORT`` from scope.json — which section an
+    """``name -> scope.TARGETED | scope.IMPORTED`` from scope.json — which section an
     item sits in. Types key on ``name``, with a ``type`` fallback for un-migrated
-    records; functions/globals on ``name``. TARGET is applied second so it wins
+    records; functions/globals on ``name``. TARGETED is applied second so it wins
     on the (rare) overlap. Empty when scope cannot be composed."""
     from crustify import scope as _scope_mod
     try:
@@ -170,7 +170,7 @@ def _port_touched(layout, target) -> dict[str, set] | None:
     scope cannot be resolved (then every field is anchored, as before).
 
     Delegates to the oracle rather than re-deriving from the CSVs: the same
-    answer `query types --fields --target-only` gives, so an anchor set and the
+    answer `query types --fields --targeted-only` gives, so an anchor set and the
     field workset an agent is handed can never disagree. `scope_touched_index`
     is one pass over both access edges, cached — the per-type
     `_scope_touched_fields` would rescan them once per type.
@@ -197,7 +197,7 @@ def _field_map(layout, target=None) -> dict[str, list[str]]:
     source for a type's field accessor anchors (crates.json / scope.json carry no
     field lists). Empty when the analysis tree is absent.
 
-    Narrowed to the fields TARGET-section code actually touches, because an
+    Narrowed to the fields TARGETED-section code actually touches, because an
     anchor is a request for an ACCESSOR and only the target side consumes one. The
     manifest's ``fields`` is the full declared layout for every type -- this
     function used to take it verbatim on the belief that the type composer had

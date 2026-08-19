@@ -71,8 +71,8 @@ evaluation/**/manifests/
 # agent submits into its own copy and its landing commit carries the findings,
 # the same route its Rust output already takes.
 #
-# Under targets/, only scope-config.json is authored — scope.json, deps-dag.json
-# and logs/ are derived. Re-including one file from an excluded tree needs the
+# Under targets/, only scope-config.json is authored — scope.json, deps-dag.json,
+# their `.full.` siblings and logs/ are derived. Re-including one file from an excluded tree needs the
 # descend-then-re-exclude ladder below, because git cannot re-include a file
 # whose parent directory is excluded.
 #

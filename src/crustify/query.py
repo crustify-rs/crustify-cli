@@ -7,7 +7,7 @@ their ``--name``. Pure read — no side effects.
 
 Output modes:
   * plain (default): one bare ``id`` per line, deduped, sorted by ``(layer, id)``
-    — xargs-ready (``crustify <t> query types --import-only | xargs crustify <t> translate --name``).
+    — xargs-ready (``crustify <t> query types --imported-only | xargs crustify <t> translate --name``).
     Name collisions (same-named statics in different TUs, or a type/symbol tag
     clash) print the id once; use ``--file`` to target one, or ``--json`` to see
     the multiplicity.
@@ -37,8 +37,8 @@ def query(
     subject: str,                       # "types" | "symbols"
     names: list[str] | None = None,
     files: list[str] | None = None,
-    import_only: bool = False,
-    target_only: bool = False,
+    imported_only: bool = False,
+    targeted_only: bool = False,
     out_of_tree: bool = False,
     in_tree: bool = False,
     fields: bool = False,
@@ -98,15 +98,15 @@ def query(
     type_facets = fields or ops or methods or field_touchers
     if type_facets and kind != "type":
         raise SystemExit("query symbols: --fields/--ops/--methods/--field-touchers apply to types only.")
-    if import_only and (fields or field_touchers):
+    if imported_only and (fields or field_touchers):
         raise SystemExit(
-            "query types: --import-only does not apply to --fields / "
+            "query types: --imported-only does not apply to --fields / "
             "--field-touchers. The narrowing asks which of a type's fields "
-            "THIS TARGET's code reaches, which is --target-only for either "
+            "THIS CAMPAIGN's targeted code reaches, which is --targeted-only for either "
             "kind of type. The import side is empty for a target type, and for "
             "an import type reports what the foreign library touches "
             "internally — true, and not what a wrapper is built from. Drop the "
-            "flag for every declared field, or use --target-only.")
+            "flag for every declared field, or use --targeted-only.")
     if (type_facets or manifest or update is not None) and len(name_list) != 1:
         raise SystemExit(
             f"query {subject}: facets / --manifest / --update need exactly one --name.")
@@ -114,10 +114,10 @@ def query(
         _introspect(target, kind=kind, names=name_list, files=files,
                     fields=fields, ops=ops, methods=methods, field_touchers=field_touchers,
                     update=update, manifest=manifest,
-                    import_only=import_only, target_only=target_only)
+                    imported_only=imported_only, targeted_only=targeted_only)
     else:
         _enumerate(target, kind=kind, files=files,
-                   import_only=import_only, target_only=target_only,
+                   imported_only=imported_only, targeted_only=targeted_only,
                    out_of_tree=out_of_tree, in_tree=in_tree)
 
 
@@ -403,7 +403,7 @@ def _lifetime_for(target: Path, type_name: str, array_only: bool = False) -> Non
 
 
 def _enumerate(
-    target: Path, *, kind: str, files, import_only, target_only,
+    target: Path, *, kind: str, files, imported_only, targeted_only,
     out_of_tree: bool = False, in_tree: bool = False,
 ) -> None:
     """List the (filtered) type/symbol entries straight from the manifest — one
@@ -414,8 +414,8 @@ def _enumerate(
     scope: whether the entity's home is outside this repository. Wrap scope
     pools two populations a single flag cannot separate — a system or
     toolchain header that will never be portable, and first-party code that is
-    wrapped only because THIS target does not port it. ``--import-only
-    --in-tree`` is the second, i.e. the remaining backlog; ``--import-only
+    wrapped only because THIS target does not port it. ``--imported-only
+    --in-tree`` is the second, i.e. the remaining backlog; ``--imported-only
     --out-of-tree`` is the permanent FFI floor."""
     from compose import scope
     from crustify.layout import Layout
@@ -431,7 +431,7 @@ def _enumerate(
     # classification over the whole analysis tree. Keyed by origin
     # (defined_in or canonical_decl(declared_in)). This excludes out-of-closure
     # files (test/) and collapses null-def extern twins (only the real def is in
-    # scope.json). Empty when scope.json is absent, so --target-only/--import-only
+    # scope.json). Empty when scope.json is absent, so --targeted-only/--imported-only
     # yield nothing for a scope-less target (e.g. ".") rather than mislabeling.
     # Synthetic types (string/array clusters) are NOT in scope.json — they are
     # *always* import-section, classified by kind here.
@@ -439,11 +439,11 @@ def _enumerate(
     # Composed only on the branch that needs it — an unfiltered enumeration
     # must not pay the wrap closure.
     sj = (_scope_mod.try_build(layout, target)
-          if (target_only or import_only) else None)
-    target_keys = (scope.scope_membership(sj, scope.TARGET, kinds=sub)
-                 if target_only and sj is not None else set())
-    import_keys = (scope.scope_membership(sj, scope.IMPORT, kinds=sub)
-                 if import_only and sj is not None else set())
+          if (targeted_only or imported_only) else None)
+    target_keys = (scope.scope_membership(sj, scope.TARGETED, kinds=sub)
+                 if targeted_only and sj is not None else set())
+    import_keys = (scope.scope_membership(sj, scope.IMPORTED, kinds=sub)
+                 if imported_only and sj is not None else set())
 
     rows: list[dict] = []
     if True:
@@ -460,10 +460,10 @@ def _enumerate(
             # types have no placeable tag, are absent from the manifest, dropped.)
             cands = ((tag,) if kind != "type"
                      else (tag, *(e.get("typedef") or [])))
-            if import_only and not any(
+            if imported_only and not any(
                     scope.origin_key(c, d, decls) in import_keys for c in cands):
                 continue
-            if target_only and not any(
+            if targeted_only and not any(
                     scope.origin_key(c, d, decls) in target_keys for c in cands):
                 continue
             # Origin: the entity's home path. CodeQL emits an ABSOLUTE path for
@@ -509,7 +509,7 @@ def _enumerate(
 
 def _introspect(
     target: Path, *, kind: str, names, files, fields, ops, manifest,
-    import_only, target_only, methods=False, field_touchers=False,
+    imported_only, targeted_only, methods=False, field_touchers=False,
     update=None,
 ) -> None:
     """One named entity's record (summary / whole), or — for a single type —
@@ -540,7 +540,7 @@ def _introspect(
             # The type's COMPLETE footprint: opaque_in ∪ non_opaque_in — every
             # function tree-wide that touches the type (as a handle or a field).
             # Returned whole by default (the footprint spans the whole codebase,
-            # not just the target's scope). --target-only / --import-only intersect
+            # not just the target's scope). --targeted-only / --imported-only intersect
             # with that scope's functions (scope.json membership). Schema-agnostic
             # — the agent never opens the manifest.
             entry = _load_type_entry(layout, target, node.id, node.defined_in) or {}
@@ -548,11 +548,11 @@ def _introspect(
                     for syms in (entry.get(grp) or {}).values() for s in syms}
             from crustify import scope as _scope_mod
             sj = (_scope_mod.try_build(layout, target)
-                  if (import_only or target_only) else None)
+                  if (imported_only or targeted_only) else None)
             if sj is not None:
                 from compose import scope as _sc
                 keep = {k[0] for k in _sc.scope_membership(
-                    sj, _sc.IMPORT if import_only else _sc.TARGET,
+                    sj, _sc.IMPORTED if imported_only else _sc.TARGETED,
                     kinds=("functions", "globals", "macros"))}
                 pool &= keep
             win = sorted(pool)
@@ -560,24 +560,24 @@ def _introspect(
             return
         if field_touchers:
             # {field: [touchers]} — the type's fields (ALL declared by default;
-            # --target-only/--import-only narrow to fields touched by that scope's
+            # --targeted-only/--imported-only narrow to fields touched by that scope's
             # code) mapped to the COMPLETE, UNfiltered set of functions that
             # touch each field (raw t2/field_accesses.csv). The toucher set is
             # never scope-filtered: a field touched in-scope via raw `obj->field`
             # while its real accessor is out of scope still surfaces here.
             _field_touchers(layout, target, node.id, node.defined_in,
-                       target_only=target_only)
+                       targeted_only=targeted_only)
             return
         meta = D.load_type_meta(_entry_pair(layout, target))
         flds, lifecycle = meta.get(node.id, ([], set()))
         if fields:
             entry = _load_type_entry(layout, target, node.id, node.defined_in)
             objs = (entry.get("fields") if entry else None) or [{"name": f} for f in flds]
-            # ALL declared fields by default; --target-only/--import-only narrow to
+            # ALL declared fields by default; --targeted-only/--imported-only narrow to
             # fields touched by that scope's code (raw field_accesses ∩ scope.json
             # membership).
             keep = _field_keep_set(layout, target, node.id, node.defined_in,
-                                   target_only=target_only)
+                                   targeted_only=targeted_only)
             if keep is not None:
                 objs = [o for o in objs if o.get("name") in keep]
             win = objs
@@ -586,11 +586,11 @@ def _introspect(
         # --ops: names only, lifecycle-first, scope-filterable via scope.json
         # membership (same oracle as enumeration / wrap / port).
         op_pred = lambda _n: True            # noqa: E731
-        if import_only or target_only:
+        if imported_only or targeted_only:
             from compose import scope as _sc
             from crustify import scope as _scope_mod
             sj = _scope_mod.try_build(layout, target)
-            op_pred = (_sc.in_scope_pred(sj, _sc.IMPORT if import_only else _sc.TARGET)
+            op_pred = (_sc.in_scope_pred(sj, _sc.IMPORTED if imported_only else _sc.TARGETED)
                        if sj is not None else (lambda _n: False))
         win = D.ordered_ops(node, by_key, lifecycle, op_pred)
         print("\n".join(o.id for o in win))
@@ -598,7 +598,7 @@ def _introspect(
 
     # record(s): always the whole record.
     return _records(target, kind, names, files,
-                    import_only=import_only, target_only=target_only)
+                    imported_only=imported_only, targeted_only=targeted_only)
 
 
 _TOUCHED_CACHE: dict = {}
@@ -666,8 +666,8 @@ def scope_touched_index(layout, target, which: str) -> dict:
 def _scope_touched_fields(layout, target, tag: str, defined_in: str | None,
                           which: str) -> set:
     """Field names of `tag` touched by some function in section `which`
-    (:data:`~compose.scope.TARGET` | :data:`~compose.scope.IMPORT`). Empty if no
-    scope.json. Drives the --target-only/--import-only narrowing for --fields
+    (:data:`~compose.scope.TARGETED` | :data:`~compose.scope.IMPORTED`). Empty if no
+    scope.json. Drives the --targeted-only/--imported-only narrowing for --fields
     and --field-touchers, and — through `scope_touched_index` — which fields the
     scaffolder anchors."""
     by_file = scope_touched_index(layout, target, which).get(tag) or {}
@@ -677,26 +677,26 @@ def _scope_touched_fields(layout, target, tag: str, defined_in: str | None,
 
 
 def _field_keep_set(layout, target, tag: str, defined_in: str | None, *,
-                    target_only: bool) -> set | None:
-    """Field-name keep-set for ``--target-only``, or None = keep ALL fields.
+                    targeted_only: bool) -> set | None:
+    """Field-name keep-set for ``--targeted-only``, or None = keep ALL fields.
 
-    TARGET only, deliberately. The import side answers a question nobody asks:
-    for a target struct it is empty (nothing outside the target reaches into
-    the target's own layout), and for an import struct it reports which fields
+    TARGETED only, deliberately. The imported side answers a question nobody
+    asks: for a targeted struct it is empty (nothing outside the targeted set
+    reaches into its own layout), and for an imported struct it reports which fields
     the FOREIGN library touches internally — true, and irrelevant to what this
     target must wrap. What a caller wants is always "which of this type's
     fields does MY code reach", which is the target side for either kind."""
-    if not target_only:
+    if not targeted_only:
         return None
     from compose import scope as _sc
-    return _scope_touched_fields(layout, target, tag, defined_in, _sc.TARGET)
+    return _scope_touched_fields(layout, target, tag, defined_in, _sc.TARGETED)
 
 
 def _field_touchers(layout, target, tag: str, defined_in: str | None, *,
-               target_only: bool = False) -> None:
+               targeted_only: bool = False) -> None:
     """``{field: [touchers]}`` for the type's fields.
 
-    ALL declared fields by default; --target-only/--import-only narrow the FIELD set
+    ALL declared fields by default; --targeted-only/--imported-only narrow the FIELD set
     to the ones touched by that scope's code. Each field's toucher set is the
     COMPLETE, UNfiltered set of functions that access it — read straight from the
     raw ``t2/field_accesses`` edge, NOT the target-section ``depends_on`` inversion.
@@ -723,7 +723,7 @@ def _field_touchers(layout, target, tag: str, defined_in: str | None, *,
                     complete[fld].add(fn)
 
     keep = _field_keep_set(layout, target, tag, defined_in,
-                                   target_only=target_only)
+                                   targeted_only=targeted_only)
     scoped = set(declared) if keep is None else {f for f in declared if f in keep}
 
     out = {f: sorted(complete.get(f, set())) for f in sorted(scoped)}
@@ -1650,8 +1650,8 @@ def _harvest_sym_agent(rec: dict, full: dict) -> None:
         rec["_comment_agent"] = full["_comment_agent"]
 
 
-def _records(target, kind, names, files, *, import_only=False,
-             target_only=False) -> None:
+def _records(target, kind, names, files, *, imported_only=False,
+             targeted_only=False) -> None:
     # record(s): always the whole record.
     from crustify import manifests as _m
 
@@ -1666,9 +1666,9 @@ def _records(target, kind, names, files, *, import_only=False,
         # `_analysis.pending` is stamped scope-agnostically; under a scope
         # filter it must count the same fields `--fields` shows, or it reports
         # work the caller's scope never touches.
-        if kind == "type" and (import_only or target_only):
+        if kind == "type" and (imported_only or targeted_only):
             keep = _field_keep_set(layout, target, node.id, node.defined_in,
-                                   target_only=target_only)
+                                   targeted_only=targeted_only)
             entry = dict(entry)
             entry["_analysis"] = _m.analysis_state(
                 entry, "types", entry.get("_analysis", {}).get("submitted", False),
@@ -1879,17 +1879,23 @@ def _dag_loc(by_key, by_name, names, files, layer, as_json, keep=None,
         print(f"{total}\tTOTAL")
 
 
-def _scope_predicate(layout, target, import_only: bool, target_only: bool):
-    """A node-keeping predicate for `--import-only` / `--target-only`, or None when
+def _scope_predicate(layout, target, imported_only: bool, targeted_only: bool,
+                     *, full: bool = False):
+    """A node-keeping predicate for `--imported-only` / `--targeted-only`, or None when
     neither is set. The dag is scope-agnostic; scope is read from scope.json on
     demand. `origin_key(id, defined_in)` is exactly the node's serialized origin
-    (`Node.origin()`), so dag nodes and scope entries collide on the same key."""
-    if not (import_only or target_only):
+    (`Node.origin()`), so dag nodes and scope entries collide on the same key.
+
+    ``full`` reads the port-seeded scope, so the section a node is filtered on
+    is the one the ``--full`` graph was built against — on a wrap campaign that
+    is the difference between `--targeted-only` naming every impl symbol and
+    naming none."""
+    if not (imported_only or targeted_only):
         return None
     from compose import scope as _sc
     from crustify import scope as _scope_mod
-    sj = _scope_mod.try_build(layout, target)
-    keys = _sc.scope_membership(sj, _sc.TARGET if target_only else _sc.IMPORT) if sj is not None else set()
+    sj = _scope_mod.try_build(layout, target, full=full)
+    keys = _sc.scope_membership(sj, _sc.TARGETED if targeted_only else _sc.IMPORTED) if sj is not None else set()
 
     def keep(n) -> bool:
         return _sc.origin_key(n.id, n.defined_in, None) in keys
@@ -1919,8 +1925,9 @@ def query_dag(
     scc: str | None = None,
     layer: int | None = None,
     loc: bool = False,
-    import_only: bool = False,
-    target_only: bool = False,
+    imported_only: bool = False,
+    targeted_only: bool = False,
+    full: bool = False,
 ) -> None:
     """Structural views over the dag. Three mutually-exclusive modes:
 
@@ -1934,16 +1941,26 @@ def query_dag(
         **naked**); ``lo-deps`` = X's ``back_fill`` (lower-layer twins that
         **used X naked**).
 
-    ``--file`` disambiguates a ``--name`` collision."""
+    ``--file`` disambiguates a ``--name`` collision.
+
+    ``--full`` switches to the BODY-DEEP graph: scope is recomposed with
+    ``campaign_objective`` forced to ``port``, so every symbol whose home is
+    an ``impl_files`` / ``api_headers`` entry contributes its body's callees
+    and every struct defined there contributes every field. Only genuinely
+    imported items stay narrowed. It is how a WRAP campaign gets at the graph
+    it would have if it owned the implementation — closures over an opaque
+    handle otherwise stop at the handle, which is correct for wrapping and
+    useless for sizing a port. On a ``port`` campaign it is a no-op."""
     from collections import deque
 
     from crustify import dag as D
     from crustify.layout import Layout
 
     layout = Layout.discover(target)
-    dag = D.build(layout, target, stage="query dag")
+    dag = D.build(layout, target, stage="query dag", full=full)
     by_key, by_name = D.load_nodes(dag)
-    keep = _scope_predicate(layout, target, import_only, target_only)
+    keep = _scope_predicate(layout, target, imported_only, targeted_only,
+                            full=full)
 
     # ── mode: LoC view ─────────────────────────────────────────────────
     if loc:
@@ -2060,20 +2077,23 @@ def query_dag(
 def query_files(
     target: Path,
     *,
-    target_only: bool = False,
-    import_only: bool = False,
+    targeted_only: bool = False,
+    imported_only: bool = False,
 ) -> None:
     """Read-only oracle over the target's scope **files** (one path per line,
     sorted).
 
-      - ``--target-only`` — the target's own file set (``scope.json.target``).
-      - ``--import-only`` — the closure: the import-header surface the target
-        TUs reach through their ``depends_on`` edges. Read from the cached
-        ``scope.json.wrap`` section (the single source of truth, written by
-        the composer); errors if that section is absent —
-        consumers never recompute the closure themselves.
-      - neither flag — both, printed as two labeled lists (``# port`` then
-        ``# wrap``). The single-flag forms print a bare list (xargs-friendly).
+      - ``--targeted-only`` — the campaign's own file set
+        (``scope.json.targeted.files``). Empty on a ``wrap`` campaign, which
+        owns nothing.
+      - ``--imported-only`` — the closure: the import-header surface the target
+        TUs reach through their ``depends_on`` edges, or — on a ``wrap``
+        campaign — the surface seeded off ``api_headers``. Read from the cached
+        ``scope.json.imported`` section (the single source of truth, written by
+        the composer).
+      - neither flag — both, printed as two labeled lists (``# targeted`` then
+        ``# imported``), preceded by the campaign objective. The single-flag
+        forms print a bare list (xargs-friendly).
     """
     from compose import scope as scope_mod
     from crustify.layout import Layout
@@ -2083,22 +2103,26 @@ def query_files(
     doc = _scope_mod.build(layout, target, stage="query files")
 
     target_files = import_files = None
-    if target_only or not import_only:
-        target_files = sorted(scope_mod.load_target_paths(doc))
-    if import_only or not target_only:
-        import_files = sorted(set((doc.get(scope_mod.IMPORT) or {}).get("files") or []))
+    if targeted_only or not imported_only:
+        target_files = sorted(scope_mod.load_targeted_paths(doc))
+    if imported_only or not targeted_only:
+        import_files = sorted(set((doc.get(scope_mod.IMPORTED) or {}).get("files") or []))
 
-    if target_only:
+    if targeted_only:
         for f in target_files:
             print(f)
-    elif import_only:
+    elif imported_only:
         for f in import_files:
             print(f)
     else:
-        print(f"# port ({len(target_files)})")
+        # The campaign objective leads: on `wrap` the targeted list is empty by
+        # construction, and a bare "0 files" reads as a broken config unless the
+        # verb that made it empty is on the line above it.
+        print(f"# campaign_objective: {doc.get('campaign_objective') or '?'}")
+        print(f"\n# targeted ({len(target_files)})")
         for f in target_files:
             print(f)
-        print(f"\n# wrap ({len(import_files)})")
+        print(f"\n# imported ({len(import_files)})")
         for f in import_files:
             print(f)
 

@@ -194,7 +194,7 @@ class TypeMod(NamedTuple):
     stem: str            # snake module name (pre-collision-resolution)
     tag: str             # C type tag (entry["name"])
     typedef: str | None  # public typedef, if any
-    scope: str | None    # scope.TARGET / scope.IMPORT / None (unknown)
+    scope: str | None    # scope.TARGETED / scope.IMPORTED / None (unknown)
     fields: tuple = ()   # field names (each gets its own accessor anchor)
 
 
@@ -248,7 +248,7 @@ def _load_wrap_routing(
         doc = scope._doc(scope_json_path)
     except (OSError, ValueError):
         return sym_via, type_via
-    w = doc.get(scope.IMPORT) or {}
+    w = doc.get(scope.IMPORTED) or {}
     for bucket in ("functions", "globals", "macros"):
         for r in w.get(bucket, []):
             via = r.get("declared_in") or []
@@ -330,7 +330,7 @@ def compose_files(
     if filter_spec is None:
         filter_spec = FilterSpec()
     scope_json = filter_spec.scope_json_path
-    target_files = scope.load_target_paths(scope_json) if scope_json else set()
+    target_files = scope.load_targeted_paths(scope_json) if scope_json else set()
     sym_via, type_via = _load_wrap_routing(scope_json)
     want = set(crate_filter) if crate_filter else None
 
@@ -379,7 +379,7 @@ def compose_files(
         tag = entry.get("name") or entry.get("type")
         if not tag:
             return
-        if scope_label == scope.IMPORT:
+        if scope_label == scope.IMPORTED:
             st = home(type_via.get(tag) or _wrap_home_header(
                 _decls(entry.get("declared_in")), entry.get("defined_in") or ""))
         else:
@@ -401,11 +401,11 @@ def compose_files(
         if crate in _SKIP_CRATES or (want is not None and crate not in want):
             continue
         for entry in entries:
-            add_type(entry, _entry_scope(entry, target_files) if target_files else scope.IMPORT)
+            add_type(entry, _entry_scope(entry, target_files) if target_files else scope.IMPORTED)
 
     for name, df, decls, verb, scope_label in _classify_symbols(
             syms_by_dir, target_files, want):
-        if scope_label == scope.IMPORT:
+        if scope_label == scope.IMPORTED:
             tf = sym_via.get((name, df)) or _wrap_home_header(decls, df)
         else:
             tf = df
@@ -671,7 +671,7 @@ def _entry_scope(entry: dict[str, Any], target_files: set[str]) -> str:
             df = decls[0] if decls else None
         elif isinstance(decls, str):
             df = decls
-    return scope.TARGET if df in target_files else scope.IMPORT
+    return scope.TARGETED if df in target_files else scope.IMPORTED
 
 
 # -------------------------------------------------------------------- writing

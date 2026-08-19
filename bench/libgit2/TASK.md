@@ -30,8 +30,8 @@ Three waves, in this order. Each is `--objective wrap`. Report the plan from
 its own wrap DAG layer:
 
 ```
-crustify-oracle /work/<libgit2-checkout> src query types --import-only
-crustify-oracle /work/<libgit2-checkout> src query dag --layer <L> --import-only
+crustify-oracle /work/<libgit2-checkout> src query types --imported-only
+crustify-oracle /work/<libgit2-checkout> src query dag --layer <L> --imported-only
 ```
 
 Wave one layer at a time, lowest first, using `--name`.

@@ -620,7 +620,7 @@ def _place_batch_anchors(b: "Batch", layout, target, stage) -> None:
     under an objective that is not `wrap`, which is exactly the confusion the
     objective split exists to prevent. Such items are reported and skipped.
 
-    A type brings its ACCESSOR anchors, from `_field_map` — the fields TARGET
+    A type brings its ACCESSOR anchors, from `_field_map` — the fields TARGETED
     code actually touches, not the declared layout. `Unit.fields` is the
     declared list and is the wrong set: it is what the batch BUDGET counts, and
     on an opaque type it would lay placeholders for accessors nobody owes

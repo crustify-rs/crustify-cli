@@ -181,14 +181,19 @@ queries to generate `CSV` tables that store static information about code: argum
 field accesses, typedef aliasing, and more. The tables are then consumed by the oracle to build the dependency graph.
 
 **Scope specification.** The orchestrator authors **`scope-config.json`** where it names the TUs and
-headers of the target selected when bootstrapping the orchestrator agent. Its `files` key names one
-of two sections, never both, and the choice drives everything else:
-  - **target** - what the target owns, membership anchored on definition sites. The import section
-    is derived from what those entities reach.
-  - **import** - an API to wrap, membership anchored on declaration sites. The target section
-    composes empty.
+headers of the target selected when bootstrapping the orchestrator agent. It names two file sets —
+**`impl_files`** (the sources and private headers that implement the library) and **`api_headers`**
+(the headers that publish its API) — and one verb, **`campaign_objective`**, which is what decides
+how they are read:
+  - **`port`** - reimplement the target in Rust. `impl_files` + `api_headers` together seed the
+    **targeted** section, membership anchored on definition sites; the **imported** section is
+    derived from what those entities reach.
+  - **`wrap`** - expose the target's public API from Rust, owning none of it. The targeted section
+    composes empty and `api_headers` alone seeds the imported section, membership anchored on
+    declaration sites.
 
-A section says what the target contains; what is done with it is the translate stage's `--objective`.
+A section says what the campaign contains; `campaign_objective` says what it is aimed at; what one
+agent does with one selection is the translate stage's per-wave `--objective`.
 
 **Crates specification.** The orchestrator authors **`crates.json`** where it sketches a hierarchy
 of Rust crates, modules, and `.rs` source files that govern how the Rust tree will be organized, and
@@ -294,13 +299,15 @@ Four query subjects, each with its own modes:
 |---|---|---|
 | `types` | enumerate · introspect · submit | `--fields` `--ops` `--methods` `--field-touchers` `--manifest` `--in-tree` `--out-of-tree` |
 | `symbols` | enumerate · introspect · submit · lifecycle discovery | `--lifetime-for` `--taking` `--calling` `--hops` `--array` `--manifest` `--in-tree` `--out-of-tree` |
-| `files` | the target set / the import closure | `--target-only` `--import-only` |
-| `dag` | closure · layer slice · flattened-cycle twins | `--name` `--layer` `--scc` `--depth` `--loc` |
+| `files` | the targeted set / the imported closure | `--targeted-only` `--imported-only` |
+| `dag` | closure · layer slice · flattened-cycle twins | `--name` `--layer` `--scc` `--depth` `--loc` `--full` |
 
-`--name` filters, `--file` disambiguates a name defined in more than one place, `--target-only` /
-`--import-only` narrow any subject, and `--update` is the only writer. `--in-tree` / `--out-of-tree`
-narrow an enumeration by whether an entry's home is inside the repository: `--import-only
---out-of-tree` is the permanent FFI floor, `--import-only --in-tree` the remaining port backlog.
+`--name` filters, `--file` disambiguates a name defined in more than one place, `--targeted-only` /
+`--imported-only` narrow any subject, and `--update` is the only writer. `--in-tree` / `--out-of-tree`
+narrow an enumeration by whether an entry's home is inside the repository: `--imported-only
+--out-of-tree` is the permanent FFI floor, `--imported-only --in-tree` the remaining port backlog.
+`query dag --full` recomposes scope as if `campaign_objective` were `port`, so a `wrap` campaign can
+read the body-deep graph without editing its config.
 
 `query <subject> --help` is the authority for what each flag means and for the record semantics
 behind it; `--update-help` prints the findings schema `--update` expects, `--schema` the record's

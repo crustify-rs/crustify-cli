@@ -22,7 +22,9 @@ from pathlib import Path
 #:  4 — dag keeps every field of an anchor-DEFINED wrap struct.
 #:  5 — anchored `declared_in` falls back to one canonical header, not all.
 #:  6 — sections renamed port/wrap -> target/import; anchors removed.
-_VERSION = 6
+#:  7 — scope-config split into impl_files/api_headers + campaign_objective;
+#:      sections renamed target/import -> targeted/imported.
+_VERSION = 7
 
 
 def fingerprint(layout, target) -> dict:

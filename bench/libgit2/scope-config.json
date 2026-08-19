@@ -1,51 +1,59 @@
 {
   "_comment": [
     "TARGET-tier scope definition for the `src` target of libgit2 1.9.0.",
-    "Port scope is the whole shipped source tree - the library (src/libgit2,",
-    "src/util), the CLI (src/cli), and the public headers under include/."
+    "A PORT campaign over the whole shipped source tree - the library",
+    "(src/libgit2, src/util) and the CLI (src/cli) as `impl_files`, the public",
+    "headers under include/ as `api_headers`."
   ],
+  "_comment_campaign_objective": [
+    "A PORT campaign: we aim to reimplement libgit2 in Rust, so `impl_files`",
+    "and `api_headers` together seed the `targeted` section and the `imported`",
+    "section is DERIVED as its closure. Flipping this to `wrap` would empty the",
+    "targeted section and seed `imported` off `api_headers` alone - a safe",
+    "wrapper over include/git2/ with src/ left in C.",
+    "",
+    "Not the per-wave `translate --objective`, which is the verb one agent is",
+    "handed over one selection."
+  ],
+  "campaign_objective": "port",
   "_comment_files": [
-    "`files` names everything this target covers - there is no",
-    "implicit directory walk, so `src/` is listed alongside `include/` rather",
-    "than being inherited from the target id.",
+    "Both keys name everything they cover - there is no implicit directory",
+    "walk, so `src/` and `include/` are listed rather than being inherited from",
+    "the target id. Both entries are directories because every file beneath",
+    "them is in scope, which orchestrator.md prefers over enumerating files.",
     "",
-    "Both entries are directories because every file beneath them is",
-    "port-scope, which orchestrator.md prefers over enumerating files.",
+    "Why include/ qualifies as `api_headers` on a PORT campaign (the implementor",
+    "test from orchestrator.md, 'Setting up scope targets'): headers outside the",
+    "impl tree join the targeted set only when the code that IMPLEMENTS what",
+    "they declare is itself targeted. include/git2/*.h declares libgit2's public",
+    "API and its public value structs (git_oid, git_strarray, git_diff_options,",
+    "git_checkout_options, ...), all implemented under src/libgit2 and src/util.",
+    "include/git2/sys/*.h declares the plugin/backend vtable structs, and their",
+    "implementors are targeted too - verified rather than assumed:",
+    "git_odb_backend -> src/libgit2/odb_loose.c, odb_pack.c, odb_mempack.c;",
+    "git_refdb_backend -> refdb_fs.c, refdb_reftable.c; git_config_backend ->",
+    "config_file.c, config_mem.c; git_transport -> transports/*.c; git_filter ->",
+    "crlf.c, ident.c, filter.c. No header under include/ is a pure consumer or",
+    "referencer, so the whole directory goes in and no file-level split is",
+    "needed.",
     "",
-    "Why include/ qualifies (the implementor test from orchestrator.md,",
-    "'Setting up scope targets'): headers outside the target tree belong in",
-    "port scope only when the code that IMPLEMENTS what they declare is",
-    "itself port-scope. include/git2/*.h declares libgit2's public API and",
-    "its public value structs (git_oid, git_strarray, git_diff_options,",
-    "git_checkout_options, ...), all implemented under src/libgit2 and",
-    "src/util. include/git2/sys/*.h declares the plugin/backend vtable",
-    "structs, and their implementors are port-scope too - verified rather",
-    "than assumed: git_odb_backend -> src/libgit2/odb_loose.c, odb_pack.c,",
-    "odb_mempack.c; git_refdb_backend -> refdb_fs.c, refdb_reftable.c;",
-    "git_config_backend -> config_file.c, config_mem.c; git_transport ->",
-    "transports/*.c; git_filter -> crlf.c, ident.c, filter.c. No header under",
-    "include/ is a pure consumer or referencer, so the whole directory goes",
-    "in and no file-level split is needed.",
-    "",
-    "Deliberately NOT listed, and therefore wrap-scope (FFI) rather than",
-    "port-scope: deps/xdiff, deps/reftable and deps/ntlmclient. Those three",
-    "compile into libgit2.so (see build.json) but cannot be de-vendored, and",
-    "they are vendored third-party C rather than libgit2's own code, so they",
-    "belong behind the C/FFI bridge. The three deps that COULD be de-vendored",
-    "- zlib, pcre2, llhttp - are system libraries in this configuration and",
-    "are not in the CodeQL database at all.",
+    "Deliberately NOT listed, and therefore imported (FFI) rather than targeted:",
+    "deps/xdiff, deps/reftable and deps/ntlmclient. Those three compile into",
+    "libgit2.so (see build.json) but cannot be de-vendored, and they are vendored",
+    "third-party C rather than libgit2's own code, so they belong behind the",
+    "C/FFI bridge. The three deps that COULD be de-vendored - zlib, pcre2,",
+    "llhttp - are system libraries in this configuration and are not in the",
+    "CodeQL database at all.",
     "",
     "Also not listed: tests/ and deps/clar. The traced build sets",
-    "BUILD_TESTS=OFF, so they contribute no entities to the database.",
-    "",
-    "as the import closure of `files`."
+    "BUILD_TESTS=OFF, so they contribute no entities to the database."
   ],
-  "files": {
-    "target": [
-      "src/",
-      "include/"
-    ]
-  },
+  "impl_files": [
+    "src/"
+  ],
+  "api_headers": [
+    "include/"
+  ],
   "_comment_out_of_scope": [
     "`paths` is empty on purpose. The candidates one might reflexively list",
     "here are already excluded by construction: tests/ and deps/clar are not",

@@ -11,8 +11,9 @@ walking the filesystem — and its artifacts live at ``repo_root/crustify/``:
         ownership-store.json                      # the authored analysis
         codeql/{t1,t2,db}/                        # CodeQL db + fact tables
         targets/<repo-relative-target>/           # per-target invocation state
-          scope-config.json                       # authored: the port set
+          scope-config.json                       # authored: objective + file sets
           scope.json  deps-dag.json               # derived, fingerprinted
+          scope.full.json  deps-dag.full.json     # ditto, port-seeded (--full)
           logs/
         rust/                                     # the shared Rust crates
       ssl/  crypto/  …                            # vanilla C tree (no artifacts)
@@ -129,26 +130,35 @@ class Layout:
 
     def config(self, target: Path) -> Path:
         """The target's authored SCOPE definition (``scope-config.json``):
-        ``files`` (``{port, wrap}``) and ``out_of_scope``. Input to the scope
-        composer, which derives the sibling ``scope.json`` — a separate file so
+        ``campaign_objective`` (``port`` | ``wrap``), the two file sets
+        ``impl_files`` / ``api_headers``, and ``out_of_scope``. Input to the
+        scope composer, which derives the sibling ``scope.json`` — a separate file so
         a recompute of that derived output can never clobber it. The repo root
         and the target id are CLI positionals, and this file's own location
         records the target, so neither is restated inside it."""
         return self.target_dir(target) / "scope-config.json"
 
-    def scope(self, target: Path) -> Path:
-        """The derived port set + wrap closure — a fingerprinted cache
-        (:mod:`crustify.cache`)."""
-        return self.target_dir(target) / "scope.json"
+    def scope(self, target: Path, *, full: bool = False) -> Path:
+        """The derived ``targeted`` set + ``imported`` closure — a fingerprinted
+        cache (:mod:`crustify.cache`).
 
-    def deps_dag(self, target: Path) -> Path:
+        ``full`` names the sibling ``scope.full.json``: the same config
+        composed with ``campaign_objective`` forced to ``port`` (``query dag
+        --full``). Two files rather than one, because the two are composed from
+        identical inputs and would otherwise thrash a single fingerprinted
+        cache — every alternating read a full recompute."""
+        return self.target_dir(target) / ("scope.full.json" if full else "scope.json")
+
+    def deps_dag(self, target: Path, *, full: bool = False) -> Path:
         """The layered dependency graph, beside scope.json — a fingerprinted
         cache (:mod:`crustify.cache`).
 
-        Target-tier because the graph is: its edges are narrowed by scope, so a
-        import node contributes only its signature and the layering differs
-        per target."""
-        return self.target_dir(target) / "deps-dag.json"
+        Target-tier because the graph is: its edges are narrowed by scope, so an
+        imported node contributes only its signature and the layering differs
+        per target. ``full`` names the body-deep sibling, for the same reason
+        :meth:`scope` does."""
+        return self.target_dir(target) / (
+            "deps-dag.full.json" if full else "deps-dag.json")
 
     def logs(self, target: Path) -> Path:
         return self.target_dir(target) / "logs"

@@ -18,19 +18,21 @@ accessors on the type handles, and safe FFI wrappers for making FFI calls.
 ## Scope policy
 
 Every item sits in one of two sections of `scope.json`, decided by
-`scope-config.json`'s `files` — which takes one of two mutually exclusive keys:
+`scope-config.json`'s two file sets — `impl_files` (what implements the
+library) and `api_headers` (what publishes its API) — under its
+`campaign_objective`:
 
-- `files.target` names the code this campaign owns. An item is **target-scope**
-  when its body lives in one of those files, or, having no body anywhere, when
-  all its declarations do. Everything target code reaches that is not named
-  there is **import-scope**.
-- `files.import` names an API to wrap, owning nothing. Those files' declarations
-  seed the import section directly, and there is no target scope.
+- On a **`port`** campaign, `impl_files` + `api_headers` name the code this
+  campaign owns. An item is **targeted** when its body lives in one of those
+  files, or, having no body anywhere, when all its declarations do. Everything
+  targeted code reaches that is not named there is **imported**.
+- On a **`wrap`** campaign the campaign owns nothing: `api_headers`'
+  declarations seed the imported section directly, and nothing is targeted.
 
-**Import-scope** items stay C's: a safe wrapper over the FFI seam, layout
+**Imported** items stay C's: a safe wrapper over the FFI seam, layout
 compatible, with storage allocation and free still owned by C.
 
-**Target-scope** items are on their way to native Rust. They start
+**Targeted** items are on their way to native Rust. They start
 layout-compatible and wrapped, get opacified once the C side no longer reads
 their fields, and end fully nativized — allocation and free owned by Rust.
 

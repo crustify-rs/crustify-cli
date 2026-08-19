@@ -115,32 +115,43 @@ database changes.
 Author `crustify/targets/<target>/scope-config.json` from
 `specs/scope-config.json`.
 
-`files` names the target's file sets, keyed by section, and **the two keys are
-mutually exclusive** — they pick the campaign. Entries are a file
+It names **two file sets** and **one verb**. Entries in either set are a file
 (`include/internal/statem.h`) or a directory with a trailing slash (`ssl/`),
 which expands to every source and header beneath it. Naming a file the build
 never compiled is harmless — T1 anchoring drops uncompiled candidates.
 
-**`files.target` — what this target owns.** Classification is
-*definition-anchored*: an entity is in the target iff its **body** lives in a
-named file (or, having no body, all its declarations do). Name the
-implementations **and** the headers that define the types — headers outside the
-target tree are never discovered automatically, and a header-only list drops
-every function it merely *declares*, whose body sits in a `.c` you did not name.
-Add a header only if its **implementors** are in the target; one whose types are
-merely *used* reaches the import section on its own.
+| key | what it names |
+|---|---|
+| `impl_files` | the sources — and private headers — that **implement** the library |
+| `api_headers` | the headers that **publish** its API |
+| `campaign_objective` | `port` or `wrap`: what the campaign is aimed at |
 
-**`files.import` — an API to wrap, with nothing owned.** Name the **headers that
-publish the API** (`include/openssl/`, `include/libxml/`), not its sources: the
-target section composes empty and the import section is seeded off these files
-on **declaration-site** membership, so pointing it at a source tree seeds on
-declarations inside `.c` files. That test is the right one for a public header,
-whose declared bodies live in files the campaign does not own — and it is what
-makes "wrap this library" expressible without scoping its whole implementation.
+Both file sets are authored on every campaign — they describe the *library*,
+not the campaign. `campaign_objective` is the only thing that decides how they
+are read, and it is required with no default.
 
-Everything else follows from that one choice, with no per-item flag:
+**`port` — reimplement the target in Rust.** `impl_files` + `api_headers`
+together seed the `targeted` section. Classification is *definition-anchored*:
+an entity is targeted iff its **body** lives in a named file (or, having no
+body, all its declarations do). Name the implementations **and** the headers
+that define the types — headers outside the target tree are never discovered
+automatically, and a header-only list drops every function it merely
+*declares*, whose body sits in a `.c` you did not name. Put a header in
+`api_headers` only if its **implementors** are in `impl_files`; one whose types
+are merely *used* reaches the imported section on its own.
 
-| | named in `files` | not named |
+**`wrap` — expose the public API, owning nothing.** The `targeted` section
+composes empty and the `imported` section is seeded off `api_headers` alone, on
+**declaration-site** membership; `impl_files` is not read. That test is the
+right one for a public header, whose declared bodies live in files the campaign
+does not own — and it is what makes "wrap this library" expressible without
+scoping its whole implementation. Point `api_headers` at published headers
+(`include/openssl/`, `include/libxml/`), never at a source tree, or you seed on
+declarations inside `.c` files.
+
+Everything else follows from that one word, with no per-item flag:
+
+| | named by the seeding key | not named |
 |---|---|---|
 | struct **defined** there | full field layout — its fields are the API | — |
 | struct only **declared** there | opaque handle | opaque handle |
@@ -148,36 +159,43 @@ Everything else follows from that one choice, with no per-item flag:
 
 So `--transitive` over an opaque-exported type pulls the type and nothing else.
 
-**Scope says what the target contains, not what will be done with it.** Port or
-wrap is `translate --objective`, chosen per wave by the orchestrator. Narrowing
-to an API *surface* is a **selection** concern: `translate --file
-include/openssl/ssl.h`. Ownership analysis is unaffected either way —
-`ptr_args`/`ptr_ret` come from the T2 tables, which cover the whole database
-regardless of scope.
+**Three different things are called an objective; keep them apart.**
+`campaign_objective` shapes the **scope** and is authored once per target.
+`translate --objective` is the **verb** handed to one agent over one selection,
+chosen per wave by the orchestrator. Narrowing to an API *surface* is neither —
+that is **selection**: `translate --file include/openssl/ssl.h`.
+
+Ownership analysis is unaffected by any of it — `ptr_args`/`ptr_ret` come from
+the T2 tables, which cover the whole database regardless of scope.
 
 `out_of_scope.paths` refines what a directory entry expands to;
 `out_of_scope.features` is documentation only, for the same reason as
 `build.json`'s `features`.
 
+To read a `wrap` campaign's graph as if it were a port — bodies walked, every
+field kept, only genuinely imported items narrowed — pass `--full` to
+`query dag`. It recomposes scope with `campaign_objective` forced to `port` and
+caches beside the default graph; nothing in the config changes.
+
 Verify the result before proceeding:
 
 ```bash
-crustify-oracle <repo_root> <target> query files --target-only
-crustify-oracle <repo_root> <target> query files --import-only
+crustify-oracle <repo_root> <target> query files --targeted-only
+crustify-oracle <repo_root> <target> query files --imported-only
 ```
 
-The import section pools two populations that the section alone cannot
+The imported section pools two populations that the section alone cannot
 separate. `--out-of-tree` / `--in-tree` cut the independent ORIGIN axis —
 whether the entity's home lies outside this repository:
 
 ```bash
 # the permanent FFI floor
-crustify-oracle <repo_root> <target> query types --import-only --out-of-tree
+crustify-oracle <repo_root> <target> query types --imported-only --out-of-tree
 # first-party code this target reaches but does not cover
-crustify-oracle <repo_root> <target> query types --import-only --in-tree
+crustify-oracle <repo_root> <target> query types --imported-only --in-tree
 ```
 
-The first can never move into the target; the second could, by naming its
+The first can never move into the targeted set; the second could, by naming its
 files.
 
 ### 7. Crate placement and scaffold
@@ -195,8 +213,8 @@ Use the oracle for the inventory to home, and `build.json` for the artefact
 hierarchy:
 
 ```bash
-crustify-oracle <repo_root> <target> query types  --target-only
-crustify-oracle <repo_root> <target> query symbols --import-only
+crustify-oracle <repo_root> <target> query types  --targeted-only
+crustify-oracle <repo_root> <target> query symbols --imported-only
 ```
 
 Then materialize the tree and gate it:
@@ -238,7 +256,7 @@ promotion is read against.
 |---|---|
 | baseline recorded | `build.json.test_baseline` names pass/total and every disabled test |
 | T1/T2 populated | `crustify/codeql/{t1,t2}/` non-empty |
-| scope is what you meant | `query files --target-only` / `--import-only` |
+| scope is what you meant | `query files --targeted-only` / `--imported-only` |
 | placement consistent | `scaffold --validate` exits clean |
 | FFI crates link | `cargo build` + `cargo test` on each `<lib>-sys` |
 | DAG resolves | `query dag --layer 0` returns the leaf set |

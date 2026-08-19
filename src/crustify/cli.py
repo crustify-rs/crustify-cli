@@ -48,7 +48,7 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
     no subject split). Selection is **section-blind**: a named entity is
     translated whichever scope.json section it sits in, and `--objective` says
     what to DO with it. There is no section filter here — `crustify-oracle`
-    carries `--target-only` / `--import-only` for inspecting a slice. `--file`
+    carries `--targeted-only` / `--imported-only` for inspecting a slice. `--file`
     restricts to a defining file (disambiguating a `--name` collision).
 
     A per-agent **effort budget** (`--max-syms` / `--max-loc`) caps each unit's
@@ -100,7 +100,7 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
         help="Select EVERY in-scope unit at dag layer N — types AND symbols, "
              "from either section. The section is not a selector here: the "
              "OBJECTIVE says what to do, and one run carries one objective. "
-             "Use `crustify-oracle query dag --layer N --target-only` to "
+             "Use `crustify-oracle query dag --layer N --targeted-only` to "
              "inspect a slice by section. "
              "Lifecycle ops that fold into a type are excluded (they ride with "
              "the type). Combines with --name; e2e driver mode.",
@@ -135,7 +135,7 @@ def _add_wrap_filter_flags(p: argparse.ArgumentParser) -> None:
              "is the discovery arm of a lifetime tier, set automatically by "
              "--lifetime-for, whose marker the arm is gated on. NOTE: this "
              "is the objective, NOT a section filter — `translate` has none; "
-             "use `crustify-oracle query … --target-only` to inspect a slice "
+             "use `crustify-oracle query … --targeted-only` to inspect a slice "
              "by section. It is taken as given: nothing downstream substitutes "
              "a per-unit verb.",
     )
@@ -390,8 +390,9 @@ def main() -> None:
 
     # -- translate ---------------------------------------------------------
     # SCOPE and OBJECTIVE are orthogonal and named apart. scope.json's sections
-    # are `target` / `import` (crustify-oracle's `--target-only` /
-    # `--import-only`) and say what the target COVERS; the objective says what
+    # are `targeted` / `imported` (crustify-oracle's `--targeted-only` /
+    # `--imported-only`) and say what the campaign COVERS; `campaign_objective`
+    # says what the campaign is FOR; this `--objective` says what
     # to do with a selection. Only the stage is called `translate`.
     _translate_blurb = (
         "Translate stage: emit Rust wrappers for the selected in-scope "

@@ -448,7 +448,7 @@ context each table cannot carry.
 
 ### `struct stat` — gate-missed, not skipped
 
-The oracle lists it in the import section (`query types --import-only` returns
+The oracle lists it in the import section (`query types --imported-only` returns
 it; `bits/struct_stat.h` is in the import file set) but `translate` refuses it
 — *"out of scope (neither target- nor import-section)"* — while the same
 dry-run labels it `(target)` when reached as a dependency of the same-named
@@ -521,7 +521,7 @@ classify it as such, or it should not be emitted by default.
 `ReftableTable` at 2.
 
 **`struct stat` is gate-missed, not skipped.** The oracle lists it as
-import-section (`query types --import-only` returns it; `bits/struct_stat.h` is in
+import-section (`query types --imported-only` returns it; `bits/struct_stat.h` is in
 the wrap file set) but `translate` refuses it — *"out of scope (neither wrap-
 nor target-section)"* — while the same dry-run labels it `(port)` when it is
 reached as a dependency of the same-named `stat` FUNCTION. Three verdicts that

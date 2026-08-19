@@ -3,7 +3,7 @@
 The user has chosen the following configuration:
 
 target repo: `https://gitlab.gnome.org/GNOME/libxml2.git`, tag v2.15.3 (commit c94eb0210183b9d7cb43f8e7fddc6be55843ef49)
-scope: WRAP campaign — `files.import` seeds off the whole published API
+scope: WRAP campaign — `campaign_objective: wrap`, `api_headers` seeds off the whole published API
        under `include/libxml/`. Nothing is owned; there is no target section.
 max-syms: default
 max-loc: default
@@ -62,9 +62,9 @@ Playbook toolchain is already installed.
 Before spending on Phase 2, report:
 
 ```
-crustify-oracle /work/libxml2 . query types  --import-only
-crustify-oracle /work/libxml2 . query types  --import-only --out-of-tree
-crustify-oracle /work/libxml2 . query symbols --import-only
+crustify-oracle /work/libxml2 . query types  --imported-only
+crustify-oracle /work/libxml2 . query types  --imported-only --out-of-tree
+crustify-oracle /work/libxml2 . query symbols --imported-only
 crustify-oracle /work/libxml2 . query dag --stats
 ```
 
@@ -72,7 +72,7 @@ crustify-oracle /work/libxml2 . query dag --stats
 API); the complement is libxml2's own surface. libxml2 vendors nothing, so the
 out-of-tree share should be small — a large one means the scope is wrong.
 
-Everything is import-section here, so `--target-only` returns nothing. That is
+Everything is imported here, so `--targeted-only` returns nothing. That is
 correct, not a misconfiguration: a wrap campaign owns no C.
 
 ## Phase 2
@@ -84,7 +84,7 @@ Every wave is `--objective wrap`; there is no port stage. Report the plan from
 layer:
 
 ```
-crustify-oracle /work/libxml2 . query dag --layer <L> --import-only
+crustify-oracle /work/libxml2 . query dag --layer <L> --imported-only
 ```
 
 One layer at a time, lowest first, using `--name`. libxml2 defines most of its

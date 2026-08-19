@@ -47,7 +47,7 @@
         "  catalog   catalog.h 37",
         "",
         "Verify against the real inventory before committing to it - the",
-        "authority is `crustify-oracle /work/libxml2 . query types --import-only`",
+        "authority is `crustify-oracle /work/libxml2 . query types --imported-only`",
         "and the symbol equivalent, not this comment."
       ],
       "modules": {}

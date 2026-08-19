@@ -63,7 +63,7 @@ class Node:
         return self.node_kind == "symbol" and self.subkind == "symbol"
 
 
-def build(layout, target: Path, *, stage: str) -> dict:
+def build(layout, target: Path, *, stage: str, full: bool = False) -> dict:
     """Compose this target's DAG **in memory** and return it.
 
     There is no on-disk `deps-dag.json` in the read path any more. The graph is
@@ -80,6 +80,14 @@ def build(layout, target: Path, *, stage: str) -> dict:
     to walk. The graph is a function of the CodeQL tables and `scope.json`
     alone; the store overlay contributes nothing to it, by design (a
     submission must never move a layer).
+
+    ``full`` builds the BODY-DEEP view: scope is composed with
+    ``campaign_objective`` forced to ``port``, so a wrap campaign's
+    ``impl_files`` become targeted and their symbols contribute their bodies'
+    callees and their structs every field. Only genuinely imported items stay
+    narrowed (signature-only symbols, touched-fields-only structs). On a
+    campaign that is already ``port`` it composes the same graph as the
+    default, from its own cache file.
     """
     from compose.deps_dag import compose as _compose
     from crustify import cache as _cache, manifests as _manifests, scope as _scope
@@ -89,17 +97,17 @@ def build(layout, target: Path, *, stage: str) -> dict:
     # fingerprint is the same input set, since the graph is a function of the
     # CodeQL tables and scope alone (an agent submission never moves a layer).
     fp = _cache.fingerprint(layout, target)
-    disk = _cache.load(layout.deps_dag(target), fp)
+    disk = _cache.load(layout.deps_dag(target, full=full), fp)
     if disk is not None:
         return disk
 
     dag = _compose(
         (_manifests.entries(layout, target, "types", stage=stage),
          _manifests.entries(layout, target, "symbols", stage=stage)),
-        _scope.build(layout, target, stage=stage),
+        _scope.build(layout, target, stage=stage, full=full),
         codeql_dir=layout.codeql,
     )
-    return _cache.store(layout.deps_dag(target), dag, fp)
+    return _cache.store(layout.deps_dag(target, full=full), dag, fp)
 
 
 def load_nodes(dag: dict) -> tuple[dict[SymKey, Node], dict[str, list[SymKey]]]:

@@ -2,7 +2,7 @@
 """Regenerate utils/codeql/port_scope.qll from a target's scope.json.
 
 Reads the target's file list (``scope.json``'s
-``target.files``, emitted by ``compose.scope_manifest``) and emits a
+``targeted.files``, emitted by ``compose.scope_manifest``) and emits a
 CodeQL library file with the path set inlined as a string predicate.
 The library exports:
 
@@ -35,12 +35,12 @@ from pathlib import Path
 
 
 def collect_port_paths(scope_json: Path) -> list[str]:
-    """Read scope.json's `target.files` and return the sorted unique path
+    """Read scope.json's `targeted.files` and return the sorted unique path
     list. Schema: ``{"target": {"files": ["a/b.c", ...], ...}}`` —
-    mirrors ``compose.scope.load_target_paths``. Defensively also accepts
+    mirrors ``compose.scope.load_targeted_paths``. Defensively also accepts
     a list of ``{"path": ...}`` entries or bare strings under `files`."""
     data = json.loads(scope_json.read_text())
-    port = data.get("port", {}) if isinstance(data, dict) else {}
+    port = data.get("targeted", {}) if isinstance(data, dict) else {}
     entries = port.get("files", []) if isinstance(port, dict) else []
     paths: set[str] = set()
     for entry in entries:

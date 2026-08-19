@@ -21,7 +21,7 @@ composer, agent, and redo precursors all share the same semantics.
 
 | scope.json passed? | Effect on seeds and closure |
 |---|---|
-| **No** (default) | No port/wrap split. Every entry is wrap-shape (base only). No closure expansion. Seeds emit only if they pass `--target-only`/`--import-only` (and the wrap_only side admits everything). |
+| **No** (default) | No port/wrap split. Every entry is wrap-shape (base only). No closure expansion. Seeds emit only if they pass `--targeted-only`/`--imported-only` (and the wrap_only side admits everything). |
 | **Yes** | Port/wrap classification per the scope.json. A seed is admitted iff it's target-section OR wrap-reachable from port code per the scope.json. Port seeds emit with port additions; wrap seeds + closure entries emit as base shape. |
 
 ## Why scope.json is optional now

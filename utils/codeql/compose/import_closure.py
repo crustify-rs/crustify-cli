@@ -1,4 +1,4 @@
-"""Compute the IMPORT surface for a target (scope.json `import`).
+"""Compute the IMPORTED surface for a target (scope.json `imported`).
 
 Tier (iii): a pure function of CodeQL facts + the target seed. The surface is
 computed DIRECTLY from the T1 entity tables + the T2 reach graph — it does NOT
@@ -9,10 +9,10 @@ symbols composer would write, sharing ``syms_manifest``'s reach primitives, so
 the result is byte-equivalent to the old post-``analyze symbols`` aggregation.)
 The per-target derivation:
 
-  1. Walk the target's entities (those whose home is a ``scope.json``
-     ``target.files`` entry) and follow their ``depends_on`` edges into the
+  1. Walk the targeted entities (those whose home is a ``scope.json``
+     ``targeted.files`` entry) and follow their ``depends_on`` edges into the
      items they use.
-  2. Keep the deps that fall OUTSIDE the target — the FFI frontier.
+  2. Keep the deps that fall OUTSIDE the targeted set — the FFI frontier.
   3. **Narrow** each item's ``declared_in`` — which is the entity-table
      *superset* of every declaration site — down to the header(s) the importing
      target TU actually ``#include``s, using the build-resolved include graph
@@ -20,14 +20,17 @@ The per-target derivation:
      in the transitive include-closure of the target TU that depends on it.
 
 The result is the precise import surface (not the all-decls superset, not the
-implicit not-target complement), persisted as the ``import`` section of the
-target's scope.json — **derived and regenerable** from ``target`` (recompute
+implicit not-targeted complement), persisted as the ``imported`` section of
+the target's scope.json — **derived and regenerable** from ``targeted``
+(recompute
 when it changes). An item that survives through >1 distinct header is genuinely
 imported two ways: a re-export signal, recorded rather than collapsed.
 
-Membership says only that the target does not OWN the item. What will be DONE
-with it — a safe wrapper over the seam, or a native translation — is the
-translate stage's objective, chosen per unit by the orchestrator.
+Membership says only that the campaign does not OWN the item. On a `wrap`
+campaign nothing is owned, so this section IS the scope, seeded off
+`api_headers` rather than derived. What will be DONE with an item — a safe
+wrapper over the seam, or a native translation — is the translate stage's
+per-wave `--objective`, chosen by the orchestrator.
 """
 
 from __future__ import annotations
@@ -165,9 +168,9 @@ def build_index(
     for r in (*funcs, *globals_, *macros):
         sym_index[(r["name"], r["def_file"])] = r
 
-    tgt_funcs = scope.load_entities(scope_json_path, scope.TARGET, "functions")
-    tgt_globals = scope.load_entities(scope_json_path, scope.TARGET, "globals")
-    tgt_macros = scope.load_entities(scope_json_path, scope.TARGET, "macros")
+    tgt_funcs = scope.load_entities(scope_json_path, scope.TARGETED, "functions")
+    tgt_globals = scope.load_entities(scope_json_path, scope.TARGETED, "globals")
+    tgt_macros = scope.load_entities(scope_json_path, scope.TARGETED, "macros")
 
     idx = _Index()
 
@@ -380,29 +383,29 @@ def compose_import(
     field_type_rows: list[dict],
     seed_paths: set[str] | None = None,
 ) -> dict:
-    """Build the ``import`` section:
+    """Build the ``imported`` section:
     ``{files, functions, globals, macros, types}``.
 
     ``files`` is the narrowed import-header surface; the entity buckets list
     the reached items with their import header(s) (``declared_in``) and a
     ``reexport`` flag when an item is imported through more than one header.
 
-    Two complementary walks out of the TARGET section:
+    Two complementary walks out of the TARGETED section:
 
       - **symbols** — expand each target symbol's ``depends_on`` edges (the
         callable surface plus the types its signature and body name),
         classifying each as an import (the FFI frontier) or as target (keep
         walking, via its own seed).
       - **types** — walk the CodeQL field-type graph (``type_rows`` = T1
-        ``types``, ``field_type_rows`` = T2 ``field_type_uses``). A TARGET
+        ``types``, ``field_type_rows`` = T2 ``field_type_uses``). A TARGETED
         struct is full-scanned: it is the target's own layout, so every field
-        type is a real dep. An IMPORT struct walks only the fields target code
+        type is a real dep. An IMPORTED struct walks only the fields targeted code
         actually accesses (``target_touched``) — bindgen owns the rest. This
         is what pulls a by-value-embedded external type like
         ``pthread_mutex_t`` (``git_odb.lock``) into the surface.
 
     ``seed_paths`` inverts the seeding for a WRAP campaign
-    (`scope-config.json`'s `files.import`). The target section is empty, so
+    (`scope-config.json`'s `api_headers`). The targeted section is empty, so
     there is nothing to expand from; instead every entity those files DECLARE
     or DEFINE is an import outright, and the same two walks run from there.
     Declaration-site membership is the right test precisely because these are
@@ -417,7 +420,7 @@ def compose_import(
     seed_paths = seed_paths or set()
 
     def _seeded(df: str, decls: list[str]) -> bool:
-        """Is this entity named by `files.import`? Definition OR any
+        """Is this entity named by `api_headers`? Definition OR any
         declaration site — see the class docstring."""
         return bool(seed_paths) and (
             df in seed_paths or any(d in seed_paths for d in decls))
@@ -440,7 +443,7 @@ def compose_import(
         """Headers declaring the item that the importing TU actually #includes.
 
         ``tu`` is the target TU whose dependency pulled this item in. ``None``
-        marks an item reached from a TARGET entity that is not itself a TU —
+        marks an item reached from a TARGETED entity that is not itself a TU —
         a header-declared type, or any entity on a target with no `.c` of its
         own — so there is no include graph to consult and the target's own
         file set stands in for it.
@@ -465,7 +468,7 @@ def compose_import(
         return [d for d in decls if d.endswith((".h", ".hpp", ".hh"))] or decls
 
     def add_sym(name: str, df: str, decls: list[str], tu: str | None) -> None:
-        if not name or scope.classify(df, decls, target_paths) != scope.IMPORT:
+        if not name or scope.classify(df, decls, target_paths) != scope.IMPORTED:
             return
         via = narrow(decls, tu)
         if not via:
@@ -531,7 +534,7 @@ def compose_import(
             return  # scalar/primitive typedef (Rust primitive) or a callback
                     # (a sym, handled on the symbol surface) — not a wrap-type.
         df, decls = meta["def_file"], meta["decls"]
-        if scope.classify(df, decls, target_paths) != scope.IMPORT:
+        if scope.classify(df, decls, target_paths) != scope.IMPORTED:
             return
         via = narrow(decls, tu)
         if not via:
@@ -598,7 +601,7 @@ def compose_import(
             return
         cls = scope.classify(meta["def_file"], meta["decls"], target_paths)
         edges = field_edges.get(key, [])
-        if cls == scope.IMPORT:
+        if cls == scope.IMPORTED:
             add_type_key(key, tu)
             # A struct whose DEFINITION is in a file the config named is a
             # public value type: its fields are the API, so every field type is
@@ -623,7 +626,7 @@ def compose_import(
         if meta["def_file"] in target_paths:
             walk_type(key, meta["def_file"])
 
-    # SEEDED walk (`files.import`). Every entity those files name enters the
+    # SEEDED walk (`api_headers`). Every entity those files name enters the
     # section outright, and its signature / field types follow. `tu=None`: a
     # seed has no importing TU, so narrow() resolves against the seed set —
     # which for a public header set is exactly what a consumer #includes.
@@ -658,9 +661,9 @@ def compose_import(
         # Skip target callbacks — they're already collected in
         # target.functions by scope_manifest. Only emit import callbacks here
         # to avoid bucket overlap.
-        if scope.classify(df, decls, target_paths) != scope.IMPORT:
+        if scope.classify(df, decls, target_paths) != scope.IMPORTED:
             continue
-        # A callback declared in a TARGET file needs no reachability: the
+        # A callback declared in a TARGETED file needs no reachability: the
         # config named the header, so the API it is a parameter of is in scope
         # whether or not anything calls through it.
         in_target = bool(df in target_paths or any(d in target_paths for d in decls)
@@ -793,9 +796,9 @@ def compose_import(
     return {
         "seeds": sorted(seed_paths),
         "_comment": (
-            "The IMPORT section: everything the TARGET reaches that "
-            "`scope-config.json`'s `files` does not name — the FFI frontier. "
-            "DERIVED and regenerable from `target`; recompute when it changes. "
+            "The IMPORTED section: everything the TARGETED set reaches that "
+            "`scope-config.json` does not name — the FFI frontier. "
+            "DERIVED and regenerable from `targeted`; recompute when it changes. "
             "Computed by compose/import_closure.py by expanding each target "
             "symbol's `depends_on` edges and walking the CodeQL field-type "
             "graph. `declared_in` is narrowed to the header(s) the importing "
@@ -804,7 +807,7 @@ def compose_import(
             "marks an item imported through >1 header. Membership here says "
             "the target does not OWN the item, not what will be done with it: "
             "port or wrap is the translate stage's objective. `seeds` is "
-            "non-empty for a WRAP campaign (`files.import`): the section is "
+            "non-empty for a WRAP campaign (`api_headers`): the section is "
             "then seeded off those files directly rather than expanded from a "
             "target, and a struct DEFINED in one of them keeps its full field "
             "layout while a forward-declared one stays opaque."

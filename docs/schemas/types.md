@@ -62,7 +62,7 @@ Derived at read time, never stored and never submitted.
   A null slot cannot say this on its own: `lifetime: null` reads the same
   whether nobody has looked or an agent looked and found no lifecycle role.
 - **`pending`** -- the pointer slots carrying no ownership block, as dotted
-  paths. Under `--target-only` / `--import-only` it counts only the fields that
+  paths. Under `--targeted-only` / `--imported-only` it counts only the fields that
   scope's code touches, so it agrees with what `--fields` shows.
 
 `submitted: true` with a non-empty `pending` is a partial analysis.

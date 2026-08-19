@@ -21,7 +21,7 @@ entities/ + edges/ (CodeQL)  -->  T1/T2 CSVs  -->  compose/ (Python)  -->  *.jso
 | `qlpack.yml`, `codeql-pack.lock.yml` | pack manifest (cpp-all dep) |
 | `entities/` | **Tier 1** - *what exists* -> T1 CSVs |
 | `edges/` | **Tier 2** - *how things connect* -> T2 CSVs |
-| `generate_port_scope.py` -> `port_scope.qll` | **Tier 3** - scope predicates regenerated from the target's `scope.json` `target.files` |
+| `generate_port_scope.py` -> `port_scope.qll` | **Tier 3** - scope predicates regenerated from the target's `scope.json` `targeted.files` |
 | `compose/` | deterministic composer layer (Python) |
 | `fa_*.ql`, top-level loose `.ql` | ad-hoc / scratch - not part of the pipeline |
 
@@ -46,8 +46,8 @@ scalar/aggregate), `includes`.
 | `scope.py` | scope predicates (def-anchored classify, typedef walk, `type_method_syms`) | all composers |
 | `reach.py` | per-entity T2 reach rollups (callers, field accesses, type uses) | manifests, dag |
 | `filter_spec.py` / `path_partition.py` | `scope.json` in-scope filter; stem-group -> manifest-dir map | all stages |
-| `scope_manifest.py` | the in-memory `target` section; `import_closure.py` adds the `import` one. `analyze scope --dump` snapshots the pair | `analyze scope`, and every stage via `crustify.scope.build` |
-| `import_closure.py` | the `import` section: what the target reaches, or what `files.import` declares | scope / wave scheduling |
+| `scope_manifest.py` | the in-memory `targeted` section; `import_closure.py` adds the `imported` one. `analyze scope --dump` snapshots the pair | `analyze scope`, and every stage via `crustify.scope.build` |
+| `import_closure.py` | the `imported` section: what the targeted set reaches, or — on a `wrap` campaign — what `api_headers` declares | scope / wave scheduling |
 | `types_manifest.py` / `syms_manifest.py` | `types.json` / `syms.json` skeletons + full dependency edges | `analyze types` / `symbols` |
 | `deps_dag.py` | in-memory unified layered types+symbols DAG (cast-centrality + fallback/back-fill edges); `analyze dag --dump` snapshots it | `analyze dag`, `query dag`, wrap scheduler |
 | `scaffold_manifest.py` | **legacy** — only `sync_workspace` (the shared `rust/` Cargo workspace member list) is still live, called from `bindgen_manifest`. `crates.json` has no producer: it is authored outside the pipeline (see `docs/schemas/crates.md`), and `.rs` stubs come from `crustify.scaffold` | `bindgen` |

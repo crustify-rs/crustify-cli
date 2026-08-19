@@ -141,11 +141,11 @@ def _translate_eligible_pred(scope_json):
     Scope no longer routes: a target symbol used to be refused as the port
     stage's, but that stage is retired, so refusing it left the entity with no
     stage at all. Both halves now reach the same type and symbol agents; scope
-    remains a *filter* the caller opts into (`--target-only` / `--import-only`),
+    remains a *filter* the caller opts into (`--targeted-only` / `--imported-only`),
     not a gate the stage imposes."""
     from compose import scope
-    is_wrap = scope.in_scope_pred(scope_json, scope.IMPORT)
-    is_port = scope.in_scope_pred(scope_json, scope.TARGET)
+    is_wrap = scope.in_scope_pred(scope_json, scope.IMPORTED)
+    is_port = scope.in_scope_pred(scope_json, scope.TARGETED)
 
     def pred(n) -> bool:
         return is_wrap(n) or is_port(n)
@@ -161,7 +161,7 @@ def _selection_pred(scope_json, *, files: set[str]):
     two halves merged into one stage: what an agent DOES is the objective, and
     an item's scope is something the agent reads from the oracle to decide how
     to satisfy that objective. A caller who wants to see a layer split by scope
-    asks the oracle (`query dag --layer N --target-only`) and passes the names."""
+    asks the oracle (`query dag --layer N --targeted-only`) and passes the names."""
     eligible = _translate_eligible_pred(scope_json)
 
     def pred(n) -> bool:  # n: _schedule.Node
@@ -658,7 +658,7 @@ def translate_types(
         raise SystemExit(
             f"wrap: {len(bad_oos)} selected "
             f"{'entity is' if len(bad_oos)==1 else 'entities are'} out of scope "
-            f"(in neither the target nor the import section):\n{listing}")
+            f"(in neither the targeted nor the imported section):\n{listing}")
 
     # Bindgen gate for the libraries actually being wrapped. A selected unit's
     # owning library is its crate in crates.json (crate name == link unit);
@@ -674,15 +674,15 @@ def translate_types(
     _check_bindgen(layout, target,
                    {lib for n in sel_nodes if (lib := _lib_of(n))})
 
-    # `Node -> scope.IMPORT | scope.TARGET`, the free-symbol pool key. Batching
+    # `Node -> scope.IMPORTED | scope.TARGETED`, the free-symbol pool key. Batching
     # locality only -- it no longer picks an objective (see `batch_objective`).
     # IMPORT wins a tie: the one entity in this target that is in BOTH sections
     # (`git_transport_cb`, an import-side callback declared in the target header
     # include/git2/transport.h) is reached through a function-pointer field,
     # which is seam work.
-    _is_import = scope.in_scope_pred(scope_json, scope.IMPORT)
+    _is_import = scope.in_scope_pred(scope_json, scope.IMPORTED)
     def scope_of(n) -> str:
-        return scope.IMPORT if _is_import(n) else scope.TARGET
+        return scope.IMPORTED if _is_import(n) else scope.TARGETED
 
     # Worktree isolation engages whenever the production emit is in play (a
     # caller-supplied emit_fn, e.g. a test double, opts out).

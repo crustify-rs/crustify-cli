@@ -52,7 +52,7 @@ Composers depend on the upstream layers in this order:
 1. **`CrustifyFileAnalyzer`** produces the target's file set + per-file
    include graph.
 2. **`generate_port_scope.py`** regenerates `port_scope.qll` from
-   `scope.json`'s `target.files` so T2 queries that import it see the
+   `scope.json`'s `targeted.files` so T2 queries that import it see the
    correct path set.
 3. **Tier 1 + Tier 2 queries** run via `codeql query run` against
    the CodeQL database. Outputs are BQRS files; decode each to CSV
@@ -133,10 +133,10 @@ At a glance:
 | `opaque_in` (functions using opaquely) | ✓ | |
 | `fields[].locked_by`            |          | ✓     |
 
-### Import-section inclusion gate
+### Imported-section inclusion gate
 
-Composers emit an import entry **only when** some target-side site reaches it,
-or -- on a wrap campaign -- when `files.import` declares it. The reach signal is
+Composers emit an imported entry **only when** some targeted-side site reaches
+it, or -- on a wrap campaign -- when `api_headers` declares it. The reach signal is
 kind-specific:
 
 | Kind                   | Reach signal                                                |

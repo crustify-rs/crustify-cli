@@ -12,9 +12,11 @@ Read <!-- PRINCIPLES_PATH --> and learn the translation philosophy and conventio
 Before proceeding, ask the user to establish the following:
 - whether this is a PORT campaign (translate the repo, or a subsystem of it, to native Rust)
     or a WRAP campaign (safe Rust over a C library's published API)
-- the files that campaign covers: `files.target` for a port campaign, `files.import` for a
-    wrap one. The playbook's "Scope a target" says what each key must name — read it before
-    authoring `scope-config.json`
+- the files that campaign covers. `scope-config.json` names two sets on EITHER campaign —
+    `impl_files` (what implements the library) and `api_headers` (what publishes its API) —
+    and `campaign_objective` (`port` | `wrap`) alone decides how they are read. The
+    playbook's "Scope a target" says what each key must name — read it before authoring
+    `scope-config.json`
 - which CLI settings should you use: agent backend, model, concurrency threshold, loc / syms / types per agent,
     etc., while showing them the default values.
 - which agent backends it wants you to install: codex, claude

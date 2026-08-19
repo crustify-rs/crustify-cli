@@ -24,7 +24,7 @@ The deterministic scheduler chose which symbols and in which order.
 - `{target}`: the repo-relative id this session runs under, which locates its
   `crustify/targets/<target>/scope-config.json`. The scope is that config's
   `files`, which may name paths outside this dir. Use the `crustify-oracle`
-  skill to obtain the target and import sections your session works over.
+  skill to obtain the targeted and imported sections your session works over.
 
 - `{workspace_root}`: shared Cargo workspace, homing modules and
 translations across multiple port sessions.

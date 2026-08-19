@@ -4,7 +4,7 @@ Each stem group lists every symbol (function, macro, global, or callback — a
 function-pointer typedef) defined or declared in its file(s).
 
 **Scope gates EMISSION, never CONTENT.** Which records are emitted (and
-how they're tagged / post-filtered by `--target-only` / `--import-only`) is a
+how they're tagged / post-filtered by `--targeted-only` / `--imported-only`) is a
 scope decision; every record that IS emitted carries its full
 codebase-wide composition. This mirrors the type manifest, whose
 `opaque_in` / `non_opaque_in` footprints are COMPLETE for port AND wrap.
@@ -723,7 +723,7 @@ def compose(
         repo-relative path (e.g. `Path("ssl/statem/statem")`). The
         caller writes one `syms.json` per dir under the analysis
         tree root.
-      - ``dir_scope``: ``{manifest_dir: TARGET | IMPORT}`` parallel
+      - ``dir_scope``: ``{manifest_dir: TARGETED | IMPORTED}`` parallel
         map. Orchestrator consumers (e.g. the symbol wrapper's
         manifests-list input contract) read this to tag each
         manifest with its scope without persisting the tag to disk.
@@ -750,7 +750,7 @@ def compose(
         seed flags): emit every reachable entry. Port-scope entries
         emit with port additions; import entries emit as base.
 
-    `--target-only` / `--import-only` post-filters apply in every mode
+    `--targeted-only` / `--imported-only` post-filters apply in every mode
     (they're emitted-shape filters).
     """
     if filter_spec is None:
@@ -759,7 +759,7 @@ def compose(
     # DROP an out-of-scope entry. The default keeps the reachability gate.
     unscoped = filter_spec.unscoped
     target_paths = (
-        scope.load_target_paths(filter_spec.scope_json_path)
+        scope.load_targeted_paths(filter_spec.scope_json_path)
         if filter_spec.scope_json_path is not None
         else set()
     )
@@ -771,19 +771,19 @@ def compose(
     # target_paths (the file list) is retained for Reach (file-level
     # port-reachability).
     _sj = filter_spec.scope_json_path
-    tgt_funcs = scope.load_entities(_sj, scope.TARGET, "functions") if _sj else set()
-    tgt_globals = scope.load_entities(_sj, scope.TARGET, "globals") if _sj else set()
-    tgt_macros = scope.load_entities(_sj, scope.TARGET, "macros") if _sj else set()
-    # The composed IMPORT surface, as an admission floor — the same role
+    tgt_funcs = scope.load_entities(_sj, scope.TARGETED, "functions") if _sj else set()
+    tgt_globals = scope.load_entities(_sj, scope.TARGETED, "globals") if _sj else set()
+    tgt_macros = scope.load_entities(_sj, scope.TARGETED, "macros") if _sj else set()
+    # The composed IMPORTED surface, as an admission floor — the same role
     # `_in_import_surface` plays on the type side. The reach gates below ask
     # "does target code reach this", which has no answer for a WRAP campaign
-    # (`files.import`): there is no target code, and the surface was seeded off
+    # (`api_headers`): there is no targeted code, and the surface was seeded off
     # the named headers instead. A scope.json entry with no manifest record is
     # unschedulable, so whatever the section lists gets one.
     imp_keys = (
-        (scope.load_entities(_sj, scope.IMPORT, "functions")
-         | scope.load_entities(_sj, scope.IMPORT, "globals")
-         | scope.load_entities(_sj, scope.IMPORT, "macros"))
+        (scope.load_entities(_sj, scope.IMPORTED, "functions")
+         | scope.load_entities(_sj, scope.IMPORTED, "globals")
+         | scope.load_entities(_sj, scope.IMPORTED, "macros"))
         if _sj else set())
 
     def _in_import(r: dict) -> bool:
@@ -1005,8 +1005,8 @@ def compose(
     #
     # Per-dir scope is tracked alongside the entry emission. The
     # contract assumes a stem-group manifest dir carries entries of
-    # a single section only — the TARGET if any emitted entry belongs to
-    # it, otherwise IMPORT. This holds for stem-grouped manifest
+    # a single section only — TARGETED if any emitted entry belongs to
+    # it, otherwise IMPORTED. This holds for stem-grouped manifest
     # dirs whose files all sit on one side of scope.json. The
     # mixed-scope-in-one-dir case (a stem-group split by
     # `config.out_of_scope.paths`) is a known limitation tracked in
@@ -1024,7 +1024,7 @@ def compose(
             # Filter mode: emit all candidates passing wrap-reach.
             emit_port_shape = c["in_target"]
 
-        # --target-only / --import-only post-filters.
+        # --targeted-only / --imported-only post-filters.
         if filter_spec.port_only and not emit_port_shape:
             continue
         if filter_spec.wrap_only and emit_port_shape:
@@ -1033,7 +1033,7 @@ def compose(
         entry = dict(c["base"])
         # No port/wrap shape fork: an emitted record always carries its
         # codebase-wide composition. `emit_port_shape` below survives only as
-        # the SCOPE classification -- it drives the --target-only/--import-only
+        # the SCOPE classification -- it drives the --targeted-only/--imported-only
         # post-filters and the dir_scope tag, never the content.
         if c["port_add"] is not None:
             entry.update(c["port_add"])
@@ -1041,12 +1041,12 @@ def compose(
         if rel_dir is None:
             continue
         entries_by_dir[rel_dir].append(entry)
-        # Promote dir to TARGET the first time we see a target entry
-        # under it; default to IMPORT otherwise.
+        # Promote dir to TARGETED the first time we see a targeted entry
+        # under it; default to IMPORTED otherwise.
         if emit_port_shape:
-            dir_scope[rel_dir] = scope.TARGET
+            dir_scope[rel_dir] = scope.TARGETED
         else:
-            dir_scope.setdefault(rel_dir, scope.IMPORT)
+            dir_scope.setdefault(rel_dir, scope.IMPORTED)
 
     # Stable sort by (kind, name) per dir.
     def _sort_key(e: dict[str, Any]) -> tuple[str, str]:
@@ -1110,7 +1110,7 @@ def main() -> None:
     for rel_dir, entries in sorted(entries_by_dir.items()):
         after = len(entries)
         total += after
-        if dir_scope.get(rel_dir) == scope.TARGET:
+        if dir_scope.get(rel_dir) == scope.TARGETED:
             port_dirs += 1
         else:
             wrap_dirs += 1

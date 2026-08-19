@@ -21,7 +21,7 @@ set or already wrapped on disk, except fallback edges due to cut SCCs.
 - `{target}`: the repo-relative id this session runs under, which locates its
   `crustify/targets/<target>/scope-config.json`. The scope is that config's
   `files`, which may name paths outside this dir. Use the `crustify-oracle`
-  skill to obtain the target and import sections your session works over.
+  skill to obtain the targeted and imported sections your session works over.
 
 - `{workspace_root}`: shared Cargo workspace, homing modules and
   translations across multiple port sessions.
@@ -96,8 +96,8 @@ proceed with just `Port the layout` section below.
 
 #### Establish the scope of your wrappers
 
-**Fields.** You wrap your type's fields that are **target-scope only**,
-i.e. touched by target-scope symbols, leaving the rest untouched.
+**Fields.** You wrap your type's fields that are **targeted only**,
+i.e. touched by targeted symbols, leaving the rest untouched.
 
 **Lifetime primitives.** You identify **all** lifetime primitives of your type,
 regarless whether they are target- or import- or out-of-scope.
@@ -135,7 +135,7 @@ regarless whether they are target- or import- or out-of-scope.
   type requires parametric args for expressing lifetimes or sub-types, then implement it
   manually, preserving the guidelines and practices of the crate.
 
-  Keep target-scope lifecycle primitives in C until the type can be fully owned by Rrust via
+  Keep targeted lifecycle primitives in C until the type can be fully owned by Rrust via
   the `Own Storage` arm below.
   
 **Multi-drop types.** If a type has multiple destructors / releasers, emit safe wrappers
@@ -150,7 +150,7 @@ regarless whether they are target- or import- or out-of-scope.
   layout-compatible strategies even if the trait is stateful, and reach for non-ZST
   strategies only when really necessary.
   
-**Field accessors.** For each target-scope field, read its ownership analysis (if pointer)
+**Field accessors.** For each targeted field, read its ownership analysis (if pointer)
   using the `crustify-oracle` skill and emit getters/setters following the established
   safety discipline and principles.
 
