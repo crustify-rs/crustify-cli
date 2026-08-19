@@ -185,14 +185,17 @@ headers of the target selected when bootstrapping the orchestrator agent. It nam
 **`impl_files`** (the sources and private headers that implement the library) and **`api_headers`**
 (the headers that publish its API) — and one verb, **`campaign_objective`**, which is what decides
 how they are read:
-  - **`port`** - reimplement the target in Rust. `impl_files` + `api_headers` together seed the
-    **targeted** section, membership anchored on definition sites; the **imported** section is
-    derived from what those entities reach.
-  - **`wrap`** - expose the target's public API from Rust, owning none of it. The targeted section
-    composes empty and `api_headers` alone seeds the imported section, membership anchored on
-    declaration sites.
+Scope itself is the same either way: **targeted** is `impl_files` + `api_headers`, anchored on
+definition sites (the library this campaign owns); **imported** is what that reaches and does not
+own (its external dependencies); and the **api** view cuts across both, anchored on *declaration*
+sites, carrying what the headers publish. `campaign_objective` decides only how deep the dependency
+graph reads the library:
+  - **`port`** - walk every targeted body; a struct defined anywhere in the targeted set keeps its
+    full field layout.
+  - **`wrap`** - walk no bodies at all, only signatures; only a struct defined in `api_headers`
+    keeps its layout, everything else orders as an opaque handle.
 
-A section says what the campaign contains; `campaign_objective` says what it is aimed at; what one
+A section says what the campaign contains; `campaign_objective` says how deeply to read it; what one
 agent does with one selection is the translate stage's per-wave `--objective`.
 
 **Crates specification.** The orchestrator authors **`crates.json`** where it sketches a hierarchy
@@ -297,13 +300,15 @@ Four query subjects, each with its own modes:
 
 | subject | modes | flags |
 |---|---|---|
-| `types` | enumerate · introspect · submit | `--fields` `--lifecycle-ops` `--users` `--field-touchers` `--manifest` `--in-tree` `--out-of-tree` |
+| `types` | enumerate · introspect · submit | `--fields` `--lifecycle-ops` `--users` `--field-touchers` `--manifest` `--api-only` `--in-tree` `--out-of-tree` |
 | `symbols` | enumerate · introspect · submit · lifecycle discovery · call-graph closure | `--lifetime-for` `--taking` `--calling` `--callees` `--callers` `--depth` `--array` `--manifest` `--in-tree` `--out-of-tree` |
-| `files` | the targeted set / the imported closure | `--targeted-only` `--imported-only` |
+| `files` | the api headers / targeted set / imported closure | `--api-only` `--targeted-only` `--imported-only` |
 | `dag` | closure · layer slice · flattened-cycle twins | `--name` `--layer` `--scc` `--depth` `--loc` `--full` |
 
 `--name` filters, `--file` disambiguates a name defined in more than one place, `--targeted-only` /
-`--imported-only` narrow any subject, and `--update` is the only writer. `--in-tree` / `--out-of-tree`
+`--imported-only` narrow any subject on the OWNERSHIP axis while `--api-only` cuts the independent
+PUBLICATION axis (they intersect, so `--api-only --imported-only` is the re-export set), and
+`--update` is the only writer. `--in-tree` / `--out-of-tree`
 narrow an enumeration by whether an entry's home is inside the repository: `--imported-only
 --out-of-tree` is the permanent FFI floor, `--imported-only --in-tree` the remaining port backlog.
 `query dag --full` recomposes scope as if `campaign_objective` were `port`, so a `wrap` campaign can

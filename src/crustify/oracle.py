@@ -68,19 +68,41 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
     `crustify-cli <target> scaffold --name <X>`, not here."""
     sc = p.add_mutually_exclusive_group()
     sc.add_argument("--imported-only", action="store_true", dest="imported_only",
-                    help="Narrow to the IMPORT section — what the target reaches "
-                         "but does not name: enumeration → import entries; "
-                         "--lifecycle-ops/--users → imported functions; "
-                         "--fields/--field-touchers "
-                         "→ fields touched by import code. (Facets are complete "
-                         "by default.)")
+                    help="Narrow to the IMPORTED section — this campaign's "
+                         "EXTERNAL dependencies: everything the targeted set "
+                         "reaches but does not own. Always the derived closure, "
+                         "under either campaign objective. Enumeration → "
+                         "imported entries; --lifecycle-ops/--users → imported "
+                         "functions; --fields/--field-touchers → fields touched "
+                         "by imported code. (Facets are complete by default.)")
     sc.add_argument("--targeted-only", action="store_true", dest="targeted_only",
-                    help="Narrow to the TARGET section — what "
-                         "`scope-config.json`'s `files` names: enumeration → target "
+                    help="Narrow to the TARGETED section — the library this "
+                         "campaign OWNS: what `scope-config.json`'s "
+                         "`impl_files` + `api_headers` name, DEFINITION-anchored. "
+                         "Identical under either `campaign_objective` — a `wrap` "
+                         "campaign owns its library too, it merely intends "
+                         "something different with it. Enumeration → targeted "
                          "entries; --lifecycle-ops/--users → targeted functions; "
-                         "--fields/--field-touchers → fields touched by target code. "
-                         "(Facets are complete by default.) Says nothing about what "
-                         "will be DONE with them — that is `translate --objective`.")
+                         "--fields/--field-touchers → fields touched by targeted "
+                         "code. (Facets are complete by default.) Says what the "
+                         "campaign COVERS, not what one wave does with it — that "
+                         "is `translate --objective`.")
+    # NOT in the `sc` exclusive group: `api` is an AXIS, not a section. It cuts
+    # PUBLICATION (does a named header declare it) where targeted/imported cut
+    # OWNERSHIP (whose body is it), so the two compose. `--api-only
+    # --imported-only` is the re-export query — published by this library,
+    # owned by another — and refusing it would lose the one fact that
+    # distinguishes a re-export from an ordinary import.
+    p.add_argument("--api-only", action="store_true", dest="api_only",
+                   help="Narrow to the API view — what `scope-config.json`'s "
+                        "`api_headers` PUBLISHES, selected on DECLARATION "
+                        "sites (a public header publishes what it declares; "
+                        "the bodies live in the .c files behind it). This is "
+                        "the set a `wrap` campaign translates. INTERSECTS with "
+                        "--targeted-only / --imported-only rather than "
+                        "excluding them: `--api-only --targeted-only` is the "
+                        "public surface this campaign also owns, and "
+                        "`--api-only --imported-only` is the re-export set.")
     og = p.add_mutually_exclusive_group()
     og.add_argument("--out-of-tree", action="store_true", dest="out_of_tree",
                     help="Enumeration only. Keep entries whose home is OUTSIDE the "
@@ -279,6 +301,11 @@ def _add_query_command(sub) -> None:
         help="Print what the campaign owns (scope.json.targeted.files). "
              "Empty on a `wrap` campaign.",
     )
+    files_q.add_argument(
+        "--api-only", action="store_true", dest="api_only",
+        help="Print the API header set (scope.json.api.files) — the headers "
+             "that publish the library, T1-anchored.",
+    )
     files_sel.add_argument(
         "--imported-only", action="store_true", dest="imported_only",
         help="Print the imported closure — the header surface the campaign "
@@ -350,6 +377,12 @@ def _add_query_command(sub) -> None:
              "default graph, so alternating between the two costs one compose "
              "each and not one per call.",
     )
+    dag_q.add_argument(
+        "--api-only", action="store_true", dest="api_only",
+        help="Restrict the node set (slice / --loc) to the API view — what "
+             "`api_headers` publishes. This is the schedulable set on a "
+             "`wrap` campaign. Composes with the section flags.",
+    )
     dag_scope = dag_q.add_mutually_exclusive_group()
     dag_scope.add_argument(
         "--imported-only", action="store_true", dest="imported_only",
@@ -359,8 +392,9 @@ def _add_query_command(sub) -> None:
     dag_scope.add_argument(
         "--targeted-only", action="store_true", dest="targeted_only",
         help="Restrict the node set (slice / --loc) to TARGETED entities "
-             "(scope.json's own file set — EMPTY on a `wrap` campaign unless "
-             "--full is given, which is what makes the pair useful there).",
+             "(scope.json's own file set — the library itself, under either "
+             "campaign objective). Pair with --api-only for the public surface "
+             "it owns.",
     )
 
 
@@ -371,6 +405,7 @@ def _dispatch_query(args: argparse.Namespace, target: Path) -> None:
             target,
             targeted_only=bool(getattr(args, "targeted_only", False)),
             imported_only=bool(getattr(args, "imported_only", False)),
+            api_only=bool(getattr(args, "api_only", False)),
         )
         return
     if args.subject == "dag":
@@ -385,6 +420,7 @@ def _dispatch_query(args: argparse.Namespace, target: Path) -> None:
             loc=bool(getattr(args, "loc", False)),
             imported_only=bool(getattr(args, "imported_only", False)),
             targeted_only=bool(getattr(args, "targeted_only", False)),
+            api_only=bool(getattr(args, "api_only", False)),
             full=bool(getattr(args, "full", False)),
         )
         return
@@ -399,6 +435,7 @@ def _dispatch_query(args: argparse.Namespace, target: Path) -> None:
         out_of_tree=bool(getattr(args, "out_of_tree", False)),
         in_tree=bool(getattr(args, "in_tree", False)),
         fields=bool(getattr(args, "fields", False)),
+        api_only=bool(getattr(args, "api_only", False)),
         lifecycle_ops=bool(getattr(args, "lifecycle_ops", False)),
         users=bool(getattr(args, "users", False)),
         field_touchers=bool(getattr(args, "field_touchers", False)),

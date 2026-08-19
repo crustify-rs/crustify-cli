@@ -37,7 +37,10 @@ translations across multiple port sessions.
 
 - `{git_base}`: the base git branch where you merge your committed worktree changes into.
 
-- `{objective}`: your objective for the task.
+- `{task_objective}`: your objective for the task.
+
+- `{campaign_objective}`: your campaign objective; PORT when we aim to port the target-owned
+  files to native Rust, WRAP when we aim to provide a safe Rust interface for its public API.
 
 ---
 
@@ -45,10 +48,13 @@ translations across multiple port sessions.
 
 ### Discover your items 
 
-**Analysis oracle.** For each item in your target set use `crustify-oracle` to fetch its analysis record,
-including the pointer analysis of its args and return (ownership, mutability, nullability,
-type, cardinality, etc.). If any of your work items lacks the agent-owned analysis, then you must do that first
-before proceeding with the codegen work. Use the established principles and meaning of each agent-owned block.
+### Query the analysis oracle 
+
+For each item in your target set use `crustify-oracle` to fetch its analysis record,
+including the pointer analysis of its fields (ownership, mutability, nullability, type,
+cardinality, etc.). If any of your work items lacks the agent-owned analysis, then you must first
+carry the ownership judgement and submit your findings to the oracle before proceeding with the
+translation work. Use our established principles and the meaning of each agent-owned block.
 
 ### Locate your files
 
@@ -67,29 +73,30 @@ Locate the corresponding C files of your target set. You run in an isolated work
 which may not track automatically-generated files (e.g. headers) or build-time objects;
 if that's the case, rebuild / reconfigure the target in your worktree to obtain them.
 
-### Determine your objective
+### Determine your task objective
 
-**`review`.** If our objective is `review` then you act as an **LLM-as-a-Judge**, assessing the
+**`review`.** If your task objective is `review` then you act as an **LLM-as-a-Judge**, assessing the
 quality and accuracy of the agent-owned ownership and lifecycle analysis from `crustify-oracle`,
 and of the emitted Rust code for your target set; note that your target set may contain both safe
 wrappers or ported items. For both, you verify their claims against our principles and instructions and if
 you notice any inconsistencies, submit your new findings through the oracle, and fix / extend the
 existing Rust code if necessary, justifying why they fix the existing state.
 
-**`raw`.** If your objective is `raw` and your target set contains the special marker
+**`raw`.** If your task objective is `raw` and your target set contains the special marker
 `lifetime-for : <spec>`, then you enter discovery mode to scout the codebase for `<spec>` lifetime primitives using
 our recommended heuristics. Then, you submit your findings through the oracle, and proceed
 with generating safe wrappers for them according to the instructions in `Wrap the symbols` arm below. 
 You collect lifetime primitive candidates codebase-wide, regardless of which section they sit in.
+If your campaign objective is WRAP, then you only look for candidates that are exported by the public API.
 
-**`wrap`.** If your objective is `wrap` then you must emit safe wrappers for your target set
+**`wrap`.** If your task objective is `wrap` then you must emit safe wrappers for your target set
 by following the instructions via the `Wrap the symbols` section below. If your target set contains any methods
   that have equivalents in the Rust standard library (e.g. `memset`, `memcpy`), and are not
   required for the C and the Rust worlds to stay interoperable during the Rust migration,
   then you do not need to emit safe wrappers for them; downstream cosnumers will just use
   the Rust-native ones.
 
-**`port`.** If your objective is `port` then you may nativize your target set to Rust by following
+**`port`.** If your task objective is `port` then you may nativize your target set to Rust by following
   the instructions in the `Port the symbols` section below. If your target set contains any method that implement
   raw lifecycle primitives (e.g. raw memory allocators / deallocators / cloners), or in general methods
   that are only needed for the C and Rust worlds to stay interoperable until the target is fully migrated to

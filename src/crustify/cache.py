@@ -24,7 +24,11 @@ from pathlib import Path
 #:  6 — sections renamed port/wrap -> target/import; anchors removed.
 #:  7 — scope-config split into impl_files/api_headers + campaign_objective;
 #:      sections renamed target/import -> targeted/imported.
-_VERSION = 7
+#:  8 — scope is objective-independent: `targeted` is impl+api on both
+#:      campaigns, `imported` is always the external closure, and the new
+#:      `api` view carries the declaration-anchored public surface. The
+#:      seeded import walk and `imported.seeds` are gone.
+_VERSION = 8
 
 
 def fingerprint(layout, target) -> dict:

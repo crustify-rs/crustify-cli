@@ -285,8 +285,7 @@ def _collect(analysis_root: Path,
              port_fields: dict[str, set[str]] | None = None,
              codeql_dir: Path | None = None,
              in_scope_types: set | None = None,
-             target_paths: set[str] | None = None,
-             seed_paths: set[str] | None = None):
+             layout_paths: set[str] | None = None):
     """Collect nodes/edges from the analysis tree, narrowed to one target.
 
     The tree is scope-agnostic and ACCUMULATES across targets: an entry that
@@ -309,20 +308,21 @@ def _collect(analysis_root: Path,
         campaign's ``api_headers`` seed — where the layout IS the API and
         every field edge is kept.
 
-    On a WRAP campaign the targeted section is empty, so EVERY symbol takes
-    the signature-only path and every struct outside ``seed_paths`` orders no
-    field work at all: exactly how an imported item behaves on a port
-    campaign, which is the point. ``query dag --full`` is the escape hatch —
-    it recomposes scope with ``campaign_objective`` forced to ``port`` so the
-    same tree can be read body-deep.
+    On a WRAP campaign ``port_syms`` is empty by construction, so EVERY symbol
+    takes the signature-only path and every struct outside ``layout_paths``
+    (there, ``api_headers``) orders no field work at all: exactly how an
+    imported item behaves on a port campaign, which is the point. Scope is
+    unchanged either way — the library is still TARGETED, it is just read
+    shallowly. ``query dag --full`` is the escape hatch: it composes this graph
+    as if the objective were ``port``, so the same tree can be read body-deep
+    without touching the config.
 
     ``port_syms`` of None disables narrowing (whole-tree graph, the old
     behaviour) — used by callers with no scope in hand.
     """
     types: dict[str, TypeNode] = {}
     syms: dict[SymKey, SymNode] = {}
-    target_paths = target_paths or set()
-    seed_paths = seed_paths or set()
+    layout_paths = layout_paths or set()
 
     tmeta, tedges, tcasts, talias, tgen = (collect_types_csv(codeql_dir) if codeql_dir
                                      else ({}, {}, {}, {}, {}))
@@ -366,14 +366,14 @@ def _collect(analysis_root: Path,
         # the same reason -- and load-bearing on a wrap campaign, where an
         # empty targeted scope makes `port_fields` empty and would otherwise
         # leave every imported struct a dependency leaf.
-        # A struct whose definition is in a file the config NAMED keeps every
-        # field edge: on a port campaign it is the layout being reimplemented,
-        # on a wrap campaign an `api_headers` seed is a public value type whose
-        # fields ARE the API. Everything else orders only through what targeted
-        # code touches -- which on a wrap campaign (nothing targeted) is
-        # nothing, so an opaque handle correctly orders no work at all.
-        keep = (None if port_fields is None
-                or (df and (df in target_paths or df in seed_paths))
+        # A struct whose definition is in a LAYOUT file keeps every field
+        # edge. Which files those are is the campaign objective's one and only
+        # effect on this graph: on `port` it is the whole targeted set (the
+        # layout is being reimplemented), on `wrap` it is `api_headers` alone
+        # (a public value type whose fields ARE the API). Everything else
+        # orders only through what body-walked code touches -- which on a wrap
+        # campaign is nothing, so an opaque handle correctly orders no work.
+        keep = (None if port_fields is None or (df and df in layout_paths)
                 else port_fields.get(tag, set()))
         for fname, tname, tdf in tedges.get(key, ()):
             if keep is not None and fname not in keep:
@@ -1023,25 +1023,44 @@ def port_touched_fields(analysis_root: Path, port_syms: set) -> dict[str, set[st
     return touched
 
 
-def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
-            ) -> dict[str, Any]:
+def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None,
+            objective: str | None = None) -> dict[str, Any]:
     """Build the layered DAG. With ``scope_json``, narrowed to that target
     (see :func:`_collect`); without it, unnarrowed.
 
     ``analysis_root`` is the composed ``(types, syms)`` pair, or -- for this
     module's own CLI -- a legacy analysis-root path. ``codeql_dir`` must be
     given with the pair, since there is no tree path to derive it from."""
-    port_syms = port_fields = None
+    # `campaign_objective` branches HERE and nowhere else. Scope membership is
+    # objective-independent -- a wrap campaign owns its library exactly as a
+    # port one does -- so what the objective decides is only how deep this
+    # graph reads that library:
+    #
+    #   port   body-walk every targeted symbol; a struct defined anywhere in
+    #          the targeted set keeps every field (the layout is being
+    #          reimplemented).
+    #   wrap   body-walk NOTHING. Every symbol contributes its signature only,
+    #          exactly as an imported symbol does on a port campaign, and only
+    #          a struct defined in `api_headers` keeps its fields -- they ARE
+    #          the API. Everything else orders as an opaque handle, which is
+    #          the correct shape for wrapping and is why `--full` exists for
+    #          when you want to size the port instead.
+    port_syms = port_fields = layout_paths = None
     if scope_json is not None and (isinstance(scope_json, dict)
                                    or Path(scope_json).is_file()):
         from . import scope as _scope
+        objective = objective or _scope.campaign_objective(scope_json)
         port_syms = set()
-        for kind in ("functions", "globals", "macros"):
-            try:
-                port_syms |= _scope.load_entities(scope_json, _scope.TARGETED, kind)
-            except Exception:
-                pass
+        if objective != "wrap":
+            for kind in ("functions", "globals", "macros"):
+                try:
+                    port_syms |= _scope.load_entities(
+                        scope_json, _scope.TARGETED, kind)
+                except Exception:
+                    pass
         port_fields = port_touched_fields(analysis_root, port_syms)
+        layout_paths = (_scope.load_api_paths(scope_json) if objective == "wrap"
+                        else _scope.load_targeted_paths(scope_json))
     in_scope_types = None
     if scope_json is not None and (isinstance(scope_json, dict)
                                    or Path(scope_json).is_file()):
@@ -1067,10 +1086,7 @@ def compose(analysis_root, scope_json=None, codeql_dir: Path | None = None
     types, syms, talias = _collect(analysis_root, port_syms, port_fields,
                                    codeql_dir=codeql_dir,
                                    in_scope_types=in_scope_types,
-                                   target_paths=(_scope.load_targeted_paths(scope_json)
-                                                 if scope_json is not None else None),
-                                   seed_paths=(_scope.load_seed_paths(scope_json)
-                                               if scope_json is not None else None))
+                                   layout_paths=layout_paths)
     _populate_nfields(codeql_dir, types)
     # A generator macro is already a symbol node; hang its family off it rather
     # than minting a synthetic type, which would collide with this very node on

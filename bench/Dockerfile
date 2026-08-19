@@ -45,8 +45,8 @@
 
 FROM debian:12-slim
 
-ARG CRUSTIFY_CLI_REF=ref
-ARG FFIBOX_REF=ref
+ARG CRUSTIFY_CLI_REF=scope-refactor
+ARG FFIBOX_REF=main
 ARG CODEQL_VERSION=v2.26.3
 ARG PYTHON_VERSION=3.13
 # Both backends by default. The playbook says to ask which are wanted, so

@@ -237,11 +237,23 @@ TARGETED = "targeted"
 IMPORTED = "imported"
 SECTIONS = (TARGETED, IMPORTED)
 
+#: The API view — NOT a section, and deliberately absent from :data:`SECTIONS`.
+#: `targeted` / `imported` partition on OWNERSHIP (whose body is it); `api`
+#: cuts the orthogonal PUBLICATION axis (does a named header declare it), the
+#: same way `--in-tree` / `--out-of-tree` cut the origin axis. The two are
+#: independent: a re-exported symbol declared in `api_headers` but defined
+#: outside `impl_files` is `api` AND `imported` at once, which is what a
+#: re-export IS. Making `api` a third section would force that entity to pick
+#: a side and lose the fact.
+API = "api"
+
 
 def load_targeted_paths(scope_json) -> set[str]:
     """The campaign's own file set — every file `scope-config.json`'s
-    `impl_files` + `api_headers` named that the build actually compiled. EMPTY
-    on a `wrap` campaign, which owns nothing.
+    `impl_files` + `api_headers` named that the build actually compiled.
+
+    Computed IDENTICALLY under both campaign objectives: what a campaign COVERS
+    is a property of its file sets, not of what we intend to do with them.
 
     Composer-emitted by `compose.scope_manifest.compose()`; the `files` list is
     anchored on the CodeQL T1 tables, so an `#ifdef`-elided file is absent:
@@ -256,15 +268,23 @@ def load_targeted_paths(scope_json) -> set[str]:
     return set(_doc(scope_json).get(TARGETED, {}).get("files", []))
 
 
-def load_seed_paths(scope_json) -> set[str]:
-    """The files `scope-config.json`'s `api_headers` named, expanded — echoed
-    into the manifest as `imported.seeds`.
+def load_api_paths(scope_json) -> set[str]:
+    """The files `scope-config.json`'s `api_headers` named, expanded and
+    T1-anchored — the headers that PUBLISH the library.
 
-    Empty for a PORT campaign, where the imported section is DERIVED as the
-    closure of the targeted one. Non-empty for a WRAP campaign, where those
-    files ARE the section's seed: it is what tells a consumer that a struct defined in one of them is a
-    public value type (full field layout) rather than an opaque handle."""
-    return set(_doc(scope_json).get(IMPORTED, {}).get("seeds", []))
+    Objective-independent, like every other scope set. What the campaign
+    objective decides is what the DAG does with them: a `wrap` campaign seeds
+    its graph here and nowhere else, so a struct DEFINED in one of these files
+    keeps its full field layout (its fields ARE the API) while everything else
+    orders as an opaque handle."""
+    return set(_doc(scope_json).get(API, {}).get("files", []))
+
+
+def campaign_objective(scope_json) -> str:
+    """The composed manifest's echo of `scope-config.json`'s
+    `campaign_objective`. The dag composer is the ONLY consumer that branches
+    on it — scope membership deliberately does not."""
+    return _doc(scope_json).get("campaign_objective") or "port"
 
 
 def load_entities(scope_json, section: str, kind: str) -> set[tuple[str, str]]:

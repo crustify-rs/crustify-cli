@@ -21,15 +21,23 @@ fully owned by Rust.
 
 Every item sits in one of two sections of `scope.json`, decided by
 `scope-config.json`'s two file sets — `impl_files` (what implements the
-library) and `api_headers` (what publishes its API) — under its
-`campaign_objective`:
+library) and `api_headers` (what publishes its API):
 
-- On a **`port`** campaign, `impl_files` + `api_headers` name the code this
-  campaign owns. An item is **targeted** when its body lives in one of those
-  files, or, having no body anywhere, when all its declarations do. Everything
-  targeted code reaches that is not named there is **imported**.
-- On a **`wrap`** campaign the campaign owns nothing: `api_headers`'
-  declarations seed the imported section directly, and nothing is targeted.
+- An item is **targeted** when its body lives in one of those files, or, having
+  no body anywhere, when all its declarations do. This is the library itself.
+- Everything targeted code reaches that neither key names is **imported** —
+  the campaign's external dependencies.
+
+Cutting across both, the **api** view: what `api_headers` *declares*. A public
+header publishes what it declares, not what it defines, so this is anchored on
+declaration sites — and it overlaps both sections, because publication and
+ownership are independent. A symbol declared in your API but defined in another
+library is api **and** imported at once; that is what a re-export is.
+
+`campaign_objective` does **not** enter into any of this. It decides only how
+deep the dependency graph reads the library: a `port` campaign walks bodies, a
+`wrap` campaign walks signatures and keeps the full field layout only for
+structs defined in `api_headers`.
 
 **Imported** items stay C's: a safe wrapper over the FFI seam, layout
 compatible, with storage allocation and free still owned by C.

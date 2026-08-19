@@ -13,12 +13,14 @@ Two halves, both composer-only:
   ``imported``  the closure of ``targeted`` over T1/T2, ~1.4s (dominated by
                 parsing `macro_expansions.csv` and friends)
 
-Which half the config SEEDS is `campaign_objective`: a ``port`` campaign seeds
-``targeted`` off ``impl_files`` + ``api_headers`` and derives ``imported`` as
-its closure; a ``wrap`` campaign owns nothing, so ``targeted`` composes empty
-and ``imported`` is seeded off ``api_headers`` directly.
+Plus a cross-cutting ``api`` view: what ``api_headers`` PUBLISHES, selected on
+declaration sites. Not a section — it overlaps both.
 
-:func:`build` memoizes per `(repo_root, target, full)` for the life of the process,
+None of the three depends on ``campaign_objective``. What a campaign COVERS is
+a property of its file sets; the objective decides only what the DAG does with
+them, and :mod:`compose.deps_dag` is its single consumer.
+
+:func:`build` memoizes per `(repo_root, target)` for the life of the process,
 which is what makes the multi-read commands cheap: `deps_dag.compose` alone
 wants it twice, and `query` up to six times.
 
@@ -32,36 +34,29 @@ from pathlib import Path
 from crustify.layout import Layout
 
 
-#: (repo_root, target, full) -> composed manifest. Process-lifetime only: a
-#: stage is one process, and the CSVs cannot change under it mid-run. `full` is
-#: part of the key because it composes a DIFFERENT manifest from the same
-#: inputs — a wrap campaign read with port seeding.
-_CACHE: dict[tuple[str, str, bool], dict] = {}
+#: (repo_root, target) -> composed manifest. Process-lifetime only: a stage is
+#: one process, and the CSVs cannot change under it mid-run.
+_CACHE: dict[tuple[str, str], dict] = {}
 
 
-def build(layout: Layout, target: Path, *, stage: str, full: bool = False) -> dict:
-    """Compose this target's scope manifest — both sections — and return it.
-
-    ``full`` overrides ``campaign_objective`` to ``port`` for this composition:
-    a wrap campaign's ``impl_files`` become targeted, so bodies and full struct
-    layouts are in scope. It is the scope half of ``query dag --full`` and
-    changes nothing on a campaign that is already ``port``.
+def build(layout: Layout, target: Path, *, stage: str) -> dict:
+    """Compose this target's scope manifest — both sections plus the ``api``
+    view — and return it.
 
     Raises ``SystemExit`` with a stage-tagged message when an input is missing,
     so a caller never has to pre-check.
     """
-    ck = (str(layout.repo_root), str(target), full)
+    ck = (str(layout.repo_root), str(target))
     hit = _CACHE.get(ck)
     if hit is not None:
         return hit
 
     # On-disk cache, fingerprinted against `scope-config.json` + the CodeQL
     # tables. Saves 1.45s on every command that touches scope, which is all of
-    # them: the manifest composers need it to narrow their emit. The `full`
-    # view caches to its own file, so the two never overwrite each other.
+    # them: the manifest composers need it to narrow their emit.
     from crustify import cache as _cache
     fp = _cache.fingerprint(layout, target)
-    disk = _cache.load(layout.scope(target, full=full), fp)
+    disk = _cache.load(layout.scope(target), fp)
     if disk is not None:
         _CACHE[ck] = disk
         return disk
@@ -89,29 +84,26 @@ def build(layout: Layout, target: Path, *, stage: str, full: bool = False) -> di
 
     import json
     config = json.loads(config_path.read_text())
-    # The campaign is STATED, not inferred from which file key is populated:
-    # both `impl_files` and `api_headers` stand on every campaign, and
-    # `campaign_objective` alone decides which of them seeds which section.
-    # `full` overrides it to `port` — the same config read body-deep.
+    # Validated here even though scope does not branch on it: the dag does, and
+    # a typo should fail at the first command that touches the config rather
+    # than at the first one that happens to need a graph.
     try:
-        objective = _sm.PORT if full else _sm.campaign_objective(config)
+        objective = _sm.campaign_objective(config)
     except ValueError as e:
         raise SystemExit(f"{stage}: {config_path}: {e}")
-    seed_paths = set(_sm.seed_candidates(config, layout.repo_root, objective))
-    manifest = _sm.compose(config_path, t1, layout.repo_root, objective)
+    manifest = _sm.compose(config_path, t1, layout.repo_root)
     target_paths = _scope.load_targeted_paths(manifest)
     # An empty file set means the campaign covers nothing. There is no implicit
     # walk to fall back on, so this is always a config error — a mistyped path,
     # or a list that never got filled in — and it would otherwise compose a
     # well-formed, entirely empty scope that every later stage reports as
     # "nothing to do".
-    if not target_paths and not seed_paths:
-        named = (f"`{_sm.IMPL_FILES}` and `{_sm.API_HEADERS}` are"
-                 if objective == _sm.PORT else f"`{_sm.API_HEADERS}` is")
+    if not target_paths:
         raise SystemExit(
-            f"{stage}: {config_path} selects no files. On a `{objective}` "
-            f"campaign {named} empty, or name(s) no path under "
-            f"{layout.repo_root} matches.")
+            f"{stage}: {config_path} selects no files. `{_sm.IMPL_FILES}` and "
+            f"`{_sm.API_HEADERS}` are both empty, or name paths that nothing "
+            f"under {layout.repo_root} matches, or name only files this build "
+            f"never compiled (the sets are anchored on the T1 tables).")
     # The imported half needs the targeted half, and only that — it reads
     # neither syms.json nor types.json, so scope stands alone ahead of the
     # manifest composers.
@@ -121,14 +113,13 @@ def build(layout: Layout, target: Path, *, stage: str, full: bool = False) -> di
         target_paths,
         _scope.load_csv(t1 / "types.csv"),
         _scope.load_csv(t2 / "field_type_uses.csv"),
-        seed_paths,
     )
-    manifest = _cache.store(layout.scope(target, full=full), manifest, fp)
+    manifest = _cache.store(layout.scope(target), manifest, fp)
     _CACHE[ck] = manifest
     return manifest
 
 
-def try_build(layout: Layout, target: Path, *, full: bool = False) -> dict | None:
+def try_build(layout: Layout, target: Path) -> dict | None:
     """`build`, returning ``None`` instead of exiting when scope cannot be
     composed — for the callers that treat a scope-less target (``.``) as "no
     classification available" rather than an error.
@@ -138,6 +129,6 @@ def try_build(layout: Layout, target: Path, *, full: bool = False) -> dict | Non
     business paying it.
     """
     try:
-        return build(layout, target, stage="scope", full=full)
+        return build(layout, target, stage="scope")
     except SystemExit:
         return None

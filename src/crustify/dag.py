@@ -81,13 +81,14 @@ def build(layout, target: Path, *, stage: str, full: bool = False) -> dict:
     alone; the store overlay contributes nothing to it, by design (a
     submission must never move a layer).
 
-    ``full`` builds the BODY-DEEP view: scope is composed with
-    ``campaign_objective`` forced to ``port``, so a wrap campaign's
-    ``impl_files`` become targeted and their symbols contribute their bodies'
-    callees and their structs every field. Only genuinely imported items stay
-    narrowed (signature-only symbols, touched-fields-only structs). On a
-    campaign that is already ``port`` it composes the same graph as the
-    default, from its own cache file.
+    ``full`` builds the BODY-DEEP view: the graph is composed as if
+    ``campaign_objective`` were ``port``, so every targeted symbol contributes
+    its body's callees and every targeted-defined struct every field. Only
+    genuinely imported items stay narrowed (signature-only symbols,
+    touched-fields-only structs). Scope itself does not move — it never
+    depended on the objective — so this is a dag-only fork. On a campaign that
+    is already ``port`` it composes the same graph as the default, from its own
+    cache file.
     """
     from compose.deps_dag import compose as _compose
     from crustify import cache as _cache, manifests as _manifests, scope as _scope
@@ -104,8 +105,9 @@ def build(layout, target: Path, *, stage: str, full: bool = False) -> dict:
     dag = _compose(
         (_manifests.entries(layout, target, "types", stage=stage),
          _manifests.entries(layout, target, "symbols", stage=stage)),
-        _scope.build(layout, target, stage=stage, full=full),
+        _scope.build(layout, target, stage=stage),
         codeql_dir=layout.codeql,
+        objective=("port" if full else None),
     )
     return _cache.store(layout.deps_dag(target, full=full), dag, fp)
 

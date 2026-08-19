@@ -12,13 +12,15 @@ invocation.
 and one verb, `campaign_objective`, which says what the campaign is for and is
 the only thing that decides how those two sets are read:
 
-  `port`  we aim to reimplement the target in Rust. Both sets seed the
-          `targeted` section: an entity is targeted iff its home is in
-          `impl_files` ∪ `api_headers`.
-  `wrap`  we aim to expose the target's public API from Rust and own none of
-          it. Nothing is targeted; `api_headers` alone seeds the `imported`
-          section directly, on DECLARATION-site membership, and `impl_files`
-          is not read at all.
+  `port`  we aim to reimplement the target in Rust.
+  `wrap`  we aim to expose the target's public API from Rust.
+
+SCOPE MEMBERSHIP DOES NOT BRANCH ON IT. `targeted` is `impl_files` ∪
+`api_headers` under both objectives, `imported` is always its derived external
+closure, and the `api` view is always what `api_headers` declares. What the
+objective decides is how deep the DAG reads the library — see
+`compose/deps_dag.compose`. An earlier cut emptied `targeted` on a `wrap`
+campaign, which made a whole library read as its own external dependency.
 
 Rule (a PORT campaign):
 
@@ -31,10 +33,11 @@ Rule (a PORT campaign):
      match recursively; otherwise exact-file match).
   3. Everything an in-scope entity REACHES but that neither key names is
      imported, derived by `import_closure.py` into the sibling `imported`
-     section.
+     section — the campaign's EXTERNAL dependencies.
 
-A WRAP campaign inverts this: the `targeted` section composes empty and
-`import_closure.py` seeds directly off `api_headers`.
+Alongside them, the `api` view: what `api_headers` PUBLISHES, selected on
+DECLARATION sites. Not a section — it overlaps both, because publication and
+ownership are independent questions.
 
 The section says what the target COVERS. It is `campaign_objective` that says
 what the campaign is FOR — and that is still not the per-wave `translate
@@ -45,6 +48,7 @@ what the campaign is FOR — and that is still not the per-wave `translate
     {
       "_comment": "...",
       "campaign_objective": "port" | "wrap",
+      "api":      {"files": [...], "functions": [...], ...},
       "targeted": {"files": [...], "functions": [...], ...},
       "imported": {"files": [...], "functions": [...], ...}
     }
@@ -72,9 +76,10 @@ _COMMENT = (
     "`files` list are then anchored on the CodeQL T1 tables, so they reflect "
     "the #ifdef-resolved (post-preprocessor) view of what the build actually "
     "compiled — a file whose body is elided by a disabled feature contributes "
-    "no entities and therefore does not appear in `files`. EMPTY on a `wrap` "
-    "campaign, which owns nothing: `api_headers` seeds the sibling `imported` "
-    "section directly instead. Entities are keyed "
+    "no entities and therefore does not appear in `files`. Computed the same "
+    "way under BOTH campaign objectives — a `wrap` campaign owns its library "
+    "just as a `port` one does, it merely intends something different with "
+    "it. Entities are keyed "
     "by (name, defined_in) because bare names collide (file-local statics). "
     "Classification (`classify`/`entry_scope`/`classify_type`, including the "
     "header-macro carve-out) runs ONCE here; downstream composers read these "
@@ -84,6 +89,21 @@ _COMMENT = (
     "the per-wave `translate --objective` says what one agent does with one "
     "selection. Everything an entity here reaches that the config does not "
     "name is IMPORTED, in the sibling section. Paths are repo-root-relative."
+)
+
+
+_API_COMMENT = (
+    "The API view: every entity the `api_headers` set PUBLISHES, selected on "
+    "DECLARATION-site membership (or definition, for something a header "
+    "defines outright -- an inline function, a macro, a value struct). NOT a "
+    "section: it cuts the PUBLICATION axis, orthogonal to the "
+    "targeted/imported OWNERSHIP split, so an entity appears here AND in "
+    "whichever of those two owns it. A re-exported symbol declared here but "
+    "defined outside `impl_files` is `api` and `imported` at once, which is "
+    "exactly what a re-export is. Entries carry the same identity shape as "
+    "every other set, so they collide with the dag nodes on (name, "
+    "defined_in). This is what a `wrap` campaign schedules on, and what its "
+    "dag seeds from."
 )
 
 
@@ -148,8 +168,9 @@ def campaign_objective(config: dict) -> str:
             f"`{OBJECTIVE}` must be one of {' | '.join(OBJECTIVES)}, "
             f"got {obj!r}. `{PORT}` reimplements the target in Rust and seeds "
             f"the targeted section off `{IMPL_FILES}` + `{API_HEADERS}`; "
-            f"`{WRAP}` exposes its public API and owns nothing, seeding the "
-            f"imported section off `{API_HEADERS}` alone.")
+            f"`{WRAP}` exposes its public API. Both read the same file sets "
+            f"into the same scope; the objective decides only how deep the "
+            f"DAG reads them.")
     return obj
 
 
@@ -188,36 +209,25 @@ def enumerate_files(config: dict, repo_root: Path, key: str) -> list[str]:
     return sorted(set(files))
 
 
-def targeted_candidates(config: dict, repo_root: Path,
-                        objective: str | None = None) -> list[str]:
-    """The candidate file set the ``targeted`` section is composed against.
+def targeted_candidates(config: dict, repo_root: Path) -> list[str]:
+    """The candidate file set the ``targeted`` section is composed against:
+    ``impl_files`` ∪ ``api_headers``.
 
-    On :data:`PORT`, ``impl_files`` ∪ ``api_headers``: the campaign owns the
-    implementation AND the headers that publish it, so a struct defined in
-    either keeps its full field layout and a function defined in either orders
-    on its body. On :data:`WRAP`, empty — the campaign owns nothing.
-
-    ``objective`` overrides ``config[campaign_objective]``; that is what
-    ``--full`` passes to read a wrap campaign's config with port seeding.
+    OBJECTIVE-INDEPENDENT, on purpose. What a campaign COVERS is a property of
+    the files it names; what we intend to DO with them is
+    ``campaign_objective``, and the only consumer that branches on it is the
+    dag composer. An earlier cut emptied this set on a `wrap` campaign, which
+    made `--targeted-only` return nothing for a whole library and pushed that
+    library's own entities into `imported` — where they read as external
+    dependencies, which they are not.
     """
-    if (objective or campaign_objective(config)) == WRAP:
-        return []
     return sorted(set(enumerate_files(config, repo_root, IMPL_FILES))
                   | set(enumerate_files(config, repo_root, API_HEADERS)))
 
 
-def seed_candidates(config: dict, repo_root: Path,
-                    objective: str | None = None) -> list[str]:
-    """The candidate file set the ``imported`` section is SEEDED off — the
-    complement of :func:`targeted_candidates`.
-
-    On :data:`WRAP`, ``api_headers``: declaration-site membership is the right
-    test for a public header, whose declared bodies live in files the campaign
-    does not own. On :data:`PORT`, empty — the imported section is DERIVED as
-    the closure of the targeted one rather than seeded.
-    """
-    if (objective or campaign_objective(config)) != WRAP:
-        return []
+def api_candidates(config: dict, repo_root: Path) -> list[str]:
+    """The candidate file set the ``api`` view is composed against:
+    ``api_headers`` alone."""
     return enumerate_files(config, repo_root, API_HEADERS)
 
 
@@ -295,6 +305,58 @@ def _target_entities(t1_dir: Path, candidate_files: set[str]) -> dict[str, list[
     }
 
 
+def _api_entities(t1_dir: Path, api_files: set[str]) -> dict[str, list[dict]]:
+    """Every T1 entity the ``api_headers`` set PUBLISHES, per kind.
+
+    DECLARATION-anchored, and that is the whole point of the view. `targeted`
+    asks "whose body is this" and answers with the defining file; the API asks
+    "what does this library publish", and a public header publishes exactly
+    what it DECLARES — the bodies live in the `.c` files behind it. Anchoring
+    this set on definitions instead would admit only what the headers happen to
+    define (inline functions, macros, value structs) and drop every function
+    they merely declare, which is most of an API.
+
+    An entity qualifies if a named header is among its declaration sites, or is
+    its definition site (an inline function or a struct defined in the header
+    publishes itself). Entries carry the same ``{name, defined_in,
+    declared_in}`` shape every other section uses, so ``origin_key`` still
+    collides with the dag nodes and with the ownership sections: selection is by
+    DECLARATION, identity stays by DEFINITION, and conflating the two is the
+    bug this split exists to remove.
+    """
+    def _ent(r: dict, **extra) -> dict:
+        return {"name": r["name"], "defined_in": r["def_file"],
+                "declared_in": _scope.parse_decl_files(r.get("decl_files", "")),
+                **extra}
+
+    def _published(r: dict) -> bool:
+        if (r.get("def_file") or "") in api_files:
+            return True
+        return any(d in api_files
+                   for d in _scope.parse_decl_files(r.get("decl_files", "")))
+
+    out: dict[str, list[dict]] = {"functions": [], "globals": [],
+                                  "macros": [], "types": []}
+    for csv_name, bucket in (("functions.csv", "functions"),
+                             ("globals.csv", "globals"),
+                             ("macros.csv", "macros")):
+        for r in _scope.load_csv(t1_dir / csv_name):
+            if _published(r):
+                out[bucket].append(_ent(r))
+    for r in _scope.load_csv(t1_dir / "types.csv"):
+        if not _published(r) or str(r.get("name") or "").startswith("("):
+            continue
+        # Same callback carve-out the targeted section applies: a
+        # function-pointer typedef is signature-shaped, so it buckets with
+        # `functions` rather than `types`.
+        if r.get("unaliased_kind") == "callback":
+            out["functions"].append(_ent(r))
+        else:
+            out["types"].append(_ent(r, kind=r["kind"]))
+    keyf = lambda e: (e["defined_in"], e["name"])
+    return {k: sorted(v, key=keyf) for k, v in out.items()}
+
+
 def _contributing_files(
     t1_dir: Path, entities: dict[str, list[dict]], candidate_files: set[str]
 ) -> list[str]:
@@ -326,18 +388,13 @@ def _contributing_files(
     return sorted(files)
 
 
-def compose(config_path: Path, t1_dir: Path, repo_root: Path | None = None,
-            objective: str | None = None) -> dict:
-    """Emit the manifest's `targeted` section.
+def compose(config_path: Path, t1_dir: Path, repo_root: Path | None = None) -> dict:
+    """Emit the manifest's `targeted` section and its `api` view.
 
     `t1_dir` is `<repo_root>/crustify/codeql/t1` — the entity tables
     produced by `analyze extract-ql`. Expanding `files` gives the
     candidate universe; the T1 tables decide which files and entities
     actually compiled under this build configuration.
-
-    `objective` overrides the config's own `campaign_objective` — the `--full`
-    path, which composes a wrap campaign's scope with port seeding so the dag
-    can be read body-deep.
 
     `repo_root` is the CLI's first positional (per the Layout contract); it is
     **not** read from `scope-config.json`, so the same in-repo config stays
@@ -350,13 +407,24 @@ def compose(config_path: Path, t1_dir: Path, repo_root: Path | None = None,
         repo_root = t1_dir.resolve().parents[2]
     else:
         repo_root = Path(repo_root).resolve()
-    objective = objective or campaign_objective(config)
-    candidate_files = set(targeted_candidates(config, repo_root, objective))
+    objective = campaign_objective(config)
+    candidate_files = set(targeted_candidates(config, repo_root))
     entities = _target_entities(t1_dir, candidate_files)
     files = _contributing_files(t1_dir, entities, candidate_files)
+    api_files = set(api_candidates(config, repo_root))
+    api = _api_entities(t1_dir, api_files)
+    api_contributing = _contributing_files(t1_dir, api, api_files)
     return {
         "_comment": _COMMENT,
         OBJECTIVE: objective,
+        _scope.API: {
+            "_comment": _API_COMMENT,
+            "files": api_contributing,
+            "functions": api["functions"],
+            "globals": api["globals"],
+            "macros": api["macros"],
+            "types": api["types"],
+        },
         _scope.TARGETED: {
             "files": files,
             "functions": entities["functions"],

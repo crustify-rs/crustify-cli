@@ -141,27 +141,39 @@ automatically, and a header-only list drops every function it merely
 `api_headers` only if its **implementors** are in `impl_files`; one whose types
 are merely *used* reaches the imported section on its own.
 
-**`wrap` — expose the public API, owning nothing.** The `targeted` section
-composes empty and the `imported` section is seeded off `api_headers` alone, on
-**declaration-site** membership; `impl_files` is not read. That test is the
-right one for a public header, whose declared bodies live in files the campaign
-does not own — and it is what makes "wrap this library" expressible without
-scoping its whole implementation. Point `api_headers` at published headers
-(`include/openssl/`, `include/libxml/`), never at a source tree, or you seed on
-declarations inside `.c` files.
+**`wrap` — expose the public API.** Scope is composed *identically*: the
+library is still `targeted`, because a wrap campaign owns its library too — it
+merely intends something different with it. What changes is the dependency
+graph. `wrap` walks no bodies at all (every symbol contributes its signature,
+exactly as an imported symbol does under `port`), and only a struct **defined**
+in `api_headers` keeps its field layout. Everything else orders as an opaque
+handle, which is the right shape for wrapping.
 
-Everything else follows from that one word, with no per-item flag:
+Point `api_headers` at published headers (`include/openssl/`,
+`include/libxml/`), never at a source tree.
 
-| | named by the seeding key | not named |
+**Three sets, two axes.** `targeted` / `imported` split on **ownership**;
+`api` cuts **publication** across both, and is what a wrap campaign schedules:
+
+| set | anchor | what it answers |
 |---|---|---|
-| struct **defined** there | full field layout — its fields are the API | — |
-| struct only **declared** there | opaque handle | opaque handle |
-| symbol | orders on its body's callees | orders on its signature |
+| `--targeted-only` | definition | the library this campaign owns |
+| `--imported-only` | derived closure | its external dependencies |
+| `--api-only` | **declaration** | what the headers publish |
+
+They intersect rather than exclude, so `--api-only --imported-only` is the
+re-export set. Layout still follows the definition site:
+
+| | struct **defined** in a named file | only **declared** there |
+|---|---|---|
+| under `port` | full field layout | opaque handle |
+| under `wrap` | full layout iff defined in `api_headers` | opaque handle |
 
 So `--transitive` over an opaque-exported type pulls the type and nothing else.
 
 **Three different things are called an objective; keep them apart.**
-`campaign_objective` shapes the **scope** and is authored once per target.
+`campaign_objective` shapes the **dependency graph** — not the scope — and is
+authored once per target.
 `translate --objective` is the **verb** handed to one agent over one selection,
 chosen per wave by the orchestrator. A target type in a port campaign might first
 be wrapped and then ported, which is what the flag exists for. 

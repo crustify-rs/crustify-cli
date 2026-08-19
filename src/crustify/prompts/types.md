@@ -34,22 +34,20 @@ set or already wrapped on disk, except fallback edges due to cut SCCs.
 
 - `{git_base}`: the base git branch where you merge your committed worktree changes into.
 
-- `{objective}`: your objective for the task.
+- `{task_objective}`: your objective for the task.
+
+- `{campaign_objective}`: your campaign objective; PORT when we aim to port the target-owned
+  files to native Rust, WRAP when we aim to provide a safe Rust interface for its public API.
 
 ## Steps
 
-### Discover your items 
+### Query the analysis oracle 
 
-**Analysis oracle.** For each item in your target set use `crustify-oracle` to fetch its analysis record,
+For each item in your target set use `crustify-oracle` to fetch its analysis record,
 including the pointer analysis of its fields (ownership, mutability, nullability, type,
 cardinality, etc.). If any of your work items lacks the agent-owned analysis, then you must first
 carry the ownership judgement and submit your findings to the oracle before proceeding with the
 translation work. Use our established principles and the meaning of each agent-owned block.
-
-**Lifetime primitives.** Fetch the lifetime primitives for the types in your workset, which you 
-will need for implementing the wrapper newtypes. If no lifetime records for them exist then you enter
-discovery mode and scout the codebase for them using our recommended heuristics, then
-submit your findings through the oracle.
 
 ### Locate your files
 
@@ -69,16 +67,16 @@ Locate the corresponding C files of your target set. You run in an isolated work
 which may not track automatically-generated files (e.g. headers) or build-time objects; if
 that's the case, rebuild / reconfigure the target in your worktree to obtain them.
 
-### Determine your objective
+### Determine your task objective
 
-**`review`.** If our objective is `review` then you act as the **LLM-as-a-Judge** assessing the
+**`review`.** If your task objective is `review` then you act as the **LLM-as-a-Judge** assessing the
 quality and accuracy of the agent-owned ownership and lifecycle analysis from `crustify-oracle`,
 and of the emitted Rust code for your target set; note that your target set may contain both safe
 wrappers and ported items. For both, verify their claims against our principles and instructions and if
 you notice any inconsistencies, submit your new findings through the oracle, and fix / extend its
 existing Rust code if necessary, justifying why they fix the existing state.
 
-**`wrap`.** If your objective is `wrap` then you must emit safe wrappers for your target set.
+**`wrap`.** If your task objective is `wrap` then you must emit safe wrappers for your target set.
 Confirm via `crustify-oracle` that this type still needs to stay layout-compatible with C.
 For this objective you proceed via the `Wrap the type` section below.
 
@@ -96,13 +94,22 @@ proceed with just `Port the layout` section below.
 
 #### Establish the scope of your wrappers
 
-**Fields.** You wrap your type's fields that are **targeted only**,
-i.e. touched by targeted symbols, leaving the rest untouched.
+**Fields.** If your campaign objective is PORT, then you wrap your type's fields that are
+  **targeted only**, i.e. touched by targeted symbols, leaving the rest untouched. Otherwise,
+  if your campaign objective is WRAP, then you wrap your type's fields that are exported by
+  the public API.
 
-**Lifetime primitives.** You identify **all** lifetime primitives of your type,
-regarless whether they are target- or import- or out-of-scope.
+**Lifetime primitives.** If you campaign objective is PORT, then you identify **all** the lifetime
+  primitives of your type, regarless whether they are target- or import- or out-of-scope. If your
+  campaign objective is WRAP, then you identify only the lifecycle primitives exported on the
+  public API.
   
 #### Emit safe wrappers
+
+**Lifetime primitives.** Fetch the lifetime primitives for the types in your workset, which you 
+will need for implementing the wrapper newtypes. If no lifetime records for them exist then you enter
+discovery mode and scout the codebase for them using our recommended heuristics, then
+submit your findings through the oracle.
 
 **Type definition.** Use the appropriate primitive from the `ffibox` skill to
   define the newtype wrapper over the `ffi::` types. If no primitive allows expressing
@@ -128,15 +135,16 @@ regarless whether they are target- or import- or out-of-scope.
   behaviour that genuinely diverges from the generic surface - an instance-specific
   function, or an element-ownership difference the record's pointer ownership carries.
   
-**Ownership / lifecycle.** Pull the type's lifetime analysis `crustify-oracle` skill to
+**Lifecycle.** Pull the type's lifetime analysis `crustify-oracle` skill to
   obtain the releasers/field disposers/cloners of the type, and use them to implement to
   the right lifetime contract for the newtype using the `ffibox`. If a lifetime
   trait cannot be implemented using the convenience macros from `ffibox`, e.g. the
   type requires parametric args for expressing lifetimes or sub-types, then implement it
-  manually, preserving the guidelines and practices of the crate.
+  manually, preserving the guidelines and practices of the crate. Keep targeted lifecycle
+  primitives in C until the type can be fully owned by Rrust via the `Own Storage` arm below.
 
-  Keep targeted lifecycle primitives in C until the type can be fully owned by Rrust via
-  the `Own Storage` arm below.
+  If the type's storage is not freed / allocated by the C world, then you may use the
+  Rust native allocator when implementing its lifecycle traits.
   
 **Multi-drop types.** If a type has multiple destructors / releasers, emit safe wrappers
   that can drop on each variant.

@@ -39,6 +39,7 @@ def query(
     files: list[str] | None = None,
     imported_only: bool = False,
     targeted_only: bool = False,
+    api_only: bool = False,
     out_of_tree: bool = False,
     in_tree: bool = False,
     fields: bool = False,
@@ -129,6 +130,7 @@ def query(
             f"query {subject}: facets / --manifest / --update need exactly one --name.")
     if name_list:
         _introspect(target, kind=kind, names=name_list, files=files,
+                    api_only=api_only,
                     fields=fields, lifecycle_ops=lifecycle_ops, users=users,
                     field_touchers=field_touchers,
                     update=update, manifest=manifest,
@@ -136,6 +138,7 @@ def query(
     else:
         _enumerate(target, kind=kind, files=files,
                    imported_only=imported_only, targeted_only=targeted_only,
+                   api_only=api_only,
                    out_of_tree=out_of_tree, in_tree=in_tree)
 
 
@@ -535,6 +538,7 @@ def _lifetime_for(target: Path, type_name: str, array_only: bool = False) -> Non
 
 def _enumerate(
     target: Path, *, kind: str, files, imported_only, targeted_only,
+    api_only=False,
     out_of_tree: bool = False, in_tree: bool = False,
 ) -> None:
     """List the (filtered) type/symbol entries straight from the manifest — one
@@ -570,11 +574,16 @@ def _enumerate(
     # Composed only on the branch that needs it — an unfiltered enumeration
     # must not pay the wrap closure.
     sj = (_scope_mod.try_build(layout, target)
-          if (targeted_only or imported_only) else None)
+          if (targeted_only or imported_only or api_only) else None)
     target_keys = (scope.scope_membership(sj, scope.TARGETED, kinds=sub)
                  if targeted_only and sj is not None else set())
     import_keys = (scope.scope_membership(sj, scope.IMPORTED, kinds=sub)
                  if imported_only and sj is not None else set())
+    # `api` is an AXIS, not a section: it intersects rather than replaces, so
+    # `--api-only --imported-only` is the re-export query (published here,
+    # owned elsewhere) and not a contradiction.
+    api_keys = (scope.scope_membership(sj, scope.API, kinds=sub)
+                if api_only and sj is not None else set())
 
     rows: list[dict] = []
     if True:
@@ -593,6 +602,9 @@ def _enumerate(
                      else (tag, *(e.get("typedef") or [])))
             if imported_only and not any(
                     scope.origin_key(c, d, decls) in import_keys for c in cands):
+                continue
+            if api_only and not any(
+                    scope.origin_key(c, d, decls) in api_keys for c in cands):
                 continue
             if targeted_only and not any(
                     scope.origin_key(c, d, decls) in target_keys for c in cands):
@@ -640,8 +652,8 @@ def _enumerate(
 
 def _introspect(
     target: Path, *, kind: str, names, files, fields, lifecycle_ops, manifest,
-    imported_only, targeted_only, users=False, field_touchers=False,
-    update=None,
+    imported_only, targeted_only, api_only=False, users=False,
+    field_touchers=False, update=None,
 ) -> None:
     """One named entity's record (summary / whole), or — for a single type —
     its windowable ``--fields`` / ``--lifecycle-ops`` / ``--users`` /
@@ -680,13 +692,19 @@ def _introspect(
                     for syms in (entry.get(grp) or {}).values() for s in syms}
             from crustify import scope as _scope_mod
             sj = (_scope_mod.try_build(layout, target)
-                  if (imported_only or targeted_only) else None)
+                  if (imported_only or targeted_only or api_only) else None)
             if sj is not None:
                 from compose import scope as _sc
-                keep = {k[0] for k in _sc.scope_membership(
-                    sj, _sc.IMPORTED if imported_only else _sc.TARGETED,
-                    kinds=("functions", "globals", "macros"))}
-                pool &= keep
+                # Each flag INTERSECTS. `api` is an axis, so
+                # `--users --api-only --imported-only` is "users of this type
+                # that the headers publish but the campaign does not own".
+                for flag, sec in ((imported_only, _sc.IMPORTED),
+                                  (targeted_only, _sc.TARGETED),
+                                  (api_only, _sc.API)):
+                    if not flag:
+                        continue
+                    pool &= {k[0] for k in _sc.scope_membership(
+                        sj, sec, kinds=("functions", "globals", "macros"))}
             win = sorted(pool)
             print("\n".join(win) if win else "[]")
             return
@@ -718,12 +736,18 @@ def _introspect(
         # --lifecycle-ops: names only, lifecycle-first, scope-filterable via scope.json
         # membership (same oracle as enumeration / wrap / port).
         op_pred = lambda _n: True            # noqa: E731
-        if imported_only or targeted_only:
+        if imported_only or targeted_only or api_only:
             from compose import scope as _sc
             from crustify import scope as _scope_mod
             sj = _scope_mod.try_build(layout, target)
-            op_pred = (_sc.in_scope_pred(sj, _sc.IMPORTED if imported_only else _sc.TARGETED)
-                       if sj is not None else (lambda _n: False))
+            if sj is None:
+                op_pred = lambda _n: False   # noqa: E731
+            else:
+                preds = [_sc.in_scope_pred(sj, sec)
+                         for flag, sec in ((imported_only, _sc.IMPORTED),
+                                           (targeted_only, _sc.TARGETED),
+                                           (api_only, _sc.API)) if flag]
+                op_pred = lambda n: all(p(n) for p in preds)  # noqa: E731
         win = D.ordered_ops(node, by_key, lifecycle, op_pred)
         print("\n".join(o.id for o in win))
         return
@@ -2023,25 +2047,30 @@ def _dag_loc(by_key, by_name, names, files, layer, as_json, keep=None,
 
 
 def _scope_predicate(layout, target, imported_only: bool, targeted_only: bool,
-                     *, full: bool = False):
+                     api_only: bool = False, *, full: bool = False):
     """A node-keeping predicate for `--imported-only` / `--targeted-only`, or None when
     neither is set. The dag is scope-agnostic; scope is read from scope.json on
     demand. `origin_key(id, defined_in)` is exactly the node's serialized origin
     (`Node.origin()`), so dag nodes and scope entries collide on the same key.
 
-    ``full`` reads the port-seeded scope, so the section a node is filtered on
-    is the one the ``--full`` graph was built against — on a wrap campaign that
-    is the difference between `--targeted-only` naming every impl symbol and
-    naming none."""
-    if not (imported_only or targeted_only):
+    ``full`` is irrelevant here — scope does not depend on the campaign
+    objective, so there is one scope to filter against whichever graph was
+    built. Flags INTERSECT: `api` is an axis over the ownership sections."""
+    if not (imported_only or targeted_only or api_only):
         return None
     from compose import scope as _sc
     from crustify import scope as _scope_mod
-    sj = _scope_mod.try_build(layout, target, full=full)
-    keys = _sc.scope_membership(sj, _sc.TARGETED if targeted_only else _sc.IMPORTED) if sj is not None else set()
+    sj = _scope_mod.try_build(layout, target)
+    if sj is None:
+        return lambda _n: False
+    keysets = [_sc.scope_membership(sj, sec)
+               for flag, sec in ((imported_only, _sc.IMPORTED),
+                                 (targeted_only, _sc.TARGETED),
+                                 (api_only, _sc.API)) if flag]
 
     def keep(n) -> bool:
-        return _sc.origin_key(n.id, n.defined_in, None) in keys
+        k = _sc.origin_key(n.id, n.defined_in, None)
+        return all(k in ks for ks in keysets)
     return keep
 
 
@@ -2070,6 +2099,7 @@ def query_dag(
     loc: bool = False,
     imported_only: bool = False,
     targeted_only: bool = False,
+    api_only: bool = False,
     full: bool = False,
 ) -> None:
     """Structural views over the dag. Three mutually-exclusive modes:
@@ -2103,7 +2133,7 @@ def query_dag(
     dag = D.build(layout, target, stage="query dag", full=full)
     by_key, by_name = D.load_nodes(dag)
     keep = _scope_predicate(layout, target, imported_only, targeted_only,
-                            full=full)
+                            api_only, full=full)
 
     # ── mode: LoC view ─────────────────────────────────────────────────
     if loc:
@@ -2222,21 +2252,21 @@ def query_files(
     *,
     targeted_only: bool = False,
     imported_only: bool = False,
+    api_only: bool = False,
 ) -> None:
     """Read-only oracle over the target's scope **files** (one path per line,
     sorted).
 
+      - ``--api-only`` — the headers that PUBLISH the library
+        (``scope.json.api.files``).
       - ``--targeted-only`` — the campaign's own file set
-        (``scope.json.targeted.files``). Empty on a ``wrap`` campaign, which
-        owns nothing.
-      - ``--imported-only`` — the closure: the import-header surface the target
-        TUs reach through their ``depends_on`` edges, or — on a ``wrap``
-        campaign — the surface seeded off ``api_headers``. Read from the cached
-        ``scope.json.imported`` section (the single source of truth, written by
-        the composer).
-      - neither flag — both, printed as two labeled lists (``# targeted`` then
-        ``# imported``), preceded by the campaign objective. The single-flag
-        forms print a bare list (xargs-friendly).
+        (``scope.json.targeted.files``), under either objective.
+      - ``--imported-only`` — the derived closure: the EXTERNAL header surface
+        the targeted TUs reach through their ``depends_on`` edges. Read from
+        the cached ``scope.json.imported`` section (the single source of truth,
+        written by the composer).
+      - no flag — all three, labeled, preceded by the campaign objective. The
+        single-flag forms print a bare list (xargs-friendly).
     """
     from compose import scope as scope_mod
     from crustify.layout import Layout
@@ -2244,6 +2274,11 @@ def query_files(
     from crustify import scope as _scope_mod
     layout = Layout.discover(target)
     doc = _scope_mod.build(layout, target, stage="query files")
+
+    if api_only:
+        for f in sorted(scope_mod.load_api_paths(doc)):
+            print(f)
+        return
 
     target_files = import_files = None
     if targeted_only or not imported_only:
@@ -2261,7 +2296,11 @@ def query_files(
         # The campaign objective leads: on `wrap` the targeted list is empty by
         # construction, and a bare "0 files" reads as a broken config unless the
         # verb that made it empty is on the line above it.
+        api_files = sorted(scope_mod.load_api_paths(doc))
         print(f"# campaign_objective: {doc.get('campaign_objective') or '?'}")
+        print(f"\n# api ({len(api_files)})")
+        for f in api_files:
+            print(f)
         print(f"\n# targeted ({len(target_files)})")
         for f in target_files:
             print(f)

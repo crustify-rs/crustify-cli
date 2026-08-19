@@ -13,7 +13,7 @@ walking the filesystem — and its artifacts live at ``repo_root/crustify/``:
         targets/<repo-relative-target>/           # per-target invocation state
           scope-config.json                       # authored: objective + file sets
           scope.json  deps-dag.json               # derived, fingerprinted
-          scope.full.json  deps-dag.full.json     # ditto, port-seeded (--full)
+          deps-dag.full.json                      # ditto, body-deep (--full)
           logs/
         rust/                                     # the shared Rust crates
       ssl/  crypto/  …                            # vanilla C tree (no artifacts)
@@ -138,16 +138,15 @@ class Layout:
         records the target, so neither is restated inside it."""
         return self.target_dir(target) / "scope-config.json"
 
-    def scope(self, target: Path, *, full: bool = False) -> Path:
-        """The derived ``targeted`` set + ``imported`` closure — a fingerprinted
-        cache (:mod:`crustify.cache`).
+    def scope(self, target: Path) -> Path:
+        """The derived ``targeted`` set, ``imported`` closure and ``api`` view —
+        a fingerprinted cache (:mod:`crustify.cache`).
 
-        ``full`` names the sibling ``scope.full.json``: the same config
-        composed with ``campaign_objective`` forced to ``port`` (``query dag
-        --full``). Two files rather than one, because the two are composed from
-        identical inputs and would otherwise thrash a single fingerprinted
-        cache — every alternating read a full recompute."""
-        return self.target_dir(target) / ("scope.full.json" if full else "scope.json")
+        ONE file, no ``full`` variant: scope no longer depends on
+        ``campaign_objective``, so there is only ever one composition of it.
+        The objective survives as a dag-only fork, and it is `deps-dag.json`
+        that has a ``.full.`` sibling."""
+        return self.target_dir(target) / "scope.json"
 
     def deps_dag(self, target: Path, *, full: bool = False) -> Path:
         """The layered dependency graph, beside scope.json — a fingerprinted
