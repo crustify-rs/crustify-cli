@@ -102,13 +102,37 @@ reconstructed later.
 
 ### 5. CodeQL database and the T1/T2 tables
 
-Crustify does **not** create the database. Build it yourself, wrapping
-`build_commands.build`.
+Two steps, and crustify runs only the second.
 
-This writes one CSV per query under `crustify/codeql/{t1,t2}/` — T1 entities,
-T2 edges. Every type/symbol record, the scope sets and the dependency DAG derive
-from these on demand. It takes minutes; re-run only after the C tree or the
-database changes.
+**The database is yours to build.** Crustify never invokes `codeql database
+create`: run the project's own build under CodeQL tracing, wrapping
+`build.json`'s `build_commands.build`, and deposit the result at
+`crustify/codeql/db/`.
+
+```bash
+codeql database create <repo_root>/crustify/codeql/db \
+  --language=cpp --command="<build_commands.build>"
+```
+
+`configure` runs uninstrumented, before this; only `build` is traced. Where the
+tracer cannot wrap the build command, use indirect tracing.
+
+**The tables are crustify's.** `extract-ql` runs the T1 (entities) and T2
+(edges) `.ql` batches against that database:
+
+```bash
+crustify-oracle <repo_root> <target> extract-ql
+```
+
+It needs the `codeql` CLI on `PATH` and the query pack resolved — run
+`codeql pack install` once in the crustify checkout's `utils/codeql/`, or
+`codeql/cpp-all` will not resolve and every query fails.
+
+It writes one CSV per query under `crustify/codeql/{t1,t2}/` — T1 entities, T2
+edges. Every type/symbol record, the scope sets and the dependency DAG derive
+from these on demand, which is why this is the one oracle command with side
+effects and the only one that must be run explicitly. It takes minutes; re-run
+it only after the C tree or the database changes.
 
 ### 6. Scope a target
 
