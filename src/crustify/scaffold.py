@@ -126,16 +126,18 @@ def scaffold(
 
 def _in_scope_names(layout, target: Path) -> set[str]:
     """Every in-scope symbol/type name the scaffolder is allowed to place —
-    the authoritative ``scope.json`` universe (port ∪ wrap). Functions, globals
-    and macros key on ``name``; types key on ``name`` (port) or ``type`` (wrap).
+    the authoritative ``scope.json`` universe (targeted ∪ imported). Functions,
+    globals and macros key on ``name``; types key on ``name``, with a ``type``
+    fallback for un-migrated records.
     Empty set when scope cannot be composed (callers gate on emptiness)."""
+    from compose import scope as _sc
     from crustify import scope as _scope_mod
     try:
         doc = _scope_mod.build(layout, target, stage="scaffold")
     except SystemExit:
         return set()
     names: set[str] = set()
-    for section in (doc.get("target") or {}), (doc.get("import") or {}):
+    for section in ((doc.get(sec) or {}) for sec in _sc.SECTIONS):
         for group in ("functions", "globals", "macros", "types"):
             for e in section.get(group) or []:
                 for key in ("name", "type"):
@@ -148,14 +150,16 @@ def _scope_map(layout, target: Path) -> dict[str, str]:
     """``name -> scope.TARGETED | scope.IMPORTED`` from scope.json — which section an
     item sits in. Types key on ``name``, with a ``type`` fallback for un-migrated
     records; functions/globals on ``name``. TARGETED is applied second so it wins
-    on the (rare) overlap. Empty when scope cannot be composed."""
+    on the (rare) overlap -- the sections are NOT a strict partition. Empty when
+    scope cannot be composed."""
+    from compose import scope as _sc
     from crustify import scope as _scope_mod
     try:
         doc = _scope_mod.build(layout, target, stage="scaffold")
     except SystemExit:
         return {}
     out: dict[str, str] = {}
-    for sec in ("import", "target"):   # target second -> overrides on overlap
+    for sec in (_sc.IMPORTED, _sc.TARGETED):  # targeted second -> wins on overlap
         section = doc.get(sec) or {}
         for group in ("functions", "globals", "types"):
             for e in section.get(group) or []:
@@ -187,7 +191,8 @@ def _port_touched(layout, target) -> dict[str, set] | None:
         _scope_mod.build(layout, target, stage="scaffold")
     except SystemExit:
         return None
-    idx = scope_touched_index(layout, target, "target")
+    from compose import scope as _sc
+    idx = scope_touched_index(layout, target, _sc.TARGETED)
     return {tag: {f for s in by_file.values() for f in s}
             for tag, by_file in idx.items()} or None
 
