@@ -6,12 +6,14 @@ Crustify translator agents must follow these to guide their work.
 
 ## Core translation philosophy
 
-Types stay layout-compatible with C, wrapped in safe abstraction so that Rust
+Types that cross the FFI boundary stay layout-compatible with C, wrapped in safe abstraction so that Rust
 consumers can use them safely with Rust-native features (RAII, lifetimes, bounds
 checking, type-safety) without introducing undefined behavior hazards. FFI
 functions and callbacks are wrapped likewise, with signatures that use the safe
 type wrappers. Unsafe footprint reduced to a minimal, auditable surface: field
 accessors on the type handles, and safe FFI wrappers for making FFI calls.
+Types and symbols that do not cross the FFI boundary get nativized and become
+fully owned by Rust.
 
 ---
 

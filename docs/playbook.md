@@ -102,31 +102,8 @@ reconstructed later.
 
 ### 5. CodeQL database and the T1/T2 tables
 
-Two steps, and crustify runs only the second.
-
-**The database is yours to build.** Crustify never invokes `codeql database
-create`: run the project's own build under CodeQL tracing, wrapping
-`build.json`'s `build_commands.build`, and deposit the result at
-`crustify/codeql/db/`.
-
-```bash
-codeql database create <repo_root>/crustify/codeql/db \
-  --language=cpp --command="<build_commands.build>"
-```
-
-`configure` runs uninstrumented, before this; only `build` is traced. Where the
-tracer cannot wrap the build command, use indirect tracing.
-
-**The tables are crustify's.** `extract-ql` runs the T1 (entities) and T2
-(edges) `.ql` batches against that database:
-
-```bash
-crustify-oracle <repo_root> <target> extract-ql
-```
-
-It needs the `codeql` CLI on `PATH` and the query pack resolved — run
-`codeql pack install` once in the crustify checkout's `utils/codeql/`, or
-`codeql/cpp-all` will not resolve and every query fails.
+Build the CodeQL database manuallyt, and run `crustify-oracle extract-ql`
+to emit the the T1 (entities) and T2 (edges) against that database.
 
 It writes one CSV per query under `crustify/codeql/{t1,t2}/` — T1 entities, T2
 edges. Every type/symbol record, the scope sets and the dependency DAG derive
@@ -186,20 +163,12 @@ So `--transitive` over an opaque-exported type pulls the type and nothing else.
 **Three different things are called an objective; keep them apart.**
 `campaign_objective` shapes the **scope** and is authored once per target.
 `translate --objective` is the **verb** handed to one agent over one selection,
-chosen per wave by the orchestrator. Narrowing to an API *surface* is neither —
-that is **selection**: `translate --file include/openssl/ssl.h`.
-
-Ownership analysis is unaffected by any of it — `ptr_args`/`ptr_ret` come from
-the T2 tables, which cover the whole database regardless of scope.
+chosen per wave by the orchestrator. A target type in a port campaign might first
+be wrapped and then ported, which is what the flag exists for. 
 
 `out_of_scope.paths` refines what a directory entry expands to;
 `out_of_scope.features` is documentation only, for the same reason as
 `build.json`'s `features`.
-
-To read a `wrap` campaign's graph as if it were a port — bodies walked, every
-field kept, only genuinely imported items narrowed — pass `--full` to
-`query dag`. It recomposes scope with `campaign_objective` forced to `port` and
-caches beside the default graph; nothing in the config changes.
 
 Verify the result before proceeding:
 
@@ -207,20 +176,6 @@ Verify the result before proceeding:
 crustify-oracle <repo_root> <target> query files --targeted-only
 crustify-oracle <repo_root> <target> query files --imported-only
 ```
-
-The imported section pools two populations that the section alone cannot
-separate. `--out-of-tree` / `--in-tree` cut the independent ORIGIN axis —
-whether the entity's home lies outside this repository:
-
-```bash
-# the permanent FFI floor
-crustify-oracle <repo_root> <target> query types --imported-only --out-of-tree
-# first-party code this target reaches but does not cover
-crustify-oracle <repo_root> <target> query types --imported-only --in-tree
-```
-
-The first can never move into the targeted set; the second could, by naming its
-files.
 
 ### 7. Crate placement and scaffold
 
@@ -270,7 +225,7 @@ them needs a compiler in the loop, so complete them by hand.
 
 ### 9. Commit
 
-Commit the scaffolded `rust/` tree on `crustify/<target>`. Translate waves land
+Commit the scaffolded `rust/` tree on `crustify/<target>-<model>`. Translate waves land
 on branches based off this commit, so it is the baseline every later diff and
 promotion is read against.
 
@@ -317,9 +272,7 @@ type-erased and NUL-terminated objects. First run `--lifetime-for void` and then
 
 ### Land and promote
 
-A session branch is never auto-merged; landing it is a deliberate
-act. Reviewing it, then promoting anchors to the canonical branch
-is the orchestrator's job.
+Review and promote session branches to the cannonical branch after agents land their branches.
 
 ### Verify before proceeding
 
@@ -329,7 +282,7 @@ Check the agent's logs to make sure the C/Rust targets build and the tests pass.
 
 Use `utils/log_cost.py` over the per-agent `<stage>.usage.json` to compute cost
 and fetch token usage, and never from provider-reported dollars.
-Session wall from `session.log`, agent wall from `<stage>.usage.json`.
+Fetch the session wall from `session.log`, agent wall from `<stage>.usage.json`.
 
 Fill whatever evaluation table the user provides.
 

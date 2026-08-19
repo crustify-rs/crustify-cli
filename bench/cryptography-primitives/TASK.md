@@ -19,10 +19,11 @@ Run Phase 1 of the crustify playbook end to end.
 
 ## Phase 2
 
+Brainstorm with the user a subset of waves to target.
 
 ## Autonomy
 
-Wait for the user's go before promoting a session branch and proceeding with the next wave.
+Execute phase 1 and wait for the user's approval before proceeding to phase 2.
 
 ## Recording
 
