@@ -49,9 +49,8 @@ On macOS arm64 the CodeQL bundle needs Rosetta.
 ### 2. Bootstrap `crustify/`
 
 ```bash
-mkdir -p <repo>/crustify/targets/<target>/logs
+mkdir -p <repo>/crustify
 cp specs/gitignore <repo>/crustify/.gitignore
-git -C <repo> checkout -b crustify/<target>
 ```
 
 Author `<repo>/crustify/cli-config.json` from `specs/cli-config.json`:
@@ -187,6 +186,14 @@ Verify the result before proceeding:
 ```bash
 crustify-oracle <repo_root> <target> query files --targeted-only
 crustify-oracle <repo_root> <target> query files --imported-only
+```
+
+After the user picked a target, create the campaign's base branch and
+logs dir:
+
+```bash
+git -C <repo> checkout -b crustify/<target>-<model>
+mkdir -p <repo>/crustify/targets/<target>/logs
 ```
 
 ### 7. Crate placement and scaffold
