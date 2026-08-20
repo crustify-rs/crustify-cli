@@ -92,17 +92,14 @@ fn is_ptr_storage(tcx: TyCtxt<'_>, t: Ty<'_>) -> bool {
 /// as a type wrapper, which keeps the target at 0 rather than silently exempting
 /// it.
 fn is_type_wrapper(tcx: TyCtxt<'_>, did: DefId) -> bool {
-    if !is_wrapper(tcx, did) {
-        return false;
-    }
-    for f in tcx.adt_def(did).all_fields() {
-        let ft = tcx.type_of(f.did).skip_binder();
-        if is_phantom(tcx, ft) {
-            continue;
-        }
-        return !is_ptr_storage(tcx, ft);
-    }
-    true
+    // A LAYOUT newtype -- storage IS the C object's bytes. `&W` / `&mut W` over
+    // it asserts noalias / readonly / validity on memory C may write, so this is
+    // the set where a reference is forbidden. A HANDLE holds the pointer by
+    // value, covers Rust-owned storage, and is not counted.
+    //
+    // Decided structurally (see `structural_wrapper`), so a hand-written layout
+    // newtype that never declares `CCell` is policed like a generated one.
+    structural_wrapper(tcx, did) == Some(true)
 }
 
 /// True if `t` is `&W` or `&mut W` where `W` is a TYPE wrapper (implements
@@ -419,8 +416,6 @@ struct Counts {
     // without the layout it claims, and `_undeclared` is one the old keying
     // could not see.
     wrapper_newtypes: u64,
-    wrapper_newtypes_layout: u64,
-    wrapper_newtypes_handle: u64,
     wrapper_newtypes_declared: u64,
     wrapper_declared_nonconformant: u64,
     wrapper_newtypes_undeclared: u64,   // unsafe blocks at the C-ABI boundary
@@ -1149,15 +1144,20 @@ impl Callbacks for MetricsCallbacks {
                 DefKind::Struct => {
                     let structural = structural_wrapper(tcx, did);
                     let declared = is_wrapper(tcx, did);
-                    if let Some(is_layout) = structural {
+                    // LAYOUT newtypes only. A handle is a wrapper too, but it
+                    // is not the set this audit polices: `&handle` covers
+                    // Rust-owned pointer storage and is ordinary, while `&W` on
+                    // a layout newtype is the hazard `ref_to_type_wrapper`
+                    // exists to keep at 0.
+                    if structural == Some(true) {
                         c.wrapper_newtypes += 1;
-                        if is_layout { c.wrapper_newtypes_layout += 1 }
-                        else { c.wrapper_newtypes_handle += 1 }
                         if !declared { c.wrapper_newtypes_undeclared += 1 }
                     }
                     if declared {
                         c.wrapper_newtypes_declared += 1;
-                        if structural.is_none() { c.wrapper_declared_nonconformant += 1 }
+                        if structural != Some(true) {
+                            c.wrapper_declared_nonconformant += 1
+                        }
                     }
                 }
                 DefKind::Impl { of_trait: true } => {
@@ -1338,8 +1338,8 @@ impl Callbacks for MetricsCallbacks {
             }
         }
         println!(
-            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"unsafe_blocks_ffi_export\":{},\"unsafe_fns\":{},\"unsafe_fns_seam\":{},\"unsafe_fns_pub\":{},\"unsafe_impls\":{},\"unsafe_traits\":{},\"wrapper_newtypes\":{},\"wrapper_newtypes_layout\":{},\"wrapper_newtypes_handle\":{},\"wrapper_newtypes_declared\":{},\"wrapper_declared_nonconformant\":{},\"wrapper_newtypes_undeclared\":{},\"raw_ptr_args\":{},\"raw_ptr_rets\":{},\"raw_ptr_seam\":{},\"raw_ptr_wrapped\":{},\"raw_ptr_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
-            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.unsafe_blocks_ffi_export, c.unsafe_fns, c.unsafe_fns_seam, c.unsafe_fns_pub, c.unsafe_impls, c.unsafe_traits, c.wrapper_newtypes, c.wrapper_newtypes_layout, c.wrapper_newtypes_handle, c.wrapper_newtypes_declared, c.wrapper_declared_nonconformant, c.wrapper_newtypes_undeclared, c.raw_ptr_args, c.raw_ptr_rets, c.raw_ptr_seam, c.raw_ptr_wrapped, c.raw_ptr_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
+            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"unsafe_blocks_ffi_export\":{},\"unsafe_fns\":{},\"unsafe_fns_seam\":{},\"unsafe_fns_pub\":{},\"unsafe_impls\":{},\"unsafe_traits\":{},\"wrapper_newtypes\":{},\"wrapper_newtypes_declared\":{},\"wrapper_declared_nonconformant\":{},\"wrapper_newtypes_undeclared\":{},\"raw_ptr_args\":{},\"raw_ptr_rets\":{},\"raw_ptr_seam\":{},\"raw_ptr_wrapped\":{},\"raw_ptr_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
+            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.unsafe_blocks_ffi_export, c.unsafe_fns, c.unsafe_fns_seam, c.unsafe_fns_pub, c.unsafe_impls, c.unsafe_traits, c.wrapper_newtypes, c.wrapper_newtypes_declared, c.wrapper_declared_nonconformant, c.wrapper_newtypes_undeclared, c.raw_ptr_args, c.raw_ptr_rets, c.raw_ptr_seam, c.raw_ptr_wrapped, c.raw_ptr_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
             sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj), sites_json(&sites.field_ref), sites_json(&sites.raw_deref)
         );
         Compilation::Continue

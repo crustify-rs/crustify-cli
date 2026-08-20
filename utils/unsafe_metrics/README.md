@@ -21,8 +21,7 @@ the regex pass in `audit.py` for the subset of properties below.
 | `unsafe_fns` | `unsafe fn` DECLARATIONS. A block is a local assertion its author discharges; an `unsafe fn` pushes the obligation onto every caller, and a `pub` one exports it out of the crate. Counted post-expansion, so macro-emitted ones are included |
 | `unsafe_fns_seam` | ...the sanctioned subset, by the same predicate a pointer position uses: a `SEAM_FNS` conversion or the C-ABI gateway. The smell is `unsafe_fns - unsafe_fns_seam` |
 | `unsafe_fns_pub` | ...of `unsafe_fns`, those with public visibility |
-| `wrapper_newtypes` | wrapper types in the crate, detected STRUCTURALLY: a `#[repr(transparent)]` newtype whose single non-ZST field, after peeling further transparent newtypes, is a raw pointer / `NonNull` (a HANDLE) or a `#[repr(C)]` ADT by value (a LAYOUT newtype). Framework-independent — no trait or type name from ffibox enters it |
-| `wrapper_newtypes_layout` / `_handle` | ...split by which of the two roles |
+| `wrapper_newtypes` | LAYOUT newtypes in the crate — a `#[repr(transparent)]` newtype whose single non-ZST field, after peeling further transparent newtypes, is a `#[repr(C)]` ADT by value, i.e. the C object's own bytes. Detected structurally; no trait or type name from ffibox enters it. HANDLES (transparent over a raw pointer / `NonNull`) are wrappers too but are NOT counted here: the set this reports is the one where `&W` / `&mut W` is forbidden, which is exactly the layout newtypes — a reference to a handle covers Rust-owned pointer storage and is ordinary |
 | `wrapper_newtypes_declared` | the `CCell`-declared count, the baseline the structural predicate replaces |
 | `wrapper_declared_nonconformant` | ...declared but failing the structural test: a wrapper without the layout it claims. **Should be 0** |
 | `wrapper_newtypes_undeclared` | ...structural but not declared: what keying on `CCell` could not see |
