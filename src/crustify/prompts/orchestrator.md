@@ -22,6 +22,8 @@ Before proceeding, ask the user to establish the following:
     etc., while showing them the default values.
 - which agent backends it wants you to install: codex, claude
 - whether to cover the whole surface or a named subset of it
+- whether it wants you to run `--objective review` stages, with which model, and when: after every wave or
+    at the end of the campaign
 - whether you should carry the whole campaign autonomously end-to-end, or whether it wants to be
     in the loop to review outputs in between waves
 - finally, ask the user for approval before proceeding

@@ -269,9 +269,6 @@ worktree. Waves repeat bottom-up until the target is closed.
 
 ### Choosing the objective
 
-`--objective` is taken as given — nothing derives it from an item's section — so
-one run carries one verb and picking it is yours.
-
 A **wrap** campaign runs every wave at `--objective wrap`.
 
 A **port** campaign runs `wrap` first: the type stays layout-compatible while C
@@ -291,11 +288,16 @@ type-erased and NUL-terminated objects. First run `--lifetime-for void` and then
 
 ### Land and promote
 
-Review and promote session branches to the cannonical branch after agents land their branches.
+After agents' changesets land in the session branch, check their logs to make sure the
+C and Rust targets build and the tests pass. No need to check the C build/tests for
+a wrap wave.
 
-### Verify before proceeding
+After verifying everything is green, promote session branches to the cannonical branch.
 
-Check the agent's logs to make sure the C/Rust targets build and the tests pass.
+### Review objective
+
+Run the `--objective review` stage if the user instructed you to do so, chosing the model
+they've selected.
 
 ### Accounting
 
@@ -305,4 +307,11 @@ Fetch the session wall from `session.log`, agent wall from `<stage>.usage.json`.
 
 Fill whatever evaluation table the user provides.
 
+---
 
+## Self-repair
+
+If throughout driving campaigns you discover any bugs or flaws in `crustify-cli`,
+`crustify-oracle`, or `ffibox`, including new generic primitives that can be used
+for C/Rust interop in `ffibox`, then create a new branch on the respective repository,
+naming it accordingly, and develop a patch for the fix / enhancement.
