@@ -15,18 +15,14 @@ agent backend: codex
 model: gpt-5.6-sol
 review mode: run the review objective on all waves at the end of the campaign using gpt-5.6-sol as the model
 
-## Phase 1
+## Phase 1 - Setup
 
-Run Phase 1 of the crustify playbook end to end.
+You have the user's approval to run Phase 1 of the crustify playbook end to end.
 
-## Phase 2
+## Phase 2 - Translation
 
-The goal is to wrap the entire API surface of the library, except the imported closure.
-
-## Autonomy
-
-You have the approval to run fully autonomously end to end,
-without waiting for the user's approval to proceed between waves.
+You have the user's approval to run Phase 2 fully autonomously end to end,
+without waiting for any user feedback before proceeding between waves.
 
 ## Recording
 
