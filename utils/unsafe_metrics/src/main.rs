@@ -345,6 +345,16 @@ struct Counts {
     // `*c_void` in signatures: sanctioned (seam / ffi_export) vs smell (elsewhere)
     void_ptr_sanctioned: u64,
     void_ptr_smell: u64,
+    // ...of the smell, split by ORIGIN, the same way `wrapper_impl_macro` /
+    // `wrapper_impl_handwritten` split an unsafe block in a wrapper impl. A
+    // `*c_void` emitted by `define_ctype!` is real, public, callable API of
+    // THIS crate, so it is not dropped the way a macro block's LINES are —
+    // but it is boilerplate replicated per wrapped type, which no agent
+    // wrote and none can fix, so it must not read as this campaign's smell.
+    void_ptr_smell_macro: u64,
+    void_ptr_smell_handwritten: u64,
+    raw_ptr_smell_macro: u64,
+    raw_ptr_smell_handwritten: u64,
     raw_ptr_derefs: u64,
     raw_ptr_derefs_outside_impl: u64, // ...of those, the subset NOT in any impl/trait body
     total_stmts: u64,
@@ -1041,6 +1051,9 @@ impl Callbacks for MetricsCallbacks {
             if matches!(tcx.def_kind(did), DefKind::Fn | DefKind::AssocFn) {
                 let sig = tcx.fn_sig(did).skip_binder().skip_binder();
                 let seam = is_seam_fn(tcx, did);
+                // Macro-expanded def: its tokens come from the macro's defining
+                // crate (ffibox), not from anything an agent wrote here.
+                let from_macro = tcx.def_span(did).from_expansion();
                 // `&mut <wrapper>` and `*c_void` anywhere in the signature.
                 for t in sig.inputs().iter().copied().chain(std::iter::once(sig.output())) {
                     if is_ref_to_type_wrapper(tcx, t) {
@@ -1051,6 +1064,8 @@ impl Callbacks for MetricsCallbacks {
                             c.void_ptr_sanctioned += 1;
                         } else {
                             c.void_ptr_smell += 1;
+                            if from_macro { c.void_ptr_smell_macro += 1 }
+                            else { c.void_ptr_smell_handwritten += 1 }
                             sites.void_ptr.push(span_site(tcx, tcx.def_span(did)));
                         }
                     }
@@ -1085,6 +1100,8 @@ impl Callbacks for MetricsCallbacks {
                             ty::TyKind::Adt(def, _) if wrapped_c.contains(&def.did()));
                         if w { c.raw_ptr_wrapped += 1 }
                         if in_wrapper { c.raw_ptr_in_wrapper += 1 }
+                        if from_macro { c.raw_ptr_smell_macro += 1 }
+                        else { c.raw_ptr_smell_handwritten += 1 }
                         if w {
                             sites.raw_ptr.push(span_site(tcx, tcx.def_span(did)));
                         }
@@ -1165,8 +1182,8 @@ impl Callbacks for MetricsCallbacks {
             }
         }
         println!(
-            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"raw_ptr_args\":{},\"raw_ptr_rets\":{},\"raw_ptr_seam\":{},\"raw_ptr_wrapped\":{},\"raw_ptr_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
-            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.raw_ptr_args, c.raw_ptr_rets, c.raw_ptr_seam, c.raw_ptr_wrapped, c.raw_ptr_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
+            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"raw_ptr_args\":{},\"raw_ptr_rets\":{},\"raw_ptr_seam\":{},\"raw_ptr_wrapped\":{},\"raw_ptr_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"void_ptr_smell_macro\":{},\"void_ptr_smell_handwritten\":{},\"raw_ptr_smell_macro\":{},\"raw_ptr_smell_handwritten\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
+            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.raw_ptr_args, c.raw_ptr_rets, c.raw_ptr_seam, c.raw_ptr_wrapped, c.raw_ptr_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.void_ptr_smell_macro, c.void_ptr_smell_handwritten, c.raw_ptr_smell_macro, c.raw_ptr_smell_handwritten, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
             sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj), sites_json(&sites.field_ref), sites_json(&sites.raw_deref)
         );
         Compilation::Continue
