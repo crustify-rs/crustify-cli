@@ -54,7 +54,9 @@ def audit(
 _GLOBAL_COUNTS = (
     "unsafe_blocks", "unsafe_block_stmts", "unsafe_block_lines",
     "unsafe_block_code_lines", "unsafe_blocks_wrapper_impl", "wrapper_impl_macro",
-    "wrapper_impl_handwritten", "unsafe_blocks_ffi_export", "rp_args", "rp_rets", "rp_seam", "rp_wrapped", "rp_in_wrapper",
+    "wrapper_impl_handwritten", "unsafe_blocks_ffi_export",
+    "raw_ptr_args", "raw_ptr_rets", "raw_ptr_seam", "raw_ptr_wrapped",
+    "raw_ptr_in_wrapper",
     "ref_to_type_wrapper", "field_ref_wrapped",
     "field_proj_wrapped", "field_proj_outside_impl", "void_ptr_sanctioned",
     "void_ptr_smell", "raw_ptr_derefs", "total_stmts", "code_lines",

@@ -11,8 +11,8 @@ the regex pass in `audit.py` for the subset of properties below.
 |---|---|
 | `unsafe_blocks` | number of `unsafe { ... }` blocks (real code; macro-expanded included, doc-comment examples excluded) |
 | `unsafe_block_stmts` | `hir::Stmt` nodes inside unsafe blocks (desugared; tail exprs are not stmts) |
-| `unsafe_block_lines` | source lines spanned by unsafe blocks, outermost only (raw `{`..`}` span; incl. blank/comment lines) |
-| `unsafe_block_code_lines` | same, but non-blank / non-`//`-comment lines only (apples-to-apples with code LOC) |
+| `unsafe_block_lines` | source lines spanned by unsafe blocks, outermost only (raw `{`..`}` span; incl. blank/comment lines). **Hand-written only** — a macro-generated block's span lives in the macro's defining crate, so charging its lines here would bill ffibox's source to this crate; the blocks themselves still count in `unsafe_blocks` / `wrapper_impl_macro`, and the invocation's own lines are in `code_lines` |
+| `unsafe_block_code_lines` | same, but non-blank / non-`//`-comment lines only (apples-to-apples with `code_lines`) |
 
 ### Region attribution of unsafe blocks
 | field | meaning |
@@ -20,20 +20,20 @@ the regex pass in `audit.py` for the subset of properties below.
 | `unsafe_blocks_wrapper_impl` | unsafe blocks inside `impl T` / `impl Tr for T` where `T` is a `define_*ctype!` wrapper |
 | `wrapper_impl_macro` | ...of which macro-generated (the `define_*ctype!` seam accessors) |
 | `wrapper_impl_handwritten` | ...of which hand-written wrapper methods |
-| `unsafe_blocks_ffi_export` | unsafe blocks inside a `mod ffi_export` (the sanctioned C-ABI re-export seam) |
+| `unsafe_blocks_ffi_export` | unsafe blocks at the C-ABI boundary — a fn carrying a C symbol name (`#[unsafe(no_mangle)]` / `#[export_name]`) **or** having a non-Rust ABI (`extern "C"`, the callback-shim form that needs no symbol name). One predicate, `in_ffi_export`, decides this and the pointer sanctioning below |
 
 ### Raw pointers in fn signatures (args / returns), region-classified
 | field | meaning |
 |---|---|
-| `rp_wrap_nonseam_args` / `_rets` | raw-ptr args / returns in wrapper-impl methods that are NOT seam methods |
-| `rp_wrap_nonseam_wrapped` | ...of those, pointee is a type that has a `define_*ctype!` wrapper (a safe alternative exists) |
-| `rp_outside_args` / `_rets` | raw-ptr args / returns in fns outside wrapper impls AND outside `mod ffi_export` |
-| `rp_outside_wrapped` | ...of those, pointee has a `define_*ctype!` wrapper available |
+| `raw_ptr_args` / `raw_ptr_rets` | **every** raw-ptr position in a signature (args / returns) — the denominator |
+| `raw_ptr_seam` | ...the subset sanctioned by construction: seam fn, C-exported fn (`#[no_mangle]` / `#[export_name]`), `extern "C"`, or a ptr to the method's own `Self` (`free`/`dup` — you cannot pass `&Self` while destroying it). The smell is `raw_ptr_args + raw_ptr_rets - raw_ptr_seam` |
+| `raw_ptr_wrapped` | ...of the NON-seam remainder, pointee is a C type that HAS a wrapper (`*mut ffi::git_oid` where `GitOid` exists) — the actionable defect. A raw ptr to the *wrapper* is not counted: it already uses the wrapper |
+| `raw_ptr_in_wrapper` | ...of the NON-seam remainder, inside `impl <wrapper T>` — a raw ptr in the very type meant to hide it |
 | `field_ref_wrapped` | `&(*p).field` / `&mut (*p).field` where `p: *C` and `C` has a wrapper — a reference over a FIELD of memory C may write, the same rule that keeps `&W` out applied one level down. `addr_of!` / `&raw` lower to `BorrowKind::Raw` and are NOT counted, so this is exactly the sanctioned/forbidden split; **should be 0** |
 | `ref_to_type_wrapper` | `&W` or `&mut W` in signatures (incl. the `&self` / `&mut self` receiver) where `W` is a TYPE wrapper — implements `CCell` AND stores the C object inline (`CType<ffi::T>`), rather than holding a pointer to it. A reference of either kind over the object's own bytes asserts something about memory C may write through a pointer it retains, so access goes through the borrowed handles instead; **should be 0**. A reference to a POINTER wrapper (a handle, `#[repr(transparent)]` over `CPtr`) covers Rust-owned storage and is NOT counted |
 | `field_proj_wrapped` | `(*p).field` (incl. `addr_of!((*p).field)`) where `p: *C` and `C` has a `define_*ctype!` wrapper |
 | `field_proj_outside_impl` | ...of those, the subset outside any impl/trait body — the smell (a port body bypassing the accessor instead of calling it); inside-impl projections are accessor definitions (sanctioned) |
-| `void_ptr_sanctioned` / `void_ptr_smell` | `*const/*mut c_void` in signatures, split: sanctioned (seam method / `mod ffi_export`) vs smell (ordinary signatures, where a typed pointer/wrapper is preferred). Signature-scoped; `as *mut c_void` casts not counted |
+| `void_ptr_sanctioned` / `void_ptr_smell` | `*const/*mut c_void` in signatures, split: sanctioned (seam method / C-ABI boundary) vs smell (ordinary signatures, where a typed pointer/wrapper is preferred). Signature-scoped; `as *mut c_void` casts not counted |
 
 ### Raw deref + denominators
 | field | meaning |
@@ -41,6 +41,7 @@ the regex pass in `audit.py` for the subset of properties below.
 | `raw_ptr_derefs` | `*p` where `p: *const/*mut T`, decided by the **operand's type** (excludes `*Box`/`*&`/`Deref`) |
 | `raw_ptr_derefs_outside_impl` | ...of those, the subset **not** inside any `impl`/trait body — i.e. port-body raw access, vs. the sanctioned centralisation in wrapper accessor/seam method bodies (same split as `field_proj_outside_impl`) |
 | `total_stmts` | `hir::Stmt` nodes crate-wide (denominator) |
+| `code_lines` | crate-wide code LoC (denominator): non-blank, non-`//`-comment lines, counted over the **union of HIR definition spans** rather than the raw file text. A `cfg`-stripped item has no `DefId`, so an inline `#[cfg(test)] mod tests` — never compiled under `cargo build`, so unable to reach any numerator — no longer inflates it (same for any `#[cfg(..)]`-disabled item). Macro-expanded defs map through `source_callsite()` to their invocation line; containers (`mod`/`impl`/`trait`/`extern` blocks) contribute only their opening and closing lines, since their full span still covers text `cfg` removed from inside them |
 
 ## Classification model (all resolution-based, not textual)
 - **wrapper type `T`** — a struct implementing the seam trait `CCell`, i.e.
@@ -52,12 +53,17 @@ the regex pass in `audit.py` for the subset of properties below.
 - **wrapper impl** — an `impl` whose self-type (HIR path-resolved) is a wrapper `T`.
 - **seam method** — fn named `as_ptr`/`as_mut_ptr`/`as_c_ptr`/`as_raw`/`from_ptr`/
   `from_raw`/`to_ptr`/`to_raw`/`into_raw` (raw ptrs there are the expected boundary).
-- **`mod ffi_export`** — any ancestor module named `ffi_export`.
+- **C-ABI boundary** (`in_ffi_export`) — the fn, or an enclosing one, carries
+  a C symbol name (`#[unsafe(no_mangle)]` / `#[export_name]`, read off
+  `codegen_fn_attrs`) or has a non-Rust ABI (`extern "C"`). Replaces an
+  earlier `mod ffi_export` region check — a module convention neither ported
+  tree uses, so that branch was unreachable and every void pointer fell
+  through to the smell bucket.
 - **macro-generated vs hand-written** — `Span::from_expansion()` on the unsafe block.
 
 ## Why a driver, not regex/syn
 Three things need HIR/typeck, not text:
-- `raw_ptr_derefs` and `rp_*` need the **operand/pointee type** (`*Box` vs `*raw`; which C type a `*mut` points at).
+- `raw_ptr_derefs` and `raw_ptr_*` need the **operand/pointee type** (`*Box` vs `*raw`; which C type a `*mut` points at).
 - wrapper detection needs the struct's **macro-expansion context** + the impl's resolved self-type.
 - the `_wrapped` subset needs mapping each wrapper's `CType<C>` field back to `C` (a `DefId`, alias-proof).
 HIR is also post-expansion, so it counts macro-generated unsafe and excludes

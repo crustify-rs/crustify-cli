@@ -235,18 +235,27 @@ fn impl_self_def(tcx: TyCtxt<'_>, impl_did: DefId) -> Option<DefId> {
     None
 }
 
-/// True if `did` — or an enclosing item — is exported under a C symbol name:
-/// `#[unsafe(no_mangle)]` or an explicit symbol name (`#[export_name]`).
+/// True if `did` — or an enclosing item — IS the C-ABI boundary, by either of
+/// the two ways a fn can be one:
 ///
-/// This is the port stage's re-export seam. A function carrying a C symbol name
-/// IS the C-ABI boundary — C callers reach it by that name — so raw and void
-/// pointers in its signature are sanctioned rather than a discipline smell.
+///  * it carries a C symbol name (`#[unsafe(no_mangle)]` / `#[export_name]`),
+///    so C callers reach it by that name; or
+///  * it has a non-Rust ABI (`extern "C"`), so C reaches it by function
+///    pointer — the callback-shim form, which needs no symbol name.
 ///
-/// Replaces an earlier `mod ffi_export` region check: that named a module
-/// convention neither ported tree uses, so the sanctioning branch was
+/// Both are the port stage's re-export seam: raw and void pointers in such a
+/// signature are the C contract (`OPENSSL_sk_freefunc` and friends take
+/// type-erased pointers), not a discipline smell, and the unsafe inside belongs
+/// to the boundary rather than to the port body.
+///
+/// The ABI arm was previously a separate `is_extern_c_fn` used ONLY for the
+/// pointer-sanctioning sites, so a bare `extern "C"` shim had its pointers
+/// excused while its unsafe blocks fell into the unattributed bucket. Folding
+/// it in here makes one predicate decide all three.
+///
+/// Both arms replace an earlier `mod ffi_export` region check: that named a
+/// module convention neither ported tree uses, so the sanctioning branch was
 /// unreachable and every void pointer fell through to the smell bucket.
-/// Reading the codegen attrs also covers `#[export_name]`, which renames a
-/// symbol without `no_mangle` (`CodegenFnAttrs::symbol_name`).
 fn in_ffi_export(tcx: TyCtxt<'_>, mut did: DefId) -> bool {
     loop {
         if matches!(tcx.def_kind(did), DefKind::Fn | DefKind::AssocFn) {
@@ -254,6 +263,9 @@ fn in_ffi_export(tcx: TyCtxt<'_>, mut did: DefId) -> bool {
             if attrs.flags.contains(CodegenFnAttrFlags::NO_MANGLE)
                 || attrs.symbol_name.is_some()
             {
+                return true;
+            }
+            if tcx.fn_sig(did).skip_binder().skip_binder().abi() != ExternAbi::Rust {
                 return true;
             }
         }
@@ -266,18 +278,6 @@ fn in_ffi_export(tcx: TyCtxt<'_>, mut did: DefId) -> bool {
             _ => return false,
         }
     }
-}
-
-/// True if `did` is an `extern "C"` fn — a callback shim or a C export.
-///
-/// Its `*mut c_void` parameters are the C callback ABI (`OPENSSL_sk_freefunc`
-/// and friends take type-erased pointers by contract), so they are sanctioned
-/// rather than counted as a void-pointer smell.
-fn is_extern_c_fn(tcx: TyCtxt<'_>, did: DefId) -> bool {
-    if !matches!(tcx.def_kind(did), DefKind::Fn | DefKind::AssocFn) {
-        return false;
-    }
-    tcx.fn_sig(did).skip_binder().skip_binder().abi() != ExternAbi::Rust
 }
 
 /// True if `did` is (transitively) inside ANY `impl`/`trait` body (an accessor
@@ -318,18 +318,20 @@ struct Counts {
     unsafe_blocks_wrapper_impl: u64, // unsafe blocks inside `impl <wrapper T>`
     wrapper_impl_macro: u64,         //   of which macro-generated (get/get_mut)
     wrapper_impl_handwritten: u64,   //   of which hand-written methods
-    unsafe_blocks_ffi_export: u64,   // unsafe blocks inside `mod ffi_export`
+    unsafe_blocks_ffi_export: u64,   // unsafe blocks at the C-ABI boundary
+                                     //   (`in_ffi_export`: `#[no_mangle]` /
+                                     //   `#[export_name]` / `extern "C"`)
     // Signature raw pointers. ONE family, with the sanctioned subset named
-    // rather than excluded: `rp_args` + `rp_rets` is every raw-pointer position
-    // in a signature (the denominator), `rp_seam` the subset that is legitimate
-    // by construction, so the smell is `rp_args + rp_rets - rp_seam`. The old
+    // rather than excluded: `raw_ptr_args` + `raw_ptr_rets` is every raw-pointer position
+    // in a signature (the denominator), `raw_ptr_seam` the subset that is legitimate
+    // by construction, so the smell is `raw_ptr_args + raw_ptr_rets - raw_ptr_seam`. The old
     // scheme split `rp_wrap_nonseam_*` from `rp_outside_*` and counted the seam
     // region in NEITHER, so it reported a numerator with no denominator.
-    rp_args: u64,
-    rp_rets: u64,
-    rp_seam: u64,      // seam fn / `mod ffi_export` / `extern "C"` / ptr-to-own-Self
-    rp_wrapped: u64,   // of the NON-seam remainder, pointee is a wrapped C type
-    rp_in_wrapper: u64, // of the NON-seam remainder, inside `impl <wrapper T>`
+    raw_ptr_args: u64,
+    raw_ptr_rets: u64,
+    raw_ptr_seam: u64,      // seam fn / C-ABI boundary / ptr-to-own-Self
+    raw_ptr_wrapped: u64,   // of the NON-seam remainder, pointee is a wrapped C type
+    raw_ptr_in_wrapper: u64, // of the NON-seam remainder, inside `impl <wrapper T>`
                         //   — kept because a raw ptr in the very type meant to
                         //   hide it is worse than one in a ported free fn
     ref_to_type_wrapper: u64, // `&W` / `&mut W` (incl. the receiver), W a TYPE wrapper
@@ -405,7 +407,7 @@ struct BodyVisitor<'a, 'tcx> {
     typeck: &'tcx TypeckResults<'tcx>,
     depth: u32,       // unsafe-block nesting depth
     in_wrapper: bool, // this body is inside an `impl <wrapper T>`
-    in_ffi: bool,     // this body is inside a `mod ffi_export`
+    in_ffi: bool,     // this body IS / is inside the C-ABI boundary
     in_impl: bool,    // this body is inside any impl/trait
     wrapped_c: &'a HashSet<DefId>,
     c: &'a mut Counts,
@@ -439,9 +441,18 @@ impl<'a, 'tcx> Visitor<'tcx> for BodyVisitor<'a, 'tcx> {
                 if self.in_ffi {
                     self.c.unsafe_blocks_ffi_export += 1;
                 }
-                if self.depth == 0 {
-                    // count lines only for the outermost unsafe block (avoid
-                    // double-counting nested blocks)
+                // Line metrics: outermost blocks only (nested ones would
+                // double-count), and HAND-WRITTEN only. A macro-generated block
+                // has no lines of its own in this crate — its span lives in the
+                // macro's defining crate, so measuring it either charged
+                // ffibox's source lines to this crate (`unsafe_block_lines`) or
+                // silently dropped the block when `span_to_snippet` could not
+                // reach that text (`unsafe_block_code_lines`). The invocation's
+                // own lines are already in `code_lines` as ordinary code, and
+                // the blocks themselves are still counted by `unsafe_blocks` /
+                // `wrapper_impl_macro`, so the volume is not lost — only the
+                // line attribution, which was never this crate's to make.
+                if self.depth == 0 && !b.span.from_expansion() {
                     let sm = self.tcx.sess.source_map();
                     let lo = sm.lookup_char_pos(b.span.lo()).line;
                     let hi = sm.lookup_char_pos(b.span.hi()).line;
@@ -860,13 +871,12 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
             if matches!(tcx.def_kind(did), DefKind::Fn | DefKind::AssocFn) {
                 let sig = tcx.fn_sig(did).skip_binder().skip_binder();
                 let seam = is_seam_fn(tcx, did);
-                let extern_c = is_extern_c_fn(tcx, did);
                 let span = tcx.def_span(did);
                 for t in sig.inputs().iter().copied().chain(std::iter::once(sig.output())) {
                     if is_ref_to_type_wrapper(tcx, t) {
                         metrics[i].ref_to_type_wrapper += 1;
                     }
-                    if is_void_ptr(tcx, t) && !(seam || in_ffi || extern_c) {
+                    if is_void_ptr(tcx, t) && !(seam || in_ffi) {
                         metrics[i].void_ptr_smell += 1;
                         sites[i].void_ptr.push(span_site(tcx, span));
                     }
@@ -1031,14 +1041,13 @@ impl Callbacks for MetricsCallbacks {
             if matches!(tcx.def_kind(did), DefKind::Fn | DefKind::AssocFn) {
                 let sig = tcx.fn_sig(did).skip_binder().skip_binder();
                 let seam = is_seam_fn(tcx, did);
-                let extern_c = is_extern_c_fn(tcx, did);
                 // `&mut <wrapper>` and `*c_void` anywhere in the signature.
                 for t in sig.inputs().iter().copied().chain(std::iter::once(sig.output())) {
                     if is_ref_to_type_wrapper(tcx, t) {
                         c.ref_to_type_wrapper += 1;
                     }
                     if is_void_ptr(tcx, t) {
-                        if seam || in_ffi || extern_c {
+                        if seam || in_ffi {
                             c.void_ptr_sanctioned += 1;
                         } else {
                             c.void_ptr_smell += 1;
@@ -1048,7 +1057,7 @@ impl Callbacks for MetricsCallbacks {
                 }
                 // Raw-pointer args/rets: count EVERY position, then name the
                 // sanctioned subset. No position goes unreported.
-                let sanctioned = seam || in_ffi || extern_c;
+                let sanctioned = seam || in_ffi;
                 // Resolution-based self-boundary: a raw ptr to the method's OWN
                 // wrapper type (`*mut Self` in `free`/`dispose`/`dup`/…) is the
                 // type's raw-form lifecycle seam, not a "use the wrapper" smell
@@ -1056,7 +1065,7 @@ impl Callbacks for MetricsCallbacks {
                 let own_self = enclosing_impl_self(tcx, did);
                 {
                     let mut tally = |p: Ty<'_>, is_ret: bool, c: &mut Counts| {
-                        if is_ret { c.rp_rets += 1 } else { c.rp_args += 1 }
+                        if is_ret { c.raw_ptr_rets += 1 } else { c.raw_ptr_args += 1 }
                         // A raw ptr to the method's OWN wrapper type (`*mut Self`
                         // in `free`/`dup`) is the type's raw-form lifecycle seam —
                         // you cannot pass `&Self` while destroying it. Sanctioned,
@@ -1064,7 +1073,7 @@ impl Callbacks for MetricsCallbacks {
                         let is_own = own_self
                             .is_some_and(|s| p.ty_adt_def().map(|d| d.did()) == Some(s));
                         if sanctioned || is_own {
-                            c.rp_seam += 1;
+                            c.raw_ptr_seam += 1;
                             return;
                         }
                         // The actionable smell is a raw ptr to the *C type* when a
@@ -1074,8 +1083,8 @@ impl Callbacks for MetricsCallbacks {
                         // / array boundary), not a smell. So count only the C case.
                         let w = matches!(p.kind(),
                             ty::TyKind::Adt(def, _) if wrapped_c.contains(&def.did()));
-                        if w { c.rp_wrapped += 1 }
-                        if in_wrapper { c.rp_in_wrapper += 1 }
+                        if w { c.raw_ptr_wrapped += 1 }
+                        if in_wrapper { c.raw_ptr_in_wrapper += 1 }
                         if w {
                             sites.raw_ptr.push(span_site(tcx, tcx.def_span(did)));
                         }
@@ -1087,28 +1096,77 @@ impl Callbacks for MetricsCallbacks {
                 }
             }
         }
-        // Crate-wide physical LoC: count non-blank, non-`//`-comment source lines
-        // across the local crate's own files. Imported/external-crate files carry
-        // `src == None` (their text lives in `external_src`), so filtering on
-        // `src.is_some()` isolates exactly the crate being compiled. Same filter
-        // as `unsafe_block_code_lines`, so the two are apples-to-apples.
+        // Crate-wide code LoC — the denominator. Built from the COMPILED crate
+        // (the union of HIR definition spans), not from the raw file text.
+        //
+        // Reading the text counted every line physically present, including
+        // items `cfg` removed before HIR: an inline `#[cfg(test)] mod tests`
+        // put its lines in the denominator while its bodies — never compiled
+        // under `cargo build` — could reach no numerator, so the unsafe ratio
+        // read low in proportion to test coverage. A definition that did not
+        // survive `cfg` has no `DefId`, so unioning def spans excludes it by
+        // construction, and generalises to every `#[cfg(..)]`-disabled item
+        // (feature gates, platform gates) rather than special-casing `test`.
+        //
+        // Two details make the union tight:
+        //  * `source_callsite()` maps a macro-expanded def back to its
+        //    invocation, so generated items are charged to the `define_ctype!`
+        //    line that produced them rather than to ffibox's source.
+        //  * CONTAINERS (`mod` / `impl` / `trait` / `extern` blocks) contribute
+        //    only their opening and closing lines, never their full span: a
+        //    container's span still covers the text of items `cfg` stripped out
+        //    of it (the crate-root module's span is the whole file), so
+        //    unioning it whole would reinstate exactly what this is removing.
+        //    Their members are separate definitions and bring their own bodies.
+        //
+        // The line set is per file and deduplicated, so items sharing a line
+        // (or several defs from one macro invocation) count it once. The
+        // blank / `//`-comment filter is the same one `unsafe_block_code_lines`
+        // applies, so numerator and denominator stay apples-to-apples.
         {
             let sm = tcx.sess.source_map();
-            for sf in sm.files().iter() {
-                if let Some(src) = &sf.src {
-                    c.code_lines += src
-                        .lines()
-                        .filter(|l| {
-                            let t = l.trim();
-                            !t.is_empty() && !t.starts_with("//")
-                        })
-                        .count() as u64;
+            // file (keyed by its source-map start offset) -> covered 1-based lines
+            let mut covered: HashMap<u32, HashSet<usize>> = HashMap::new();
+            for ld in tcx.hir_crate_items(()).definitions() {
+                let did = ld.to_def_id();
+                let container = matches!(
+                    tcx.def_kind(did),
+                    DefKind::Mod | DefKind::Impl { .. } | DefKind::Trait
+                        | DefKind::ForeignMod);
+                let sp = tcx.def_span(did).source_callsite();
+                let lo = sm.lookup_char_pos(sp.lo());
+                let hi = sm.lookup_char_pos(sp.hi());
+                // Local crate only (imported files carry `src == None`), and
+                // skip the pathological span that straddles two files.
+                if lo.file.src.is_none() || lo.file.start_pos != hi.file.start_pos {
+                    continue;
                 }
+                let e = covered.entry(lo.file.start_pos.0).or_default();
+                if container {
+                    e.insert(lo.line);
+                    e.insert(hi.line);
+                } else {
+                    e.extend(lo.line..=hi.line);
+                }
+            }
+            for sf in sm.files().iter() {
+                let (Some(src), Some(set)) = (&sf.src, covered.get(&sf.start_pos.0))
+                else {
+                    continue;
+                };
+                c.code_lines += src
+                    .lines()
+                    .enumerate()
+                    .filter(|(i, l)| {
+                        let t = l.trim();
+                        set.contains(&(i + 1)) && !t.is_empty() && !t.starts_with("//")
+                    })
+                    .count() as u64;
             }
         }
         println!(
-            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"rp_args\":{},\"rp_rets\":{},\"rp_seam\":{},\"rp_wrapped\":{},\"rp_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
-            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.rp_args, c.rp_rets, c.rp_seam, c.rp_wrapped, c.rp_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
+            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"raw_ptr_args\":{},\"raw_ptr_rets\":{},\"raw_ptr_seam\":{},\"raw_ptr_wrapped\":{},\"raw_ptr_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
+            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.raw_ptr_args, c.raw_ptr_rets, c.raw_ptr_seam, c.raw_ptr_wrapped, c.raw_ptr_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
             sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj), sites_json(&sites.field_ref), sites_json(&sites.raw_deref)
         );
         Compilation::Continue

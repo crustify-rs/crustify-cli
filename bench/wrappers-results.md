@@ -157,13 +157,13 @@ per seed. Two snapshots: at the import-closure promotion and at the final tree.
 | `unsafe_blocks_ffi_export` | `<n>` | inside the C-ABI gateway |
 | `wrapper_impl_macro` | `<n>` | macro-generated accessors |
 | `wrapper_impl_handwritten` | `<n>` | hand-written ones |
-| `rp_args` | `<n>` | raw-ptr positions in arguments |
-| `rp_rets` | `<n>` | raw-ptr positions in returns |
+| `raw_ptr_args` | `<n>` | raw-ptr positions in arguments |
+| `raw_ptr_rets` | `<n>` | raw-ptr positions in returns |
 | **total positions** | `<n>` | args + rets; disjoint, so this is the surface |
-| `rp_seam` | `<n>` | `<n>`% sanctioned: seam fn / `mod ffi_export` / `extern "C"` / ptr-to-own-`Self` |
+| `raw_ptr_seam` | `<n>` | `<n>`% sanctioned: seam fn / `mod ffi_export` / `extern "C"` / ptr-to-own-`Self` |
 | **smell (total − seam)** | `<n>` | `<n>`% — the reportable remainder |
-| `rp_wrapped` | `<n>` | **of the smell**: pointee is a C type that HAS a wrapper — the actionable defect |
-| `rp_in_wrapper` | `<n>` | **of the smell**: inside a wrapper impl — the least excusable placement |
+| `raw_ptr_wrapped` | `<n>` | **of the smell**: pointee is a C type that HAS a wrapper — the actionable defect |
+| `raw_ptr_in_wrapper` | `<n>` | **of the smell**: inside a wrapper impl — the least excusable placement |
 | `ref_to_type_wrapper` | `<n>` | `&W`/`&mut W` on an inline-`CType` wrapper — **target 0** |
 | `field_proj_wrapped` | `<n>` | projection VOLUME — shares one HIR shape with `addr_of!`, not a violation |
 | `field_proj_outside_impl` | `<n>` | projections outside any accessor — **target 0** |
@@ -191,13 +191,13 @@ per seed. Two snapshots: at the import-closure promotion and at the final tree.
 | `unsafe_blocks_ffi_export` | `<n>` | inside the C-ABI gateway |
 | `wrapper_impl_macro` | `<n>` | macro-generated accessors |
 | `wrapper_impl_handwritten` | `<n>` | hand-written ones |
-| `rp_args` | `<n>` | raw-ptr positions in arguments |
-| `rp_rets` | `<n>` | raw-ptr positions in returns |
+| `raw_ptr_args` | `<n>` | raw-ptr positions in arguments |
+| `raw_ptr_rets` | `<n>` | raw-ptr positions in returns |
 | **total positions** | `<n>` | args + rets; disjoint, so this is the surface |
-| `rp_seam` | `<n>` | `<n>`% sanctioned: seam fn / `mod ffi_export` / `extern "C"` / ptr-to-own-`Self` |
+| `raw_ptr_seam` | `<n>` | `<n>`% sanctioned: seam fn / `mod ffi_export` / `extern "C"` / ptr-to-own-`Self` |
 | **smell (total − seam)** | `<n>` | `<n>`% — the reportable remainder |
-| `rp_wrapped` | `<n>` | **of the smell**: pointee is a C type that HAS a wrapper — the actionable defect |
-| `rp_in_wrapper` | `<n>` | **of the smell**: inside a wrapper impl — the least excusable placement |
+| `raw_ptr_wrapped` | `<n>` | **of the smell**: pointee is a C type that HAS a wrapper — the actionable defect |
+| `raw_ptr_in_wrapper` | `<n>` | **of the smell**: inside a wrapper impl — the least excusable placement |
 | `ref_to_type_wrapper` | `<n>` | `&W`/`&mut W` on an inline-`CType` wrapper — **target 0** |
 | `field_proj_wrapped` | `<n>` | projection VOLUME — shares one HIR shape with `addr_of!`, not a violation |
 | `field_proj_outside_impl` | `<n>` | projections outside any accessor — **target 0** |
@@ -213,10 +213,10 @@ per seed. Two snapshots: at the import-closure promotion and at the final tree.
 | `code_lines` | `<n>` | `<n>` | |
 | unsafe % | `<n>`% | `<n>`% | |
 | total rp positions | `<n>` | `<n>` | |
-| `rp_seam` | `<n>` | `<n>` | |
+| `raw_ptr_seam` | `<n>` | `<n>` | |
 | smell | `<n>` | `<n>` | |
-| **`rp_wrapped`** | **`<n>`** | **`<n>`** | |
-| `rp_in_wrapper` | `<n>` | `<n>` | |
+| **`raw_ptr_wrapped`** | **`<n>`** | **`<n>`** | |
+| `raw_ptr_in_wrapper` | `<n>` | `<n>` | |
 | `field_ref_wrapped` | `<n>` | `<n>` | |
 | `ref_to_type_wrapper` | `<n>` | `<n>` | |
 
