@@ -18,6 +18,10 @@ the regex pass in `audit.py` for the subset of properties below.
 | field | meaning |
 |---|---|
 | `unsafe_blocks_wrapper_impl` | unsafe blocks inside `impl T` / `impl Tr for T` where `T` is a `define_*ctype!` wrapper |
+| `unsafe_fns` | `unsafe fn` DECLARATIONS. A block is a local assertion its author discharges; an `unsafe fn` pushes the obligation onto every caller, and a `pub` one exports it out of the crate. Counted post-expansion, so macro-emitted ones are included |
+| `unsafe_fns_seam` | ...the sanctioned subset, by the same predicate a pointer position uses: a `SEAM_FNS` conversion or the C-ABI gateway. The smell is `unsafe_fns - unsafe_fns_seam` |
+| `unsafe_fns_pub` | ...of `unsafe_fns`, those with public visibility |
+| `unsafe_impls` / `unsafe_traits` | `unsafe impl` / `unsafe trait` declarations — a lifecycle contract asserted once per type (ffibox's `CDropped` / `CCloned` / `CValued`) rather than per call site. Never sanctioned away |
 | `unsafe_blocks_ffi_export` | unsafe blocks at the C-ABI boundary — a fn carrying a C symbol name (`#[unsafe(no_mangle)]` / `#[export_name]`) **or** having a non-Rust ABI (`extern "C"`, the callback-shim form that needs no symbol name). One predicate, `in_ffi_export`, decides this and the pointer sanctioning below |
 
 ### Raw pointers in fn signatures (args / returns), region-classified

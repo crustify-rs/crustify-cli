@@ -40,8 +40,13 @@ use std::collections::{HashMap, HashSet};
 /// add for callback wrappers.
 const SEAM_FNS: &[&str] = &[
     // ffibox
-    "as_ptr", "as_mut_ptr", "as_void_ptr",
+    "as_ptr", "as_mut_ptr",
+    // the erasure trio: erase shared / erase exclusive / reconstitute
+    "as_void_ptr", "as_mut_void_ptr", "from_void_ptr",
     "from_ptr", "from_raw", "from_raw_parts", "from_raw_uninit",
+    // `CCell`'s adopt-a-raw-pointer pair: the same family as `from_raw`, named
+    // for the handle each yields (`c_type.rs`).
+    "ref_from_raw", "mut_from_raw",
     "into_raw", "into_raw_parts", "into_raw_uninit",
     // ported trees: safe callback wrapper -> raw C fn pointer
     "to_raw",
@@ -316,7 +321,17 @@ struct Counts {
     unsafe_block_lines: u64,      // raw brace-to-brace span (incl. blanks/comments)
     unsafe_block_code_lines: u64, // non-blank, non-`//`-comment lines only
     unsafe_blocks_wrapper_impl: u64, // unsafe blocks inside `impl <wrapper T>`
-    unsafe_blocks_ffi_export: u64,   // unsafe blocks at the C-ABI boundary
+    unsafe_blocks_ffi_export: u64,
+    // `unsafe fn` / `unsafe impl` / `unsafe trait` DECLARATIONS. A block is a
+    // local assertion its author discharges; an `unsafe fn` pushes the
+    // obligation onto every caller, and a `pub` one exports it out of the
+    // crate. Same sanctioning axis as everything else: the seam names and the
+    // C-ABI gateway are expected, the remainder is the finding.
+    unsafe_fns: u64,
+    unsafe_fns_seam: u64,
+    unsafe_fns_pub: u64,
+    unsafe_impls: u64,
+    unsafe_traits: u64,   // unsafe blocks at the C-ABI boundary
                                      //   (`in_ffi_export`: `#[no_mangle]` /
                                      //   `#[export_name]` / `extern "C"`)
     // Signature raw pointers. ONE family, with the sanctioned subset named
@@ -1047,6 +1062,19 @@ impl Callbacks for MetricsCallbacks {
                 };
                 v.visit_body(body);
             }
+            // `unsafe impl` / `unsafe trait` declarations. These bind a
+            // lifecycle contract (ffibox's `CDropped` / `CCloned` / `CValued`),
+            // so they are an unsafe assertion the author makes once for a type
+            // rather than per call site -- counted, never sanctioned away.
+            if let DefKind::Impl { of_trait: true } = tcx.def_kind(did) {
+                if tcx.impl_trait_header(did).safety.is_unsafe() {
+                    c.unsafe_impls += 1;
+                }
+            }
+            if matches!(tcx.def_kind(did), DefKind::Trait)
+                && tcx.trait_def(did).safety.is_unsafe() {
+                c.unsafe_traits += 1;
+            }
             // Signature analysis (fns only).
             if matches!(tcx.def_kind(did), DefKind::Fn | DefKind::AssocFn) {
                 let sig = tcx.fn_sig(did).skip_binder().skip_binder();
@@ -1069,6 +1097,15 @@ impl Callbacks for MetricsCallbacks {
                             sites.void_ptr.push(span_site(tcx, tcx.def_span(did)));
                         }
                     }
+                }
+                // `unsafe fn` DECLARATIONS. Sanctioned the same way a pointer
+                // position is: a seam conversion (`from_ptr`, `from_raw`,
+                // `from_void_ptr`) and the C-ABI gateway are expected to be
+                // unsafe; anything else is exporting an obligation.
+                if sig.safety().is_unsafe() {
+                    c.unsafe_fns += 1;
+                    if seam || in_ffi { c.unsafe_fns_seam += 1 }
+                    if tcx.visibility(did).is_public() { c.unsafe_fns_pub += 1 }
                 }
                 // Raw-pointer args/rets: count EVERY position, then name the
                 // sanctioned subset. No position goes unreported.
@@ -1182,8 +1219,8 @@ impl Callbacks for MetricsCallbacks {
             }
         }
         println!(
-            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"unsafe_blocks_ffi_export\":{},\"raw_ptr_args\":{},\"raw_ptr_rets\":{},\"raw_ptr_seam\":{},\"raw_ptr_wrapped\":{},\"raw_ptr_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
-            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.unsafe_blocks_ffi_export, c.raw_ptr_args, c.raw_ptr_rets, c.raw_ptr_seam, c.raw_ptr_wrapped, c.raw_ptr_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
+            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"unsafe_blocks_ffi_export\":{},\"unsafe_fns\":{},\"unsafe_fns_seam\":{},\"unsafe_fns_pub\":{},\"unsafe_impls\":{},\"unsafe_traits\":{},\"raw_ptr_args\":{},\"raw_ptr_rets\":{},\"raw_ptr_seam\":{},\"raw_ptr_wrapped\":{},\"raw_ptr_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
+            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.unsafe_blocks_ffi_export, c.unsafe_fns, c.unsafe_fns_seam, c.unsafe_fns_pub, c.unsafe_impls, c.unsafe_traits, c.raw_ptr_args, c.raw_ptr_rets, c.raw_ptr_seam, c.raw_ptr_wrapped, c.raw_ptr_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
             sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj), sites_json(&sites.field_ref), sites_json(&sites.raw_deref)
         );
         Compilation::Continue
