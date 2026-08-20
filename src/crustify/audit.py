@@ -62,8 +62,7 @@ _GLOBAL_COUNTS = (
     "raw_ptr_in_wrapper",
     "ref_to_type_wrapper", "field_ref_wrapped",
     "field_proj_wrapped", "field_proj_outside_impl", "void_ptr_sanctioned",
-    "void_ptr_smell", "void_ptr_smell_macro", "void_ptr_smell_handwritten",
-    "raw_ptr_smell_macro", "raw_ptr_smell_handwritten", "raw_ptr_derefs", "total_stmts", "code_lines",
+    "void_ptr_smell", "raw_ptr_derefs", "total_stmts", "code_lines",
 )
 _GLOBAL_SITES = ("raw_ptr_sites", "void_ptr_sites", "field_proj_sites")
 
