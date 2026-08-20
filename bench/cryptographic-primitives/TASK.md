@@ -2,18 +2,18 @@
 
 The user has chosen the following configuration:
 
-campaign repo: `https://github.com/intel/cryptography-primitives`, commit 9d397ba62e2369b63171bc995e9c1179aaa5c0dc
-campaign objective: wrap
-campaign target: the whole public API, except the imported closure
-max-syms: default
-max-loc: default
-max-types: 2
-billing: API
-parallel-max: you pick an optimal value
-parallel-policy: default
-agent backend: codex
-model: gpt-5.6-sol
-review mode: run the review objective on all waves at the end of the campaign using gpt-5.6-sol as the model
+- campaign repo: `https://github.com/intel/cryptography-primitives`, commit 9d397ba62e2369b63171bc995e9c1179aaa5c0dc
+- campaign objective: wrap
+- campaign target: the whole public API, except the imported closure
+- max-syms: default
+- max-loc: default
+- max-types: 2
+- billing: API
+- parallel-max: you pick an optimal value
+- parallel-policy: default
+- agent backend: codex
+- model: gpt-5.6-sol
+- review mode: run the review objective on all waves at the end of the campaign using gpt-5.6-sol as the model
 
 ## Phase 1 - Setup
 
@@ -21,8 +21,7 @@ You have the user's approval to run Phase 1 of the crustify playbook end to end.
 
 ## Phase 2 - Translation
 
-You have the user's approval to run Phase 2 fully autonomously end to end,
-without waiting for any user feedback before proceeding between waves.
+You have the user's approval to run Phase 2 fully autonomously end to end.
 
 ## Recording
 
