@@ -339,17 +339,29 @@ def main():
             kw[k] += w
 
     print("=== PER AGENT KIND ===")
-    print(f"{'kind':<10}{'runs':>5}{'no-price':>10}{'no-wall':>9}"
+    print(f"{'kind':<15}{'runs':>5}{'no-price':>10}{'no-wall':>9}"
           f"{'$ total':>10}{'$/run':>8}{'Σwall':>9}")
     tc = tr = tw = 0
-    for k in ["port", "wrap", "merge", "scaffold", "analyze", "bindgen", "other"]:
+    # Print every bucket `kind()` produced, not a fixed list of them. The
+    # historical names come first for a stable reading order, then anything
+    # else in sorted order, then `other` last. A list here goes stale the
+    # moment a new agent kind is classified -- which is how every
+    # `translate`-era bucket (`wrap-type`, `review-symbol`, ...) came to be
+    # counted into `kr` and then silently dropped from both its row and the
+    # Sigma, under-reporting a campaign by whatever those agents cost.
+    _FIRST = ["port", "wrap", "merge", "scaffold", "analyze", "bindgen"]
+    order = [k for k in _FIRST if kr.get(k)]
+    order += sorted(k for k in kr if k not in _FIRST and k != "other")
+    if kr.get("other"):
+        order.append("other")
+    for k in order:
         if not kr.get(k):
             continue
         per = kc[k] / kr[k] if kr[k] else 0.0
-        print(f"{k:<10}{kr[k]:>5}{kn[k]:>10}{kx[k]:>9}"
+        print(f"{k:<15}{kr[k]:>5}{kn[k]:>10}{kx[k]:>9}"
               f"{kc[k]:>10.2f}{per:>8.2f}{hm(kw[k]):>9}")
         tc += kc[k]; tr += kr[k]; tw += kw[k]
-    print(f"{'Σ':<10}{tr:>5}{sum(kn.values()):>10}{sum(kx.values()):>9}"
+    print(f"{'Σ':<15}{tr:>5}{sum(kn.values()):>10}{sum(kx.values()):>9}"
           f"{tc:>10.2f}{'':>8}{hm(tw):>9}")
 
     # ---- per-wave (map session dirs between consecutive wave commits) ----
@@ -367,7 +379,8 @@ def main():
     bywave = defaultdict(lambda: defaultdict(float))
     seen_dirs = {os.path.dirname(p) for p in logs}
     for d in sorted(seen_dirs):
-        if not (glob.glob(f"{d}/port_*.usage.json") or glob.glob(f"{d}/wrap_*.usage.json")):
+        if not any(glob.glob(f"{d}/{pat}.usage.json")
+                   for pat in ("port_*", "wrap_*", "port-*", "wrap-*", "review-*")):
             continue
         mg = glob.glob(f"{d}/merge*.usage.json")
         mt = stat(mg[0] if mg else d, "%Y")
@@ -376,21 +389,23 @@ def main():
             continue
         layer = min(cand, key=lambda x: waves[x])
         for p in glob.glob(f"{d}/*.usage.json"):
-            k = kind(os.path.basename(p))
-            if k not in ("port", "wrap", "merge"):
+            # Fold `wrap-type` / `review-symbol` / ... onto their family, so a
+            # wave's cost is not split across per-subject buckets here.
+            k = kind(os.path.basename(p)).split("-")[0]
+            if k not in ("port", "wrap", "merge", "review"):
                 continue
             parsed = parse_usage(p, prices)
             if parsed and parsed[0] is not None:
                 bywave[layer][k] += parsed[0]
 
-    print("\n=== PER WAVE (port/wrap/merge $) ===")
+    print("\n=== PER WAVE (port/wrap/merge/review $) ===")
     grand = 0.0
     for layer in sorted(bywave):
         b = bywave[layer]
-        t = b["wrap"] + b["port"] + b["merge"]
+        t = b["wrap"] + b["port"] + b["merge"] + b["review"]
         grand += t
         print(f"  L{layer:<3} wrap={b['wrap']:6.1f} port={b['port']:6.1f} "
-              f"merge={b['merge']:5.1f}  total={t:6.1f}")
+              f"merge={b['merge']:5.1f} review={b['review']:6.1f}  total={t:6.1f}")
     print(f"  WAVE Σ = ${grand:.2f}  | + scaffold ${kc['scaffold']:.2f} "
           f"+ analyze ${kc['analyze']:.2f} = "
           f"${grand + kc['scaffold'] + kc['analyze']:.2f}")
