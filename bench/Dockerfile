@@ -6,46 +6,53 @@
 #
 #   docker run --rm -it --name crustify-libgit2 \
 #       -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
-#       -v "$PWD/bench/libgit2:/campaign:ro" \
+#       -e CRUSTIFY_CAMPAIGN=libgit2 \
+#       -v "$PWD:/opt/crustify-cli" \
 #       -v crustify-work:/work \
 #       crustify
 #
-# The image carries the harness — the toolchain from the playbook's Setup
-# table, the two checkouts, and a rendered orchestrator prompt. The only
-# run-time input is the campaign task. Everything else is the orchestrator's
-# own work: it clones the target into /work, installs whatever libraries that
-# target's build system needs, then runs Phase 1 of its playbook — authoring
-# build.json, crates.json and scope-config.json, building the CodeQL
-# database, scaffold, bindgen — before any wave.
+# Two mounts, two lifetimes:
 #
-# The container is NAMED after its campaign, one name per target: `docker
-# attach crustify-libgit2` reaches a detached run, `docker exec -it
-# crustify-libgit2 bash` opens a second shell beside the orchestrator to
-# inspect /work while it works, and a stale name is the signal that a
-# campaign is still up. `--rm` frees the name on exit.
+#   /opt/crustify-cli  Read-WRITE host checkout, and the reason this mount
+#                      exists: agents edit crustify itself over a campaign —
+#                      a skill, a playbook step, a query. Point it at a branch
+#                      you can review and a tree you can afford to lose; they
+#                      run under --dangerously-skip-permissions.
+#   /work              Named volume, the only thing that survives `--rm`:
+#                      target clone, CodeQL database, emitted Rust tree,
+#                      session branches, per-agent logs. Drop it and the run
+#                      is throwaway. wrappers-results.md is seeded here once.
 #
-# Both agent backends are installed; CRUSTIFY_BACKEND picks the one that
-# drives the orchestrator (`claude`, the default, or `codex` with
+# THE CAMPAIGN IS NAMED: CRUSTIFY_CAMPAIGN picks a directory under the
+# checkout's bench/, and its TASK.md arrives through the mount above. Edit
+# that file on the host and the next run picks it up. Naming a campaign that
+# does not exist exits 2 with the path it looked for. bench/ is tracked, so a
+# name also resolves from the image's own clone when nothing is mounted.
+#
+# A task living outside the checkout mounts at /campaign, and wins when
+# present.
+#
+# ffibox needs no host clone — the image carries it at /opt/ffibox. Agents may
+# edit it, but that lives in the container layer, so `--rm` discards it:
+# commit and push from inside the container before the campaign ends.
+#
+# The campaign task is the only run-time input. Everything else is the
+# orchestrator's own work: clone the target into /work, install its libraries,
+# then Phase 1 of the playbook — build.json, crates.json, scope-config.json,
+# CodeQL database, scaffold, bindgen — before any wave.
+#
+# One container name per campaign: `docker attach` reaches a detached run,
+# `docker exec -it <name> bash` opens a shell beside the orchestrator, and a
+# stale name means a campaign is still up. `--rm` frees it.
+#
+# `-it` because the prompt is built around approval gates. Detach with `-d`
+# and attach later, or run tmux inside. Both backends ship; CRUSTIFY_BACKEND
+# picks the one driving the orchestrator (`claude`, or `codex` with
 # OPENAI_API_KEY in place of the key above).
-#
-# The session is INTERACTIVE — hence `-it` — so the approval gates in the
-# prompt and in TASK.md have someone to ask. To leave a campaign running and
-# detach, start it with `-d` instead and attach by name later, or run tmux
-# inside the container.
-#
-# /campaign/TASK.md, when mounted, is appended to the rendered prompt. Without
-# it the orchestrator starts from the prompt alone and asks what to port.
-# /work/wrappers-results.md is seeded from the image on first run; the campaign
-# fills it in place.
-#
-# The named volume is what survives `--rm`: the clone, the CodeQL database,
-# the emitted Rust tree, the session branches and the per-agent logs are all
-# under /work, and the campaign mount is read-only by design. Drop the volume
-# and the run is throwaway.
 
 FROM debian:12-slim
 
-ARG CRUSTIFY_CLI_REF=scope-refactor
+ARG CRUSTIFY_CLI_REF=main
 ARG FFIBOX_REF=main
 ARG CODEQL_VERSION=v2.26.3
 ARG PYTHON_VERSION=3.13
@@ -63,16 +70,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     # Claude Code refuses --dangerously-skip-permissions as root without this.
     IS_SANDBOX=1
 
-# 1. A C toolchain. Generic, not a target's dependency set: every target is
-#    built at least twice here — once for its own baseline, once under
-#    `codeql database create` — and a target's own libraries are the
-#    orchestrator's problem, installed once it has read the build system.
+# 1. A generic C toolchain — a target's own libraries are the orchestrator's
+#    problem, installed once it has read the build system.
 #
-#    clang is pinned to 19 by package name; bookworm's unversioned `clang`
-#    metapackage is 14. The versioned packages ship only versioned binaries —
-#    no /usr/bin/clang, no /usr/bin/ld.lld — so the names a build system
-#    actually invokes are linked by hand. lld is versioned to match: mixing
-#    lld 14 with clang 19 is the failure mode `-fuse-ld=lld` walks into.
+#    clang is pinned to 19 by package name (bookworm's unversioned metapackage
+#    is 14), and lld matches: lld 14 against clang 19 is what `-fuse-ld=lld`
+#    trips on. Versioned packages ship only versioned binaries, so the names a
+#    build system actually invokes are linked by hand.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git unzip xz-utils pkg-config file \
         build-essential clang-19 lld-19 cmake ninja-build python3 \
@@ -94,8 +98,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     && rustup toolchain install nightly --component rustc-dev --component llvm-tools \
     && cargo install bindgen-cli --locked
 
-# 4. CodeQL CLI. The cpp query pack is installed from crustify's own qlpack
-#    once the checkout lands, below.
+# 4. CodeQL CLI. The cpp pack is installed from crustify's qlpack below.
 RUN curl -fsSL -o /tmp/codeql.zip \
       "https://github.com/github/codeql-cli-binaries/releases/download/${CODEQL_VERSION}/codeql-linux64.zip" \
     && unzip -q /tmp/codeql.zip -d /opt && rm /tmp/codeql.zip \
@@ -109,13 +112,19 @@ RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
         curl -fsSL https://chatgpt.com/codex/install.sh | sh; \
     fi
 
-# 6. Quick Setup steps 1 and 2. Under /opt, NOT /work: /work is the
-#    orchestrator's work area and the documented volume mount point, and a
-#    volume there would shadow anything the image had put underneath it.
+# 6. Quick Setup steps 1 and 2. Under /opt, NOT /work: a volume on /work
+#    would shadow anything the image put underneath it.
 #
-#    ffibox MUST be a sibling of the crustify checkout: scaffold
-#    resolves it as <crustify>/../ffibox and writes that absolute path
-#    into every generated Cargo.toml. cli-config.json cannot override it.
+#    ffibox MUST be a sibling of the crustify checkout — scaffold resolves it
+#    as <crustify>/../ffibox and bakes that path into every generated
+#    Cargo.toml, and cli-config.json cannot override it. Hence /opt/crustify-cli
+#    for the mount: any other path breaks the sibling resolution.
+#
+#    The crustify-cli clone earns its place through what it writes OUTSIDE
+#    itself — the dependency set into /opt/venv, the CodeQL library packs into
+#    ~/.codeql. A mount shadows the source but neither of those, so only a
+#    changed dependency set needs a rebuild. The clone also leaves the image
+#    runnable unmounted.
 RUN git clone https://github.com/crustify-rs/crustify-cli.git  /opt/crustify-cli \
     && git clone https://github.com/crustify-rs/ffibox.git /opt/ffibox \
     && git -C /opt/crustify-cli  checkout "${CRUSTIFY_CLI_REF}" \
@@ -123,38 +132,57 @@ RUN git clone https://github.com/crustify-rs/crustify-cli.git  /opt/crustify-cli
     && uv pip install --python /opt/venv -e /opt/crustify-cli \
     && cd /opt/crustify-cli/utils/codeql && codeql pack install
 
-# 7. Quick Setup step 4. Rendered from source at build time, never
-#    hand-copied: the prompt inlines the skill index, so a stale copy is
-#    exactly the drift the generator exists to avoid.
-RUN /opt/crustify-cli/utils/build-orchestrator-prompt.sh /opt/ffibox \
-      -o /opt/orchestrator.md
-
-# The results table, from the one copy in the build context. Baked at /opt and
-# seeded into /work by the entrypoint: /campaign is a read-only mount point,
-# so a copy placed there would be both shadowed and unwritable.
+# The results table. Baked at /opt, seeded into /work by the entrypoint,
+# filled in place by the campaign.
 COPY wrappers-results.md /opt/wrappers-results.md
 
-# The absolute paths the orchestrator needs to author a target's
-# cli-config.json, which is machine-local and cannot come from any clone.
+# Absolute paths for a target's cli-config.json, which is machine-local and
+# cannot come from any clone.
 ENV CRUSTIFY_DEP_CRUSTIFY=/opt/crustify-cli \
     CRUSTIFY_DEP_FFIBOX=/opt/ffibox \
     CRUSTIFY_BIN_CLI=/opt/venv/bin/crustify-cli \
     CRUSTIFY_BIN_ORACLE=/opt/venv/bin/crustify-oracle
 
-# Which backend drives the ORCHESTRATOR. It is not what drives the translate
-# agents a wave spawns — that is `crustify-cli --model`, chosen per wave.
+# Drives the ORCHESTRATOR only; a wave's translate agents come from
+# `crustify-cli --model`, chosen per wave.
 ENV CRUSTIFY_BACKEND=claude
 
-# Interactive by default, because the orchestrator prompt is built around
-# approval gates: it asks what to port before Phase 1, and reports a wave's
-# --dry-run plan before spending on it. Headless answers neither. Set to 1
-# only for an unattended run whose task description pre-answers both.
+# Interactive by default: the prompt asks what to port before Phase 1 and
+# reports a wave's --dry-run plan before spending on it. Headless answers
+# neither, so set 1 only when the task description pre-answers both.
 ENV CRUSTIFY_HEADLESS=0
 
+# Which campaign under the checkout's bench/ to run. Empty means none: the
+# orchestrator starts on the prompt alone and asks what to port.
+ENV CRUSTIFY_CAMPAIGN=
+
+# Reasoning effort for a codex orchestrator. codex infers none and falls back
+# to low, which suits neither planning a wave nor reading a build system. The
+# translate agents a wave spawns get theirs from crustify's own per-model
+# table; this is the orchestrator's. Empty leaves codex its default. Ignored
+# by the claude backend.
+ENV CRUSTIFY_EFFORT=high
+
 RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
-      'prompt=/opt/orchestrator.md' \
+      '# Quick Setup step 4. /opt/crustify-cli is a mount point, so only a' \
+      '# prompt generated now matches the checkout driving this run: the' \
+      '# render inlines the skill index and resolves paths into that tree.' \
+      '# Output goes to /tmp, outside both checkouts.' \
+      'gen=/opt/crustify-cli/utils/build-orchestrator-prompt.sh' \
+      '"$gen" /opt/ffibox -o /tmp/orchestrator.md' \
+      'prompt=/tmp/orchestrator.md' \
+      '# A mounted /campaign wins; otherwise CRUSTIFY_CAMPAIGN names one' \
+      '# under the checkout. A named campaign that is absent is fatal, so a' \
+      '# typo costs one exit rather than a whole run on a task-less prompt.' \
+      'task=' \
       'if [ -f /campaign/TASK.md ]; then' \
-      '    cat /opt/orchestrator.md /campaign/TASK.md > /tmp/prompt.md' \
+      '    task=/campaign/TASK.md' \
+      'elif [ -n "${CRUSTIFY_CAMPAIGN:-}" ]; then' \
+      '    task=/opt/crustify-cli/bench/${CRUSTIFY_CAMPAIGN}/TASK.md' \
+      '    [ -f "$task" ] || { echo "no campaign at $task" >&2; exit 2; }' \
+      'fi' \
+      'if [ -n "$task" ]; then' \
+      '    cat /tmp/orchestrator.md "$task" > /tmp/prompt.md' \
       '    prompt=/tmp/prompt.md' \
       'fi' \
       '# Seeded, never overwritten: a resumed run keeps the table it filled.' \
@@ -164,18 +192,27 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       'text="$(cat "$prompt")"' \
       'skip=--dangerously-skip-permissions' \
       'bypass=--dangerously-bypass-approvals-and-sandbox' \
+      '# codex accepts any effort string locally and only rejects it at the' \
+      '# API, so the whitelist is enforced here rather than a run in.' \
+      'effort=()' \
+      'case "${CRUSTIFY_EFFORT:-}" in' \
+      '    "") ;;' \
+      '    low|medium|high|xhigh|max|ultra)' \
+      '        effort=(-c "model_reasoning_effort=\"${CRUSTIFY_EFFORT}\"") ;;' \
+      '    *) echo "bad CRUSTIFY_EFFORT: ${CRUSTIFY_EFFORT}" >&2; exit 2 ;;' \
+      'esac' \
       'case "${CRUSTIFY_BACKEND}:${CRUSTIFY_HEADLESS}" in' \
       '    claude:0) exec claude "$skip" "$text" "$@" ;;' \
       '    claude:1) exec claude "$skip" -p "$text" "$@" ;;' \
-      '    codex:0)  exec codex "$bypass" "$text" "$@" ;;' \
-      '    codex:1)  exec codex exec "$bypass" "$text" "$@" ;;' \
+      '    codex:0)  exec codex "$bypass" "${effort[@]}" "$text" "$@" ;;' \
+      '    codex:1)  exec codex exec "$bypass" "${effort[@]}" "$text" "$@" ;;' \
       '    *) echo "bad CRUSTIFY_BACKEND/CRUSTIFY_HEADLESS:" \' \
       '            "${CRUSTIFY_BACKEND}/${CRUSTIFY_HEADLESS}" >&2; exit 2 ;;' \
       'esac' \
       > /usr/local/bin/crustify-orchestrator \
     && chmod +x /usr/local/bin/crustify-orchestrator
 
-# The orchestrator's work area: it clones the target here. Left empty so a
-# volume mounted over it shadows nothing.
+# The orchestrator clones the target here. Left empty so a volume mounted
+# over it shadows nothing.
 WORKDIR /work
 CMD ["crustify-orchestrator"]

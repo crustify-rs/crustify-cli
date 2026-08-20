@@ -15,14 +15,17 @@ docker build -t crustify bench/
 
 docker run --rm -it --name crustify-libgit2 \
     -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
-    -v "$PWD/bench/libgit2:/campaign:ro" \
+    -e CRUSTIFY_CAMPAIGN=libgit2 \
+    -v "$PWD:/opt/crustify-cli" \
     -v crustify-work:/work \
     crustify
 ```
 
 The orchestrator is instructed to track translation results in `wrappers-results.md`.
 
-The campaign mount is the only target-specific input; everything under `/work`
-— the clone, the CodeQL database, the emitted crates, the session branches —
-is the orchestrator's own work and survives `--rm` in the named volume. The
-Dockerfile header documents what each flag buys.
+`CRUSTIFY_CAMPAIGN` names a directory here, read through the checkout mount:
+edit its `TASK.md` and the next run picks it up. That mount is read-write and
+the agents commit to it, so give them a branch you can review. Everything under
+`/work` — the clone, the CodeQL database, the emitted crates, the session
+branches — is the orchestrator's own work and survives `--rm` in the named
+volume. The Dockerfile header documents what each flag buys.
