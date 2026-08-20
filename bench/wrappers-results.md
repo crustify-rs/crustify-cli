@@ -65,6 +65,8 @@ the campaign's.
   agent's own `usage.json`, so it INCLUDES the per-worktree C rebuild
 - `$/unit` / `$/loc` / `$/field` — that row's `$` over its units, its `loc`, or
   its declared fields
+- `$/symbol` / `$/type` — a batch holds one kind or the other, so one of the
+  two reads `—`; on a Σ row each divides that kind's own cost by its own count
 - `↖ batched` — shares the row above's agent; one usage record covers both
 - `rv $` / `rv wall` / `rv loc` — the REVIEW agent's own cost, elapsed time, and
   net `.rs` line delta (`+ins/-del`) of its landing commit
@@ -133,11 +135,11 @@ One agent per judged batch, same split as the wave it judges. `rv loc` is the
 net `.rs` delta of the landing commit; a review that confirms without changing
 code reads `+0/-0`.
 
-| session | batch | units | rv loc | rv $ | rv wall | $/unit |
-|---|---|---|---|---|---|---|
-| `<session>` | `<batch>` | `<n>` types | `+<n>/-<n>` | `$<n>` | `<n>m<n>s` | `$<n>` |
-| `<session>` | `<batch>` | `<n>` symbols | `+<n>/-<n>` | `$<n>` | `<n>m<n>s` | `$<n>` |
-| **Σ** | **`<n>` agents** | **`<n>` units** | **`+<n>/-<n>`** | **`$<n>`** | **`<n>m<n>s`** (longest; `<n>h<n>m<n>s` serial, `<n>`x) | **`$<n>`** |
+| session | batch | units | rv loc | rv $ | rv wall | $/symbol | $/type |
+|---|---|---|---|---|---|---|---|
+| `<session>` | `<batch>` | `<n>` types | `+<n>/-<n>` | `$<n>` | `<n>m<n>s` | — | `$<n>` |
+| `<session>` | `<batch>` | `<n>` symbols | `+<n>/-<n>` | `$<n>` | `<n>m<n>s` | `$<n>` | — |
+| **Σ** | **`<n>` agents** | **`<n>` types · `<n>` symbols** | **`+<n>/-<n>`** | **`$<n>`** | **`<n>m<n>s`** (longest; `<n>h<n>m<n>s` serial, `<n>`x) | **`$<n>`** | **`$<n>`** |
 
 ## Safety audit
 
