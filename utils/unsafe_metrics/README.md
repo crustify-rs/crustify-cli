@@ -21,7 +21,12 @@ the regex pass in `audit.py` for the subset of properties below.
 | `unsafe_fns` | `unsafe fn` DECLARATIONS. A block is a local assertion its author discharges; an `unsafe fn` pushes the obligation onto every caller, and a `pub` one exports it out of the crate. Counted post-expansion, so macro-emitted ones are included |
 | `unsafe_fns_seam` | ...the sanctioned subset, by the same predicate a pointer position uses: a `SEAM_FNS` conversion or the C-ABI gateway. The smell is `unsafe_fns - unsafe_fns_seam` |
 | `unsafe_fns_pub` | ...of `unsafe_fns`, those with public visibility |
-| `unsafe_impls` / `unsafe_traits` | `unsafe impl` / `unsafe trait` declarations — a lifecycle contract asserted once per type (ffibox's `CDropped` / `CCloned` / `CValued`) rather than per call site. Never sanctioned away |
+| `wrapper_newtypes` | wrapper types in the crate, detected STRUCTURALLY: a `#[repr(transparent)]` newtype whose single non-ZST field, after peeling further transparent newtypes, is a raw pointer / `NonNull` (a HANDLE) or a `#[repr(C)]` ADT by value (a LAYOUT newtype). Framework-independent — no trait or type name from ffibox enters it |
+| `wrapper_newtypes_layout` / `_handle` | ...split by which of the two roles |
+| `wrapper_newtypes_declared` | the `CCell`-declared count, the baseline the structural predicate replaces |
+| `wrapper_declared_nonconformant` | ...declared but failing the structural test: a wrapper without the layout it claims. **Should be 0** |
+| `wrapper_newtypes_undeclared` | ...structural but not declared: what keying on `CCell` could not see |
+| `unsafe_impls` / `unsafe_traits` | `unsafe impl` / `unsafe trait` declarations — a lifecycle contract asserted once per type (ffibox's `CDropped` / `CCloned` / `CValued`) rather than per call site. Never sanctioned away. Excludes `TrivialClone`, a compiler-internal marker `#[derive(Clone)]` emits as an `unsafe impl` |
 | `unsafe_blocks_ffi_export` | unsafe blocks at the C-ABI boundary — a fn carrying a C symbol name (`#[unsafe(no_mangle)]` / `#[export_name]`) **or** having a non-Rust ABI (`extern "C"`, the callback-shim form that needs no symbol name). One predicate, `in_ffi_export`, decides this and the pointer sanctioning below |
 
 ### Raw pointers in fn signatures (args / returns), region-classified

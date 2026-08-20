@@ -215,6 +215,85 @@ fn with_wrappers<R>(tcx: TyCtxt<'_>, f: impl FnOnce(&Wrappers) -> R) -> R {
     })
 }
 
+/// STRUCTURAL wrapper detection, replacing the `CCell`-declared keying.
+///
+/// A wrapper is a `#[repr(transparent)]` newtype whose single non-ZST field is,
+/// after peeling further transparent newtypes, either
+///   * a raw pointer / `NonNull` -- a HANDLE (borrowed or owning), or
+///   * a `#[repr(C)]` ADT by value -- a LAYOUT newtype over the C object.
+///
+/// This is what a wrapper IS, in any crate. Keying on `CCell` measured what an
+/// author DECLARED, which cannot see a hand-written wrapper (`principles.md`
+/// requires hand-writing them for lifetime-carrying and generic cases) and
+/// which ties the audit to ffibox. Every `CCell` wrapper satisfies the
+/// structural test by construction -- ffibox requires `#[repr(transparent)]`
+/// over `CType<Self::C>` -- so the structural set SUBSUMES the declared one,
+/// and a type that declares `CCell` while failing this test is a wrapper
+/// without the layout it claims: reported as `wrapper_declared_nonconformant`,
+/// never silently admitted.
+fn peel_transparent<'tcx>(tcx: TyCtxt<'tcx>, t: Ty<'tcx>) -> Ty<'tcx> {
+    let mut cur = t;
+    for _ in 0..8 {                       // depth guard; nesting is 2-3 in practice
+        // `NonNull<T>` lowers to a PATTERN type (`*const T is !null`), so a
+        // handle peeled to the bottom lands here rather than on `RawPtr`.
+        if let ty::TyKind::Pat(base, _) = cur.kind() {
+            cur = *base;
+            continue;
+        }
+        let ty::TyKind::Adt(def, args) = cur.kind() else { return cur };
+        if !def.repr().transparent() || !def.is_struct() {
+            return cur;
+        }
+        let mut inner = None;
+        for f in def.all_fields() {
+            let ft = tcx.type_of(f.did).instantiate(tcx, args).skip_norm_wip();
+            if is_phantom(tcx, ft) || is_zst_marker(tcx, ft) {
+                continue;
+            }
+            inner = Some(ft);
+            break;
+        }
+        match inner {
+            Some(i) => cur = i,
+            None => return cur,
+        }
+    }
+    cur
+}
+
+/// `PhantomPinned` and friends: unit-like ZST markers that are not storage.
+fn is_zst_marker(tcx: TyCtxt<'_>, t: Ty<'_>) -> bool {
+    matches!(t.kind(), ty::TyKind::Adt(d, _)
+        if matches!(tcx.item_name(d.did()).as_str(),
+                    "PhantomPinned" | "PhantomData"))
+}
+
+/// `Some(is_layout)` when `did` is structurally a wrapper: `true` for a LAYOUT
+/// newtype (C object inline), `false` for a HANDLE (pointer).
+fn structural_wrapper(tcx: TyCtxt<'_>, did: DefId) -> Option<bool> {
+    let def = tcx.adt_def(did);
+    if !def.is_struct() || !def.repr().transparent() {
+        return None;
+    }
+    let inner = peel_transparent(tcx, tcx.type_of(did).instantiate_identity().skip_norm_wip());
+    match inner.kind() {
+        // handle: a raw pointer, or the pointer newtypes one is transparent over
+        ty::TyKind::RawPtr(..) | ty::TyKind::Ref(..) => Some(false),
+        ty::TyKind::Adt(d, _) => {
+            let n = tcx.item_name(d.did());
+            if matches!(n.as_str(), "NonNull") {
+                Some(false)
+            } else if d.repr().c() {
+                // layout newtype over a `#[repr(C)]` type -- i.e. over C's bytes
+                Some(true)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Is `did` a wrapper type?
 fn is_wrapper(tcx: TyCtxt<'_>, did: DefId) -> bool {
     with_wrappers(tcx, |w| w.contains_key(&did))
@@ -331,7 +410,20 @@ struct Counts {
     unsafe_fns_seam: u64,
     unsafe_fns_pub: u64,
     unsafe_impls: u64,
-    unsafe_traits: u64,   // unsafe blocks at the C-ABI boundary
+    unsafe_traits: u64,
+    // Wrapper inventory. `wrapper_newtypes` is the STRUCTURAL count -- every
+    // `#[repr(transparent)]` newtype over a pointer or a `#[repr(C)]` type --
+    // split into the two roles. The `_declared` pair is the `CCell` baseline
+    // this replaces, kept so the two can be compared: `_nonconformant` is a
+    // type declaring `CCell` that fails the structural test, i.e. a wrapper
+    // without the layout it claims, and `_undeclared` is one the old keying
+    // could not see.
+    wrapper_newtypes: u64,
+    wrapper_newtypes_layout: u64,
+    wrapper_newtypes_handle: u64,
+    wrapper_newtypes_declared: u64,
+    wrapper_declared_nonconformant: u64,
+    wrapper_newtypes_undeclared: u64,   // unsafe blocks at the C-ABI boundary
                                      //   (`in_ffi_export`: `#[no_mangle]` /
                                      //   `#[export_name]` / `extern "C"`)
     // Signature raw pointers. ONE family, with the sanctioned subset named
@@ -1048,6 +1140,46 @@ impl Callbacks for MetricsCallbacks {
         // Every body owner (fn, closure, const/static initializer, ...). Each is
         // a separate typeck context; intravisit does not descend into nested
         // bodies, so visiting every owner covers the whole crate exactly once.
+        // Declaration-shaped metrics need their own pass: `hir_body_owners()`
+        // yields only fns, closures and initializers, so a struct / impl /
+        // trait never reaches it.
+        for ld in tcx.hir_crate_items(()).definitions() {
+            let did = ld.to_def_id();
+            match tcx.def_kind(did) {
+                DefKind::Struct => {
+                    let structural = structural_wrapper(tcx, did);
+                    let declared = is_wrapper(tcx, did);
+                    if let Some(is_layout) = structural {
+                        c.wrapper_newtypes += 1;
+                        if is_layout { c.wrapper_newtypes_layout += 1 }
+                        else { c.wrapper_newtypes_handle += 1 }
+                        if !declared { c.wrapper_newtypes_undeclared += 1 }
+                    }
+                    if declared {
+                        c.wrapper_newtypes_declared += 1;
+                        if structural.is_none() { c.wrapper_declared_nonconformant += 1 }
+                    }
+                }
+                DefKind::Impl { of_trait: true } => {
+                    // `TrivialClone` is a compiler-internal marker `#[derive(Clone)]`
+                    // emits as an `unsafe impl`; it asserts nothing the author
+                    // wrote and would swamp the real lifecycle contracts.
+                    let internal = tcx.item_name(
+                        tcx.impl_trait_ref(did).skip_binder().def_id
+                    ).as_str() == "TrivialClone";
+                    if !internal && tcx.impl_trait_header(did).safety.is_unsafe() {
+                        c.unsafe_impls += 1;
+                    }
+                }
+                DefKind::Trait => {
+                    if tcx.trait_def(did).safety.is_unsafe() {
+                        c.unsafe_traits += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+
         for owner in tcx.hir_body_owners() {
             let did = owner.to_def_id();
             let in_wrapper = in_wrapper_impl(tcx, did);
@@ -1061,19 +1193,6 @@ impl Callbacks for MetricsCallbacks {
                     wrapped_c: &wrapped_c, c: &mut c, sites: &mut sites,
                 };
                 v.visit_body(body);
-            }
-            // `unsafe impl` / `unsafe trait` declarations. These bind a
-            // lifecycle contract (ffibox's `CDropped` / `CCloned` / `CValued`),
-            // so they are an unsafe assertion the author makes once for a type
-            // rather than per call site -- counted, never sanctioned away.
-            if let DefKind::Impl { of_trait: true } = tcx.def_kind(did) {
-                if tcx.impl_trait_header(did).safety.is_unsafe() {
-                    c.unsafe_impls += 1;
-                }
-            }
-            if matches!(tcx.def_kind(did), DefKind::Trait)
-                && tcx.trait_def(did).safety.is_unsafe() {
-                c.unsafe_traits += 1;
             }
             // Signature analysis (fns only).
             if matches!(tcx.def_kind(did), DefKind::Fn | DefKind::AssocFn) {
@@ -1219,8 +1338,8 @@ impl Callbacks for MetricsCallbacks {
             }
         }
         println!(
-            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"unsafe_blocks_ffi_export\":{},\"unsafe_fns\":{},\"unsafe_fns_seam\":{},\"unsafe_fns_pub\":{},\"unsafe_impls\":{},\"unsafe_traits\":{},\"raw_ptr_args\":{},\"raw_ptr_rets\":{},\"raw_ptr_seam\":{},\"raw_ptr_wrapped\":{},\"raw_ptr_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
-            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.unsafe_blocks_ffi_export, c.unsafe_fns, c.unsafe_fns_seam, c.unsafe_fns_pub, c.unsafe_impls, c.unsafe_traits, c.raw_ptr_args, c.raw_ptr_rets, c.raw_ptr_seam, c.raw_ptr_wrapped, c.raw_ptr_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
+            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"unsafe_blocks_ffi_export\":{},\"unsafe_fns\":{},\"unsafe_fns_seam\":{},\"unsafe_fns_pub\":{},\"unsafe_impls\":{},\"unsafe_traits\":{},\"wrapper_newtypes\":{},\"wrapper_newtypes_layout\":{},\"wrapper_newtypes_handle\":{},\"wrapper_newtypes_declared\":{},\"wrapper_declared_nonconformant\":{},\"wrapper_newtypes_undeclared\":{},\"raw_ptr_args\":{},\"raw_ptr_rets\":{},\"raw_ptr_seam\":{},\"raw_ptr_wrapped\":{},\"raw_ptr_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
+            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.unsafe_blocks_ffi_export, c.unsafe_fns, c.unsafe_fns_seam, c.unsafe_fns_pub, c.unsafe_impls, c.unsafe_traits, c.wrapper_newtypes, c.wrapper_newtypes_layout, c.wrapper_newtypes_handle, c.wrapper_newtypes_declared, c.wrapper_declared_nonconformant, c.wrapper_newtypes_undeclared, c.raw_ptr_args, c.raw_ptr_rets, c.raw_ptr_seam, c.raw_ptr_wrapped, c.raw_ptr_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
             sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj), sites_json(&sites.field_ref), sites_json(&sites.raw_deref)
         );
         Compilation::Continue
