@@ -56,7 +56,7 @@ _GLOBAL_COUNTS = (
     "unsafe_block_code_lines", "unsafe_blocks_wrapper_impl",
     "unsafe_blocks_ffi_export",
     "unsafe_fns", "unsafe_fns_seam", "unsafe_fns_pub", "unsafe_impls",
-    "unsafe_traits", "wrapper_newtypes", "wrapper_newtypes_declared",
+    "unsafe_traits", "ffi_calls", "wrapper_newtypes", "wrapper_newtypes_declared",
     "wrapper_declared_nonconformant", "wrapper_newtypes_undeclared",
     "raw_ptr_args", "raw_ptr_rets", "raw_ptr_seam", "raw_ptr_wrapped",
     "raw_ptr_in_wrapper",

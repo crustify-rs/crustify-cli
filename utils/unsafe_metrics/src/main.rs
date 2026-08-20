@@ -408,6 +408,13 @@ struct Counts {
     unsafe_fns_pub: u64,
     unsafe_impls: u64,
     unsafe_traits: u64,
+    // Calls to a foreign item -- one declared in an `extern` block
+    // (`is_foreign_item`), which is the FFI boundary itself and is
+    // crate-agnostic: a bindgen `*-sys` binding, `libc`, or a local
+    // `extern "C"` block all resolve to it. Calling one is an unsafe op, so
+    // this is the crate-wide unsafe-FFI-call surface. Resolution-based on the
+    // callee, so alias- and re-export-proof.
+    ffi_calls: u64,
     // Wrapper inventory. `wrapper_newtypes` is the STRUCTURAL count -- every
     // `#[repr(transparent)]` newtype over a pointer or a `#[repr(C)]` type --
     // split into the two roles. The `_declared` pair is the `CCell` baseline
@@ -1182,6 +1189,16 @@ impl Callbacks for MetricsCallbacks {
 
         for owner in tcx.hir_body_owners() {
             let did = owner.to_def_id();
+            {
+                let typeck = tcx.typeck(owner);
+                let mut callees: Vec<(DefId, Span)> = Vec::new();
+                CallCollector { typeck, out: &mut callees }
+                    .visit_body(tcx.hir_body_owned_by(owner));
+                c.ffi_calls += callees
+                    .iter()
+                    .filter(|(d, _)| tcx.is_foreign_item(*d))
+                    .count() as u64;
+            }
             let in_wrapper = in_wrapper_impl(tcx, did);
             let in_ffi = in_ffi_export(tcx, did);
             let in_impl = in_any_impl(tcx, did);
@@ -1338,8 +1355,8 @@ impl Callbacks for MetricsCallbacks {
             }
         }
         println!(
-            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"unsafe_blocks_ffi_export\":{},\"unsafe_fns\":{},\"unsafe_fns_seam\":{},\"unsafe_fns_pub\":{},\"unsafe_impls\":{},\"unsafe_traits\":{},\"wrapper_newtypes\":{},\"wrapper_newtypes_declared\":{},\"wrapper_declared_nonconformant\":{},\"wrapper_newtypes_undeclared\":{},\"raw_ptr_args\":{},\"raw_ptr_rets\":{},\"raw_ptr_seam\":{},\"raw_ptr_wrapped\":{},\"raw_ptr_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
-            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.unsafe_blocks_ffi_export, c.unsafe_fns, c.unsafe_fns_seam, c.unsafe_fns_pub, c.unsafe_impls, c.unsafe_traits, c.wrapper_newtypes, c.wrapper_newtypes_declared, c.wrapper_declared_nonconformant, c.wrapper_newtypes_undeclared, c.raw_ptr_args, c.raw_ptr_rets, c.raw_ptr_seam, c.raw_ptr_wrapped, c.raw_ptr_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
+            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"unsafe_blocks_ffi_export\":{},\"unsafe_fns\":{},\"unsafe_fns_seam\":{},\"unsafe_fns_pub\":{},\"unsafe_impls\":{},\"unsafe_traits\":{},\"ffi_calls\":{},\"wrapper_newtypes\":{},\"wrapper_newtypes_declared\":{},\"wrapper_declared_nonconformant\":{},\"wrapper_newtypes_undeclared\":{},\"raw_ptr_args\":{},\"raw_ptr_rets\":{},\"raw_ptr_seam\":{},\"raw_ptr_wrapped\":{},\"raw_ptr_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
+            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.unsafe_blocks_ffi_export, c.unsafe_fns, c.unsafe_fns_seam, c.unsafe_fns_pub, c.unsafe_impls, c.unsafe_traits, c.ffi_calls, c.wrapper_newtypes, c.wrapper_newtypes_declared, c.wrapper_declared_nonconformant, c.wrapper_newtypes_undeclared, c.raw_ptr_args, c.raw_ptr_rets, c.raw_ptr_seam, c.raw_ptr_wrapped, c.raw_ptr_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
             sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj), sites_json(&sites.field_ref), sites_json(&sites.raw_deref)
         );
         Compilation::Continue

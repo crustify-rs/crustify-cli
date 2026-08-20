@@ -25,6 +25,7 @@ the regex pass in `audit.py` for the subset of properties below.
 | `wrapper_newtypes_declared` | the `CCell`-declared count, the baseline the structural predicate replaces |
 | `wrapper_declared_nonconformant` | ...declared but failing the structural test: a wrapper without the layout it claims. **Should be 0** |
 | `wrapper_newtypes_undeclared` | ...structural but not declared: what keying on `CCell` could not see |
+| `ffi_calls` | calls to a foreign item — one declared in an `extern` block (`is_foreign_item`), which is the FFI boundary itself and is crate-agnostic: a bindgen `*-sys` binding, `libc`, or a local `extern "C"` block all resolve to it. Calling one is an unsafe op, so this is the crate-wide unsafe-FFI-call surface. Resolution-based on the callee, so alias- and re-export-proof. The `UM_MODE=usage` pass reports the same calls broken out per symbol and per caller region (`ffi_calls` / `ffi_call_sites`) |
 | `unsafe_impls` / `unsafe_traits` | `unsafe impl` / `unsafe trait` declarations — a lifecycle contract asserted once per type (ffibox's `CDropped` / `CCloned` / `CValued`) rather than per call site. Never sanctioned away. Excludes `TrivialClone`, a compiler-internal marker `#[derive(Clone)]` emits as an `unsafe impl` |
 | `unsafe_blocks_ffi_export` | unsafe blocks at the C-ABI boundary — a fn carrying a C symbol name (`#[unsafe(no_mangle)]` / `#[export_name]`) **or** having a non-Rust ABI (`extern "C"`, the callback-shim form that needs no symbol name). One predicate, `in_ffi_export`, decides this and the pointer sanctioning below |
 
