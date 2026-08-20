@@ -111,8 +111,7 @@ def scaffold(
 
     # --- act
     if create:
-        stats = _materialize(layout, entries,
-                             _scope_map(layout, target), _field_map(layout, target))
+        stats = _materialize(layout, entries)
         mstats = _materialize_manifests(layout, doc)
         print(f"[crustify-cli scaffold --create] {stats}{mstats} → {layout.rust}")
     else:
@@ -144,29 +143,6 @@ def _in_scope_names(layout, target: Path) -> set[str]:
                     if e.get(key):
                         names.add(e[key])
     return names
-
-
-def _scope_map(layout, target: Path) -> dict[str, str]:
-    """``name -> scope.TARGETED | scope.IMPORTED`` from scope.json — which section an
-    item sits in. Types key on ``name``, with a ``type`` fallback for un-migrated
-    records; functions/globals on ``name``. TARGETED is applied second so it wins
-    on the (rare) overlap -- the sections are NOT a strict partition. Empty when
-    scope cannot be composed."""
-    from compose import scope as _sc
-    from crustify import scope as _scope_mod
-    try:
-        doc = _scope_mod.build(layout, target, stage="scaffold")
-    except SystemExit:
-        return {}
-    out: dict[str, str] = {}
-    for sec in (_sc.IMPORTED, _sc.TARGETED):  # targeted second -> wins on overlap
-        section = doc.get(sec) or {}
-        for group in ("functions", "globals", "types"):
-            for e in section.get(group) or []:
-                for key in ("name", "type"):
-                    if e.get(key):
-                        out[e[key]] = sec
-    return out
 
 
 def _port_touched(layout, target) -> dict[str, set] | None:
@@ -357,17 +333,7 @@ def _path_filter(layout, target, sel: str) -> str:
 
 # ------------------------------------------------------------------- materialize
 
-def _materialize(layout, entries: list[dict],
-                 scope_map: dict[str, str] | None = None,
-                 field_map: dict[str, list[str]] | None = None) -> str:
-    scope_map = scope_map or {}
-    # Template generators: the one macro kind that carries an anchor.
-    try:
-        from compose import macro_families as _mf
-        generators = set(_mf.load(layout.codeql))
-    except Exception:
-        generators = set()
-    field_map = field_map or {}
+def _materialize(layout, entries: list[dict]) -> str:
     created = preserved = links = 0
     for e in entries:
         crate_dir = layout.repo_root / e["crate_path"]
@@ -375,7 +341,7 @@ def _materialize(layout, entries: list[dict],
         rs_path = crate_dir / rs
         if not rs_path.exists():
             rs_path.parent.mkdir(parents=True, exist_ok=True)
-            rs_path.write_text(_stub(e, scope_map, field_map, generators))
+            rs_path.write_text(_stub(e))
             created += 1
         else:
             # Already materialized. Nothing to top up: members are anchored by
@@ -571,52 +537,33 @@ def _has_field_anchor(text: str, tag: str, fld: str) -> bool:
         text) is not None
 
 
-def _stub(e: dict, scope_map: dict[str, str] | None = None,
-          field_map: dict[str, list[str]] | None = None,
-          generators: set[str] | None = None) -> str:
-    # Each member is laid as one neutral `// crustify:todo: <item>` line. The
-    # verb is not knowable here — scaffold runs before translate, and whether an
-    # item is wrapped or replaced is `--objective`, chosen per wave by the
-    # orchestrator. The agent promotes the line to `/// Wraps:` or
-    # `/// Replaces:` according to what it did.
-    # Macros are NOT anchored: bindgen owns their `ffi::` bindings /
-    # `crustify_<NAME>` shims and the C `#define` stays, so the port/wrap stages
-    # never fill a macro -- with one exception. A TEMPLATE GENERATOR expands to a
-    # whole aggregate, and the generic its instances alias is Rust this stage
-    # writes, so it gets an anchor like any other item. `generators` is the set
-    # `compose.macro_families` recognises; the same carve-out exists in
-    # `wrap._is_macro` and in the import closure's admission gate. A type additionally gets one accessor
-    # anchor per field, laid right after the item anchor so it binds to it as
-    # the owner. The wrap/port AGENT locates each by its anchor,
-    # fills it, and promotes `//` -> `///` while dropping the todo. This is the
-    # agent's fill contract — the scheduler schedules blindly and no longer reads
-    # these markers, so the verb + todo are load-bearing for the agent, not the
-    # scheduler.
-    scope_map = scope_map or {}
-    field_map = field_map or {}
-    generators = generators or set()
+def _stub(e: dict) -> str:
+    # The skeleton only. Materialization creates the file, the `mod` tree and
+    # the crate — one-time, single-threaded work whose absence would break
+    # compilation — and lays NO anchors.
+    #
+    # Anchors are the scheduler's: `place_anchors` writes them once a batch's
+    # worktree exists, against that worktree, so an agent sees exactly the
+    # placeholders for its own units and each anchor lands on the branch that
+    # fills it. Emitting them here instead put one per in-scope entity into the
+    # shared tree — ~25k on a libcrypto wrap, almost all for items no wave ever
+    # touches — and every sibling agent then read placeholders it does not owe.
+    # It also keyed each anchor on the bare tag, so a name with two definitions
+    # (a per-TU dispatch variant) silently got the fields of one of them.
+    #
+    # A surviving `// crustify:todo:` is the record that an item is OPEN, per
+    # `docs/principles.md`. That only holds if nothing lays one speculatively.
     src = e.get("tu") or (
         "(no TU — placed by headers: "
         + ", ".join(e.get("headers") or ["?"]) + ")")
-    lines = ["//! crustify:managed — generated module skeleton.",
-             "//!",
-             f"//! C source: {src}",
-             "//! Each item below is a scaffolded anchor the translate stage fills.",
-             ""]
-    m = e["members"]
-    any_member = False
-    for kind in ("types", "functions", "callbacks", "globals", "macros"):
-        for nm in m.get(kind) or []:
-            if kind == "macros" and nm not in generators:
-                continue
-            lines += [_todo_anchor(nm), ""]
-            if kind == "types":
-                for fld in field_map.get(nm, ()):
-                    lines += [_todo_anchor(f"{nm}.{fld}"), ""]
-            any_member = True
-    if not any_member:
-        lines.append("// (no members homed here yet)")
-    return "\n".join(lines) + "\n"
+    return "\n".join([
+        "//! crustify:managed — generated module skeleton.",
+        "//!",
+        f"//! C source: {src}",
+        "//! Anchors are laid per batch by the translate scheduler, in the",
+        "//! worktree of the agent that owes them — see `place_anchors`.",
+        "",
+    ]) + "\n"
 
 
 def _wire(crate_dir: Path, rs: str) -> int:
