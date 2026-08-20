@@ -316,8 +316,6 @@ struct Counts {
     unsafe_block_lines: u64,      // raw brace-to-brace span (incl. blanks/comments)
     unsafe_block_code_lines: u64, // non-blank, non-`//`-comment lines only
     unsafe_blocks_wrapper_impl: u64, // unsafe blocks inside `impl <wrapper T>`
-    wrapper_impl_macro: u64,         //   of which macro-generated (get/get_mut)
-    wrapper_impl_handwritten: u64,   //   of which hand-written methods
     unsafe_blocks_ffi_export: u64,   // unsafe blocks at the C-ABI boundary
                                      //   (`in_ffi_export`: `#[no_mangle]` /
                                      //   `#[export_name]` / `extern "C"`)
@@ -441,28 +439,30 @@ impl<'a, 'tcx> Visitor<'tcx> for BodyVisitor<'a, 'tcx> {
             {
                 self.c.unsafe_blocks += 1;
                 if self.in_wrapper {
+                    // Region attribution only. Where the block's TEXT came from
+                    // does not change what it is: an unsafe block in a wrapper
+                    // impl is an unsafe block in a wrapper impl.
                     self.c.unsafe_blocks_wrapper_impl += 1;
-                    if b.span.from_expansion() {
-                        self.c.wrapper_impl_macro += 1;
-                    } else {
-                        self.c.wrapper_impl_handwritten += 1;
-                    }
                 }
                 if self.in_ffi {
                     self.c.unsafe_blocks_ffi_export += 1;
                 }
                 // Line metrics: outermost blocks only (nested ones would
-                // double-count), and HAND-WRITTEN only. A macro-generated block
-                // has no lines of its own in this crate — its span lives in the
-                // macro's defining crate, so measuring it either charged
-                // ffibox's source lines to this crate (`unsafe_block_lines`) or
-                // silently dropped the block when `span_to_snippet` could not
-                // reach that text (`unsafe_block_code_lines`). The invocation's
-                // own lines are already in `code_lines` as ordinary code, and
-                // the blocks themselves are still counted by `unsafe_blocks` /
-                // `wrapper_impl_macro`, so the volume is not lost — only the
-                // line attribution, which was never this crate's to make.
-                if self.depth == 0 && !b.span.from_expansion() {
+                // double-count). EVERY outermost block counts, macro-expanded
+                // or not: the metric asks how much unsafe is compiled into this
+                // crate, and a block ffibox's `define_ctype!` emitted runs here
+                // exactly like one an agent typed. Sanctioning is the only axis
+                // that excuses anything, and it does not apply to blocks --
+                // `unsafe_blocks_wrapper_impl` / `_ffi_export` ATTRIBUTE a block
+                // to a region, they do not exempt it.
+                //
+                // The earlier exclusion was justified by `span_to_snippet` being
+                // unable to reach a macro span's text; that is not so -- every
+                // macro-expanded block on libippcp resolves -- and dropping them
+                // understated the ratio in proportion to how macro-driven the
+                // wrapping is (7.28% against 10.01% here), which is the same bias
+                // the `code_lines` rebuild removed from the denominator.
+                if self.depth == 0 {
                     let sm = self.tcx.sess.source_map();
                     let lo = sm.lookup_char_pos(b.span.lo()).line;
                     let hi = sm.lookup_char_pos(b.span.hi()).line;
@@ -967,9 +967,9 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
         let st = &sites[i];
         let kind = if s.kind == SeedKind::Type { "type" } else { "func" };
         format!(
-            "{{\"name\":\"{}\",\"c_name\":\"{}\",\"kind\":\"{}\",\"region_owners\":{},\"unsafe_blocks\":{},\"unsafe_block_code_lines\":{},\"wrapper_macro\":{},\"wrapper_handwritten\":{},\"raw_ptr_derefs\":{},\"field_proj\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"ref_to_type_wrapper\":{},\"void_ptr_smell\":{},\"naked\":{},\"naked_sites\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{}}}",
+            "{{\"name\":\"{}\",\"c_name\":\"{}\",\"kind\":\"{}\",\"region_owners\":{},\"unsafe_blocks\":{},\"unsafe_block_code_lines\":{},\"raw_ptr_derefs\":{},\"field_proj\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"ref_to_type_wrapper\":{},\"void_ptr_smell\":{},\"naked\":{},\"naked_sites\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{}}}",
             s.name, s.c_name, kind, region_owners[i], m.unsafe_blocks, m.unsafe_block_code_lines,
-            m.wrapper_impl_macro, m.wrapper_impl_handwritten, m.raw_ptr_derefs,
+            m.raw_ptr_derefs,
             m.field_proj_wrapped, m.field_proj_outside_impl, m.field_ref_wrapped, m.ref_to_type_wrapper,
             m.void_ptr_smell, naked[i],
             sites_json(&st.naked), sites_json(&st.raw_ptr),
@@ -1182,8 +1182,8 @@ impl Callbacks for MetricsCallbacks {
             }
         }
         println!(
-            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"wrapper_impl_macro\":{},\"wrapper_impl_handwritten\":{},\"unsafe_blocks_ffi_export\":{},\"raw_ptr_args\":{},\"raw_ptr_rets\":{},\"raw_ptr_seam\":{},\"raw_ptr_wrapped\":{},\"raw_ptr_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"void_ptr_smell_macro\":{},\"void_ptr_smell_handwritten\":{},\"raw_ptr_smell_macro\":{},\"raw_ptr_smell_handwritten\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
-            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.wrapper_impl_macro, c.wrapper_impl_handwritten, c.unsafe_blocks_ffi_export, c.raw_ptr_args, c.raw_ptr_rets, c.raw_ptr_seam, c.raw_ptr_wrapped, c.raw_ptr_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.void_ptr_smell_macro, c.void_ptr_smell_handwritten, c.raw_ptr_smell_macro, c.raw_ptr_smell_handwritten, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
+            "{{\"crate\":\"{}\",\"unsafe_blocks\":{},\"unsafe_block_stmts\":{},\"unsafe_block_lines\":{},\"unsafe_block_code_lines\":{},\"unsafe_blocks_wrapper_impl\":{},\"unsafe_blocks_ffi_export\":{},\"raw_ptr_args\":{},\"raw_ptr_rets\":{},\"raw_ptr_seam\":{},\"raw_ptr_wrapped\":{},\"raw_ptr_in_wrapper\":{},\"ref_to_type_wrapper\":{},\"field_proj_wrapped\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"void_ptr_sanctioned\":{},\"void_ptr_smell\":{},\"raw_ptr_derefs\":{},\"raw_ptr_derefs_outside_impl\":{},\"total_stmts\":{},\"code_lines\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{},\"field_ref_sites\":{},\"raw_deref_sites\":{}}}",
+            krate, c.unsafe_blocks, c.unsafe_block_stmts, c.unsafe_block_lines, c.unsafe_block_code_lines, c.unsafe_blocks_wrapper_impl, c.unsafe_blocks_ffi_export, c.raw_ptr_args, c.raw_ptr_rets, c.raw_ptr_seam, c.raw_ptr_wrapped, c.raw_ptr_in_wrapper, c.ref_to_type_wrapper, c.field_proj_wrapped, c.field_proj_outside_impl, c.field_ref_wrapped, c.void_ptr_sanctioned, c.void_ptr_smell, c.raw_ptr_derefs, c.raw_ptr_derefs_outside_impl, c.total_stmts, c.code_lines,
             sites_json(&sites.raw_ptr), sites_json(&sites.void_ptr), sites_json(&sites.field_proj), sites_json(&sites.field_ref), sites_json(&sites.raw_deref)
         );
         Compilation::Continue

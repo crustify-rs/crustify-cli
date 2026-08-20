@@ -53,8 +53,8 @@ def audit(
 # Global-section count fields merged (summed) across the per-crate emissions.
 _GLOBAL_COUNTS = (
     "unsafe_blocks", "unsafe_block_stmts", "unsafe_block_lines",
-    "unsafe_block_code_lines", "unsafe_blocks_wrapper_impl", "wrapper_impl_macro",
-    "wrapper_impl_handwritten", "unsafe_blocks_ffi_export",
+    "unsafe_block_code_lines", "unsafe_blocks_wrapper_impl",
+    "unsafe_blocks_ffi_export",
     "raw_ptr_args", "raw_ptr_rets", "raw_ptr_seam", "raw_ptr_wrapped",
     "raw_ptr_in_wrapper",
     "ref_to_type_wrapper", "field_ref_wrapped",

@@ -11,15 +11,13 @@ the regex pass in `audit.py` for the subset of properties below.
 |---|---|
 | `unsafe_blocks` | number of `unsafe { ... }` blocks (real code; macro-expanded included, doc-comment examples excluded) |
 | `unsafe_block_stmts` | `hir::Stmt` nodes inside unsafe blocks (desugared; tail exprs are not stmts) |
-| `unsafe_block_lines` | source lines spanned by unsafe blocks, outermost only (raw `{`..`}` span; incl. blank/comment lines). **Hand-written only** — a macro-generated block's span lives in the macro's defining crate, so charging its lines here would bill ffibox's source to this crate; the blocks themselves still count in `unsafe_blocks` / `wrapper_impl_macro`, and the invocation's own lines are in `code_lines` |
+| `unsafe_block_lines` | source lines spanned by unsafe blocks, outermost only (raw `{`..`}` span; incl. blank/comment lines). Every outermost block counts, macro-expanded or not — the question is how much unsafe is compiled into this crate, and sanctioning is the only axis that excuses anything |
 | `unsafe_block_code_lines` | same, but non-blank / non-`//`-comment lines only (apples-to-apples with `code_lines`) |
 
 ### Region attribution of unsafe blocks
 | field | meaning |
 |---|---|
 | `unsafe_blocks_wrapper_impl` | unsafe blocks inside `impl T` / `impl Tr for T` where `T` is a `define_*ctype!` wrapper |
-| `wrapper_impl_macro` | ...of which macro-generated (the `define_*ctype!` seam accessors) |
-| `wrapper_impl_handwritten` | ...of which hand-written wrapper methods |
 | `unsafe_blocks_ffi_export` | unsafe blocks at the C-ABI boundary — a fn carrying a C symbol name (`#[unsafe(no_mangle)]` / `#[export_name]`) **or** having a non-Rust ABI (`extern "C"`, the callback-shim form that needs no symbol name). One predicate, `in_ffi_export`, decides this and the pointer sanctioning below |
 
 ### Raw pointers in fn signatures (args / returns), region-classified
@@ -125,7 +123,7 @@ wrapper) or a **function**; selectors union:
 Emits `{"crate":...,"seeds":[ {per-seed} ]}`. Per seed:
 - **region** = a type's `impl T` blocks (self-type == T), or a function's body.
 - **own-region** metrics (scoped to the region): `unsafe_blocks`,
-  `unsafe_block_code_lines`, `wrapper_macro`/`wrapper_handwritten`,
+  `unsafe_block_code_lines`,
   `raw_ptr_derefs`, `field_proj` / `field_proj_outside_impl`,
   `ref_to_type_wrapper`, `void_ptr_smell`.
 - **`naked`** = uses of the seed's C entity outside the sanctioned homes
