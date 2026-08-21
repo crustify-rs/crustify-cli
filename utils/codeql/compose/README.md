@@ -136,8 +136,9 @@ At a glance:
 ### Imported-section inclusion gate
 
 Composers emit an imported entry **only when** some targeted-side site reaches
-it, or -- on a wrap campaign -- when `api_headers` declares it. The reach signal is
-kind-specific:
+it. This is objective-independent; `api_headers` declarations populate the
+separate `api` view, which may intersect imported for a genuine re-export. The
+reach signal is kind-specific:
 
 | Kind                   | Reach signal                                                |
 | ---------------------- | ----------------------------------------------------------- |

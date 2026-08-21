@@ -775,11 +775,11 @@ def compose(
     tgt_globals = scope.load_entities(_sj, scope.TARGETED, "globals") if _sj else set()
     tgt_macros = scope.load_entities(_sj, scope.TARGETED, "macros") if _sj else set()
     # The composed IMPORTED surface, as an admission floor — the same role
-    # `_in_import_surface` plays on the type side. The reach gates below ask
-    # "does target code reach this", which has no answer for a WRAP campaign
-    # (`api_headers`): there is no targeted code, and the surface was seeded off
-    # the named headers instead. A scope.json entry with no manifest record is
-    # unschedulable, so whatever the section lists gets one.
+    # `_in_import_surface` plays on the type side. Scope composition already
+    # applied the authoritative, objective-independent reach walk. A scope.json
+    # entry with no manifest record is unschedulable, so whatever that derived
+    # section lists gets one even when the specialized gates below cannot
+    # reproduce its admission path locally.
     imp_keys = (
         (scope.load_entities(_sj, scope.IMPORTED, "functions")
          | scope.load_entities(_sj, scope.IMPORTED, "globals")
