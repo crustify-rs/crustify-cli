@@ -109,8 +109,25 @@ def _audit_hir(target, sel, *, all, names, crate, mod, file):
     # The driver only emits during compilation; cargo skips cached crates and
     # `UM_MODE` is not in its fingerprint, so bust the workspace crates' roots
     # to force re-emission on every audit (deps stay cached).
-    for root in list(ws.glob("*/src/lib.rs")) + list(ws.glob("*/src/main.rs")):
-        root.touch()
+    #
+    # The roots come from cargo, not from a glob over the tree: a glob has to
+    # assume both a depth and a `src/` directory, and a workspace owes neither.
+    # git2-rs breaks both at once -- `git2` is the root crate (`src/lib.rs`, no
+    # leading component) and `libgit2-sys` sets `path = "lib.rs"` (no `src/` at
+    # all) -- so `*/src/lib.rs` matched one of its four targets. Cargo already
+    # knows every target's real `src_path`; `--no-deps` keeps it to the
+    # workspace members, which is the set being busted.
+    meta = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        cwd=ws, capture_output=True, text=True)
+    if meta.returncode != 0:
+        raise SystemExit("audit: `cargo metadata` failed in "
+                         f"{ws}:\n{meta.stderr[-1500:]}")
+    for pkg in json.loads(meta.stdout)["packages"]:
+        for tgt in pkg["targets"]:
+            root = Path(tgt["src_path"])
+            if root.is_file():
+                root.touch()
 
     env = dict(os.environ)
     env["UM_MODE"] = "seed"
@@ -159,6 +176,15 @@ def _audit_hir(target, sel, *, all, names, crate, mod, file):
         elif "unsafe_blocks" in d:
             globals_.append(d)
 
+    # No global line at all means no crate recompiled, so the driver never ran:
+    # a cache the touch above failed to bust. Reporting that as an all-zero
+    # `global` reads as "audited, found nothing" -- the one wrong answer -- so
+    # it is an error instead.
+    if not globals_:
+        raise SystemExit(
+            "audit: no crate emitted metrics — nothing was recompiled under "
+            "the HIR auditor.\nThe workspace build was served from cache; the "
+            "run measured nothing.")
     if not entries and not (all or crate):
         raise SystemExit(f"audit: no types/symbols matched {sel}.")
     doc = {"seed": sel, "entries": entries, "global": _merge_globals(globals_)}
