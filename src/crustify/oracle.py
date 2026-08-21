@@ -293,13 +293,13 @@ def _add_query_command(sub) -> None:
     files_q = query_sub.add_parser(
         "files",
         help="Scope files: --targeted-only (what the campaign owns) or "
-             "--imported-only (the derived / seeded closure).",
+             "--imported-only (its derived external dependency frontier).",
     )
     files_sel = files_q.add_mutually_exclusive_group()
     files_sel.add_argument(
         "--targeted-only", action="store_true", dest="targeted_only",
         help="Print what the campaign owns (scope.json.targeted.files). "
-             "Empty on a `wrap` campaign.",
+             "Computed identically for `port` and `wrap` campaigns.",
     )
     files_q.add_argument(
         "--api-only", action="store_true", dest="api_only",
@@ -308,9 +308,10 @@ def _add_query_command(sub) -> None:
     )
     files_sel.add_argument(
         "--imported-only", action="store_true", dest="imported_only",
-        help="Print the imported closure — the header surface the campaign "
-             "reaches through depends_on, or, on a `wrap` campaign, the surface "
-             "seeded off `api_headers` (scope.json.imported.files).",
+        help="Print the imported closure — entities reached by the targeted "
+             "set but owned outside it, with files narrowed to the headers "
+             "actually used (scope.json.imported.files). Objective-independent; "
+             "a `wrap` campaign schedules the separate API view.",
     )
 
     dag_q = query_sub.add_parser(

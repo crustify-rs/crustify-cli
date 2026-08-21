@@ -26,11 +26,13 @@ the target's scope.json — **derived and regenerable** from ``targeted``
 when it changes). An item that survives through >1 distinct header is genuinely
 imported two ways: a re-export signal, recorded rather than collapsed.
 
-Membership says only that the campaign does not OWN the item. On a `wrap`
-campaign nothing is owned, so this section IS the scope, seeded off
-`api_headers` rather than derived. What will be DONE with an item — a safe
-wrapper over the seam, or a native translation — is the translate stage's
-per-wave `--objective`, chosen by the orchestrator.
+Membership says only that the campaign does not OWN the item. Ownership is
+objective-independent: both `port` and `wrap` campaigns own the entities homed
+in `impl_files` + `api_headers`, and this section is their derived external
+frontier. What a wrap campaign publishes and schedules is the separate `api`
+view. What will be DONE with an item — a safe wrapper over the seam, or a native
+translation — is the translate stage's per-wave `--objective`, chosen by the
+orchestrator.
 """
 
 from __future__ import annotations
@@ -788,4 +790,3 @@ def compose_import(
         "macros": sorted(buckets["macros"], key=lambda r: (r["name"], r["defined_in"])),
         "types": sorted(types_out, key=lambda r: (r["name"], r["defined_in"])),
     }
-

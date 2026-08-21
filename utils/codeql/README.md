@@ -47,7 +47,7 @@ scalar/aggregate), `includes`.
 | `reach.py` | per-entity T2 reach rollups (callers, field accesses, type uses) | manifests, dag |
 | `filter_spec.py` / `path_partition.py` | `scope.json` in-scope filter; stem-group -> manifest-dir map | all stages |
 | `scope_manifest.py` | the in-memory `targeted` section; `import_closure.py` adds the `imported` one. `analyze scope --dump` snapshots the pair | `analyze scope`, and every stage via `crustify.scope.build` |
-| `import_closure.py` | the `imported` section: what the targeted set reaches, or — on a `wrap` campaign — what `api_headers` declares | scope / wave scheduling |
+| `import_closure.py` | the `imported` section: the objective-independent external frontier reached by the targeted set; `api_headers` separately defines the `api` view | scope / wave scheduling |
 | `types_manifest.py` / `syms_manifest.py` | `types.json` / `syms.json` skeletons + full dependency edges | `analyze types` / `symbols` |
 | `deps_dag.py` | in-memory unified layered types+symbols DAG (cast-centrality + fallback/back-fill edges); `analyze dag --dump` snapshots it | `analyze dag`, `query dag`, wrap scheduler |
 | `scaffold_manifest.py` | **legacy** — only `sync_workspace` (the shared `rust/` Cargo workspace member list) is still live, called from `bindgen_manifest`. `crates.json` has no producer: it is authored outside the pipeline (see `docs/schemas/crates.md`), and `.rs` stubs come from `crustify.scaffold` | `bindgen` |
