@@ -28,6 +28,7 @@ Set with `-e` on `docker run`.
 | `OPENAI_API_KEY` | key | — | required for `CRUSTIFY_BACKEND=codex` |
 | `CRUSTIFY_BACKEND` | `claude`, `codex` | `claude` | orchestrator only; wave agents come from `crustify-cli --model` |
 | `CRUSTIFY_CAMPAIGN` | directory name under `bench/` | empty | empty → orchestrator asks what to port; name that does not resolve → exit 2; a mounted `/campaign/TASK.md` wins over it |
+| `CRUSTIFY_BILLING` | `api`, `subscription` | `api` | orchestrator only; `api` adds `--bare` (claude) or an env-key provider block (codex) — neither CLI uses the key in the environment without it; key missing → exit 2 |
 | `CRUSTIFY_HEADLESS` | `0`, `1` | `0` | `1` answers no approval gate — use only where `TASK.md` pre-answers them |
 | `CRUSTIFY_EFFORT` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, empty | `high` | codex orchestrator only, ignored by claude; empty leaves codex its default; anything else → exit 2 |
 

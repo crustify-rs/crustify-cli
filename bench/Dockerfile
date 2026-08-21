@@ -163,6 +163,17 @@ ENV CRUSTIFY_CAMPAIGN=
 # by the claude backend.
 ENV CRUSTIFY_EFFORT=high
 
+# How the ORCHESTRATOR authenticates, the container's echo of crustify-cli's
+# `--billing`. Neither CLI switches to API-key auth on the key alone -- claude
+# keeps sending its stored OAuth token unless `--bare`, and codex's built-in
+# openai provider reads auth.json and 401s on OPENAI_API_KEY unless the
+# provider is redeclared with an env_key -- so a key in the environment does
+# nothing until this says to use it. `api` (the default, since a fresh image
+# holds no login) or `subscription` for a run with credentials mounted in. A
+# wave's translate agents get theirs from the TASK.md config, through
+# `crustify-cli --billing`.
+ENV CRUSTIFY_BILLING=api
+
 RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       '# Quick Setup step 4. /opt/crustify-cli is a mount point, so only a' \
       '# prompt generated now matches the checkout driving this run: the' \
@@ -201,11 +212,36 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       '        effort=(-c "model_reasoning_effort=\"${CRUSTIFY_EFFORT}\"") ;;' \
       '    *) echo "bad CRUSTIFY_EFFORT: ${CRUSTIFY_EFFORT}" >&2; exit 2 ;;' \
       'esac' \
+      '# Checked here rather than left to the CLI: claude without a key it' \
+      '# can use issues no request and exits 0 having done nothing, which' \
+      '# reads as a campaign that ran and produced nothing.' \
+      'auth=()' \
+      'case "${CRUSTIFY_BILLING:-}" in' \
+      '    subscription) ;;' \
+      '    api|"")' \
+      '        case "${CRUSTIFY_BACKEND}" in' \
+      '        claude)' \
+      '            [ -n "${ANTHROPIC_API_KEY:-}" ] || {' \
+      '                echo "CRUSTIFY_BILLING=api needs ANTHROPIC_API_KEY" >&2' \
+      '                exit 2; }' \
+      '            auth=(--bare) ;;' \
+      '        codex)' \
+      '            [ -n "${OPENAI_API_KEY:-}" ] || {' \
+      '                echo "CRUSTIFY_BILLING=api needs OPENAI_API_KEY" >&2' \
+      '                exit 2; }' \
+      '            auth=(-c "model_provider=openai_apikey"' \
+      '                  -c "model_providers.openai_apikey.name=\"OpenAI\""' \
+      '                  -c "model_providers.openai_apikey.base_url=\"https://api.openai.com/v1\""' \
+      '                  -c "model_providers.openai_apikey.env_key=\"OPENAI_API_KEY\""' \
+      '                  -c "model_providers.openai_apikey.wire_api=\"responses\"") ;;' \
+      '        esac ;;' \
+      '    *) echo "bad CRUSTIFY_BILLING: ${CRUSTIFY_BILLING}" >&2; exit 2 ;;' \
+      'esac' \
       'case "${CRUSTIFY_BACKEND}:${CRUSTIFY_HEADLESS}" in' \
-      '    claude:0) exec claude "$skip" "$text" "$@" ;;' \
-      '    claude:1) exec claude "$skip" -p "$text" "$@" ;;' \
-      '    codex:0)  exec codex "$bypass" "${effort[@]}" "$text" "$@" ;;' \
-      '    codex:1)  exec codex exec "$bypass" "${effort[@]}" "$text" "$@" ;;' \
+      '    claude:0) exec claude "$skip" "${auth[@]}" "$text" "$@" ;;' \
+      '    claude:1) exec claude "$skip" "${auth[@]}" -p "$text" "$@" ;;' \
+      '    codex:0)  exec codex "$bypass" "${auth[@]}" "${effort[@]}" "$text" "$@" ;;' \
+      '    codex:1)  exec codex exec "$bypass" "${auth[@]}" "${effort[@]}" "$text" "$@" ;;' \
       '    *) echo "bad CRUSTIFY_BACKEND/CRUSTIFY_HEADLESS:" \' \
       '            "${CRUSTIFY_BACKEND}/${CRUSTIFY_HEADLESS}" >&2; exit 2 ;;' \
       'esac' \
