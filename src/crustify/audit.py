@@ -62,9 +62,11 @@ _GLOBAL_COUNTS = (
     "raw_ptr_in_wrapper",
     "ref_to_type_wrapper", "field_ref_wrapped",
     "field_proj_wrapped", "field_proj_outside_impl", "void_ptr_sanctioned",
-    "void_ptr_smell", "raw_ptr_derefs", "total_stmts", "code_lines",
+    "void_ptr_smell", "raw_ptr_derefs", "raw_ptr_derefs_outside_impl",
+    "total_stmts", "code_lines",
 )
-_GLOBAL_SITES = ("raw_ptr_sites", "void_ptr_sites", "field_proj_sites")
+_GLOBAL_SITES = ("raw_ptr_sites", "void_ptr_sites", "field_proj_sites",
+                 "field_ref_sites", "raw_deref_sites")
 
 
 def _merge_globals(globals_):
