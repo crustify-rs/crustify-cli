@@ -51,21 +51,35 @@ the regex pass in `audit.py` for the subset of properties below.
 | `code_lines` | crate-wide code LoC (denominator): non-blank, non-`//`-comment lines, counted over the **union of HIR definition spans** rather than the raw file text. A `cfg`-stripped item has no `DefId`, so an inline `#[cfg(test)] mod tests` — never compiled under `cargo build`, so unable to reach any numerator — no longer inflates it (same for any `#[cfg(..)]`-disabled item). Macro-expanded defs map through `source_callsite()` to their invocation line; containers (`mod`/`impl`/`trait`/`extern` blocks) contribute only their opening and closing lines, since their full span still covers text `cfg` removed from inside them |
 
 ## Classification model (all resolution-based, not textual)
-- **wrapper `W`** (`structural_wrapper`) — a `#[repr(transparent)]` struct whose
-  single non-ZST field, after peeling further transparent newtypes and
-  `NonNull`'s pattern type, is either:
-  - a `#[repr(C)]` ADT by value — a **LAYOUT newtype**, storage IS the C
-    object's bytes. This is the `wrapper_newtypes` set, and the set where
-    `&W` / `&mut W` is forbidden.
-  - a raw pointer / `&` / `NonNull` — a **HANDLE**, storage is a Rust-owned
-    pointer slot. A reference to one is ordinary and is not counted.
+- **wrapper `W`** (`structural_wrapper`) — one of two shapes:
+  - **HANDLE** — a `#[repr(transparent)]` struct peeling (through further
+    transparent newtypes and `NonNull`'s pattern type) to a pointer. Storage is
+    a Rust-owned pointer slot, so a reference to one is ordinary and is not
+    counted. Its C type is the POINTEE.
+  - **LAYOUT newtype** — a `#[repr(C)]` or `#[repr(transparent)]` struct with
+    at least one non-ZST field whose peeled bottom is a `#[repr(C)]` ADT FROM
+    ANOTHER CRATE. Storage includes the C object's bytes. This is the
+    `wrapper_newtypes` set, and the set where `&W` / `&mut W` is forbidden.
+
+  Not gated on a single field: `git2`'s `RawSmartSubtransport` is a four-field
+  `#[repr(C)]` struct with the C struct first and a `Box<dyn Trait>` beside it,
+  which libgit2 writes through — the shape a one-field rule misses and the one
+  where `&W` is least defensible.
+
+  The CROSS-CRATE step is what separates a wrapper from C's own aggregate:
+  `git2::Oid { raw: raw::git_oid }` reaches into libgit2-sys, while
+  `libgit2_sys::git_index_entry { ctime: git_index_time, .. }` matches the same
+  repr shape within one crate. A same-crate `#[repr(C)]` field is recursed into
+  instead, so a wrapper reaching C through its own intermediate struct still
+  resolves. Depth- and cycle-guarded.
 
   No trait or type name from ffibox enters this, so a hand-written wrapper is
   policed like a generated one.
-- **wrapped C type** — `W -> C` from the same peel, so "C has a wrapper" needs
-  no declaration either: a LAYOUT newtype's C is the `#[repr(C)]` ADT the peel
-  lands on, a HANDLE's is its POINTEE. `None` where there is no ADT to name
-  (`*mut c_void`). The `*_wrapped` metrics read these values.
+- **wrapped C type** — `W -> {C…}` from the same walk, so "C has a wrapper"
+  needs no declaration either. A SET: a layout newtype may carry several C
+  objects. Empty where there is no ADT to name (`*mut c_void`). The `*_wrapped`
+  metrics read these values; a type seed carries them all, and reports them
+  `|`-joined as its `c_name`.
 - **wrapper impl** — an `impl` whose self-type (HIR path-resolved) is a declared wrapper.
 - **seam method** — fn named `as_ptr`/`as_mut_ptr`/`as_c_ptr`/`as_raw`/`from_ptr`/
   `from_raw`/`to_ptr`/`to_raw`/`into_raw` (raw ptrs there are the expected boundary).

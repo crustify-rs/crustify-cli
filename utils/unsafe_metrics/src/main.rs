@@ -153,10 +153,11 @@ fn pointee_has_wrapper(tcx: TyCtxt<'_>, p: Ty<'_>, wrapped_c: &HashSet<DefId>) -
     }
 }
 
-/// The wrapper inventory of the current crate: `wrapper ADT -> the C type it
-/// wraps`, `None` where the wrapper names no ADT (`*mut c_void`). Key presence
-/// IS `is_wrapper`; the values are `wrapped_c`.
-type Wrappers = HashMap<DefId, Option<DefId>>;
+/// The wrapper inventory of the current crate: `wrapper ADT -> the C types it
+/// wraps`, empty where the wrapper names no ADT (`*mut c_void`) — a LAYOUT
+/// newtype may carry several. Key presence IS `is_wrapper`; the flattened
+/// values are `wrapped_c`.
+type Wrappers = HashMap<DefId, Vec<DefId>>;
 
 /// Structural inventory: every local struct `structural_wrapper` admits.
 ///
@@ -301,46 +302,111 @@ fn is_zst_marker(tcx: TyCtxt<'_>, t: Ty<'_>) -> bool {
                     "PhantomPinned" | "PhantomData"))
 }
 
-/// `Some((is_layout, c))` when `did` is structurally a wrapper: `is_layout` is
-/// `true` for a LAYOUT newtype (C object inline), `false` for a HANDLE
-/// (pointer). `c` is the C type it wraps, which the peel already reaches:
+/// Peel transparent newtypes, then unwrap arrays/slices, to the ADT a field
+/// ultimately stores. `[git_oid; 4]` and `CType<ffi::git_oid>` both land on
+/// `git_oid`.
+fn field_adt<'tcx>(tcx: TyCtxt<'tcx>, t: Ty<'tcx>) -> Option<ty::AdtDef<'tcx>> {
+    let mut cur = peel_transparent(tcx, t);
+    for _ in 0..8 {
+        match cur.kind() {
+            ty::TyKind::Array(e, _) | ty::TyKind::Slice(e) => {
+                cur = peel_transparent(tcx, *e);
+            }
+            ty::TyKind::Adt(d, _) => return Some(*d),
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// The C types whose BYTES `did` stores inline, transitively.
 ///
-///   * LAYOUT -- the `#[repr(C)]` ADT the peel lands on IS the C type.
-///     `#[repr(transparent)] W(CType<ffi::C>)` peels through `CType`
-///     (transparent, its `PhantomPinned` skipped as a ZST marker) to `ffi::C`.
-///   * HANDLE -- the POINTEE is the C type. `CPtr<'a, T>` peels through
-///     `NonNull<T>`'s pattern type to `*const T`.
+/// A field is C's when it is a `#[repr(C)]` ADT from ANOTHER CRATE. That
+/// cross-crate step is what separates a wrapper from C's own aggregate:
+/// `git2::Oid { raw: raw::git_oid }` reaches into libgit2-sys, while
+/// `libgit2_sys::git_index_entry { ctime: git_index_time, .. }` matches the
+/// same repr shape entirely within its own crate and is not a wrapper of
+/// anything. Both are `#[repr(C)]` carrying a `#[repr(C)]` field, so nothing
+/// short of the crate boundary tells them apart.
 ///
-/// `None` for the pointee where there is no ADT to name (`*mut c_void`,
-/// `*mut u8`): still a wrapper, just one that maps to no C type.
-fn structural_wrapper(tcx: TyCtxt<'_>, did: DefId) -> Option<(bool, Option<DefId>)> {
+/// A same-crate `#[repr(C)]` field is RECURSED into rather than accepted, so a
+/// wrapper that reaches C through its own intermediate struct still resolves.
+/// Depth- and cycle-guarded.
+fn embedded_c(tcx: TyCtxt<'_>, did: DefId, depth: u32,
+              seen: &mut HashSet<DefId>, out: &mut Vec<DefId>) {
+    if depth > 8 {
+        return;
+    }
+    for f in tcx.adt_def(did).all_fields() {
+        let ft = tcx.type_of(f.did).instantiate_identity().skip_norm_wip();
+        if is_phantom(tcx, ft) || is_zst_marker(tcx, ft) {
+            continue;
+        }
+        let Some(d) = field_adt(tcx, ft) else { continue };
+        if !d.repr().c() {
+            continue;
+        }
+        if d.did().krate != did.krate {
+            if !out.contains(&d.did()) {
+                out.push(d.did());
+            }
+        } else if seen.insert(d.did()) {
+            embedded_c(tcx, d.did(), depth + 1, seen, out);
+        }
+    }
+}
+
+/// `Some((is_layout, cs))` when `did` is structurally a wrapper. `is_layout` is
+/// `true` for a LAYOUT newtype (C's bytes inline), `false` for a HANDLE
+/// (pointer). `cs` are the C types it wraps, which the peel already reaches:
+///
+///   * HANDLE -- the POINTEE. `#[repr(transparent)]` over a raw pointer, or
+///     over `NonNull` / `CPtr` and friends, which peel to one.
+///   * LAYOUT -- every `#[repr(C)]` ADT reached by `embedded_c`. `W` itself
+///     must be `#[repr(C)]` or `#[repr(transparent)]`; both give it C's bytes.
+///     NOT gated on a single field: a struct carrying a C object beside Rust
+///     ones still has those bytes inside it, and `&W` still asserts noalias /
+///     readonly / validity across them.
+///
+/// `cs` is empty for a wrapper naming no ADT (`*mut c_void`).
+fn structural_wrapper(tcx: TyCtxt<'_>, did: DefId) -> Option<(bool, Vec<DefId>)> {
     let def = tcx.adt_def(did);
-    if !def.is_struct() || !def.repr().transparent() {
+    if !def.is_struct() {
         return None;
     }
-    let inner = peel_transparent(tcx, tcx.type_of(did).instantiate_identity().skip_norm_wip());
     let adt_did = |t: Ty<'_>| match t.kind() {
         ty::TyKind::Adt(d, _) => Some(d.did()),
         _ => None,
     };
-    match inner.kind() {
-        // handle: a raw pointer, or the pointer newtypes one is transparent over
-        ty::TyKind::RawPtr(p, _) | ty::TyKind::Ref(_, p, _) => Some((false, adt_did(*p))),
-        ty::TyKind::Adt(d, args) => {
-            let n = tcx.item_name(d.did());
-            if matches!(n.as_str(), "NonNull") {
+    // HANDLE first: a transparent newtype whose storage IS a pointer.
+    if def.repr().transparent() {
+        let inner =
+            peel_transparent(tcx, tcx.type_of(did).instantiate_identity().skip_norm_wip());
+        match inner.kind() {
+            ty::TyKind::RawPtr(p, _) | ty::TyKind::Ref(_, p, _) => {
+                return Some((false, adt_did(*p).into_iter().collect()));
+            }
+            ty::TyKind::Adt(d, args) if tcx.item_name(d.did()).as_str() == "NonNull" => {
                 // Reached only when the pattern-type peel did not fire; the
                 // pointee is the sole type argument.
-                Some((false, args.types().next().and_then(adt_did)))
-            } else if d.repr().c() {
-                // layout newtype over a `#[repr(C)]` type -- i.e. over C's bytes
-                Some((true, Some(d.did())))
-            } else {
-                None
+                return Some((
+                    false,
+                    args.types().next().and_then(adt_did).into_iter().collect(),
+                ));
             }
+            _ => {}
         }
-        _ => None,
     }
+    // LAYOUT: C's bytes inline.
+    if def.repr().c() || def.repr().transparent() {
+        let mut cs = Vec::new();
+        let mut seen = HashSet::from([did]);
+        embedded_c(tcx, did, 0, &mut seen, &mut cs);
+        if !cs.is_empty() {
+            return Some((true, cs));
+        }
+    }
+    None
 }
 
 /// Is `did` a wrapper type?
@@ -348,9 +414,9 @@ fn is_wrapper(tcx: TyCtxt<'_>, did: DefId) -> bool {
     with_wrappers(tcx, |w| w.contains_key(&did))
 }
 
-/// The C type `did` wraps, from the structural peel.
-fn wrapper_c_ty(tcx: TyCtxt<'_>, did: DefId) -> Option<DefId> {
-    with_wrappers(tcx, |w| w.get(&did).copied().flatten())
+/// The C types `did` wraps, from the structural peel.
+fn wrapper_c_tys(tcx: TyCtxt<'_>, did: DefId) -> Vec<DefId> {
+    with_wrappers(tcx, |w| w.get(&did).cloned().unwrap_or_default())
 }
 
 /// The `DefId` of an impl's self-type (`impl T` / `impl Tr for T` -> `T`), via
@@ -830,8 +896,8 @@ struct Seed {
     name: String,
     kind: SeedKind,
     repr: DefId,          // wrapper struct (Type) or fn (Func)
-    c_did: Option<DefId>, // wrapped C type (Type seed) — naked type-ref target
-    c_name: String,       // C tag — naked match for `*-sys` fn calls (Func seed)
+    c_dids: Vec<DefId>,   // wrapped C types (Type seed) — naked type-ref targets
+    c_names: Vec<String>, // C tags — selector match, and `*-sys` call match (Func)
 }
 
 fn def_file(tcx: TyCtxt<'_>, did: DefId) -> String {
@@ -857,17 +923,17 @@ fn resolve_seeds(tcx: TyCtxt<'_>) -> Vec<Seed> {
             _ => continue,
         };
         let rust_name = tcx.item_name(did).to_string();
-        let (c_did, c_name) = match kind {
+        let (c_dids, c_names) = match kind {
             SeedKind::Type => {
-                let c = wrapper_c_ty(tcx, did);
-                let cn = c.map(|c| tcx.item_name(c).to_string()).unwrap_or_default();
-                (c, cn)
+                let cs = wrapper_c_tys(tcx, did);
+                let ns = cs.iter().map(|c| tcx.item_name(*c).to_string()).collect();
+                (cs, ns)
             }
             // For a fn, the C tag is its name (ffi_export re-exports carry the C name).
-            SeedKind::Func => (None, rust_name.clone()),
+            SeedKind::Func => (Vec::new(), vec![rust_name.clone()]),
         };
         let matched = if !names.is_empty() {
-            names.iter().any(|n| *n == rust_name || *n == c_name)
+            names.iter().any(|n| *n == rust_name || c_names.iter().any(|c| c == n))
         } else if let Some(f) = &file {
             def_file(tcx, did).ends_with(f.as_str())
         } else if let Some(d) = &dir {
@@ -876,7 +942,7 @@ fn resolve_seeds(tcx: TyCtxt<'_>) -> Vec<Seed> {
             all
         };
         if matched {
-            seeds.push(Seed { name: rust_name, kind, repr: did, c_did, c_name });
+            seeds.push(Seed { name: rust_name, kind, repr: did, c_dids, c_names });
         }
     }
     seeds
@@ -1071,7 +1137,7 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
             let hir_id = tcx.local_def_id_to_hir_id(owner);
             let decl = tcx.hir_node(hir_id).fn_decl();
             for (i, s) in seeds.iter().enumerate() {
-                if let (SeedKind::Type, Some(c)) = (s.kind, s.c_did) {
+                for c in s.c_dids.iter().copied().filter(|_| s.kind == SeedKind::Type) {
                     for t in sig.inputs().iter().copied().chain(std::iter::once(sig.output())) {
                         naked[i] += count_ty_did(t, c);
                     }
@@ -1104,7 +1170,8 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
             if kn.as_str().ends_with("_sys") {
                 let nm = tcx.item_name(cdid);
                 for (i, s) in seeds.iter().enumerate() {
-                    if s.kind == SeedKind::Func && s.c_name == nm.as_str() {
+                    if s.kind == SeedKind::Func
+                        && s.c_names.iter().any(|c| c == nm.as_str()) {
                         naked[i] += 1;
                         sites[i].naked.push(span_site(tcx, cspan));
                     }
@@ -1119,7 +1186,7 @@ fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
         let kind = if s.kind == SeedKind::Type { "type" } else { "func" };
         format!(
             "{{\"name\":\"{}\",\"c_name\":\"{}\",\"kind\":\"{}\",\"region_owners\":{},\"unsafe_blocks\":{},\"unsafe_block_code_lines\":{},\"raw_ptr_derefs\":{},\"field_proj\":{},\"field_proj_outside_impl\":{},\"field_ref_wrapped\":{},\"ref_to_type_wrapper\":{},\"void_ptr_smell\":{},\"naked\":{},\"naked_sites\":{},\"raw_ptr_sites\":{},\"void_ptr_sites\":{},\"field_proj_sites\":{}}}",
-            s.name, s.c_name, kind, region_owners[i], m.unsafe_blocks, m.unsafe_block_code_lines,
+            s.name, s.c_names.join("|"), kind, region_owners[i], m.unsafe_blocks, m.unsafe_block_code_lines,
             m.raw_ptr_derefs,
             m.field_proj_wrapped, m.field_proj_outside_impl, m.field_ref_wrapped, m.ref_to_type_wrapper,
             m.void_ptr_smell, naked[i],
