@@ -315,22 +315,37 @@ def compose(
     syms_by_dir, _syms_scope, _ = syms_compose(csv_dir_t1, csv_dir_t2, filter_spec)
     types_by_dir, _types_scope, _ = types_compose(csv_dir_t1, csv_dir_t2, filter_spec)
 
-    # FFI surface = the WRAP closure from scope.json (authoritative, deduped).
-    # Keyed (name|type, defined_in); sym and type buckets resolved separately so
-    # a name can't cross-match the wrong kind.
+    # FFI surface = the imported closure, plus the owned public API when this
+    # target is a wrap campaign.  A port calls only out-of-target C through its
+    # -sys crates; a wrap must also call the target C functions it exposes as
+    # safe Rust.  `api` is an axis, so the latter set is API ∩ TARGETED (never
+    # API ∪ TARGETED, which would accidentally bind private implementation).
+    # Keyed (name|type, defined_in); symbol and type buckets stay separate so a
+    # name cannot cross-match the wrong kind.
     sj = filter_spec.scope_json_path
-    import_sym_keys = (scope.scope_membership(
+    ffi_sym_keys = (scope.scope_membership(
         sj, scope.IMPORTED, kinds=("functions", "globals", "macros")) if sj else None)
-    import_type_keys = (scope.scope_membership(
+    ffi_type_keys = (scope.scope_membership(
         sj, scope.IMPORTED, kinds=("types",)) if sj else None)
+    if sj and scope.campaign_objective(sj) == "wrap":
+        ffi_sym_keys |= (
+            scope.scope_membership(
+                sj, scope.TARGETED, kinds=("functions", "globals", "macros"))
+            & scope.scope_membership(
+                sj, scope.API, kinds=("functions", "globals", "macros"))
+        )
+        ffi_type_keys |= (
+            scope.scope_membership(sj, scope.TARGETED, kinds=("types",))
+            & scope.scope_membership(sj, scope.API, kinds=("types",))
+        )
     sym_records, type_records = records
     wrap_syms = _load_inscope_annotated(
         syms_by_dir, sym_records, "syms.json", "symbols", "name",
-        keys=import_sym_keys,
+        keys=ffi_sym_keys,
     )
     wrap_types = _load_inscope_annotated(
         types_by_dir, type_records, "types.json", "types", "name",
-        keys=import_type_keys,
+        keys=ffi_type_keys,
     )
 
     # Alias → owning lib, and alias → all-names (tag + typedefs), over every
