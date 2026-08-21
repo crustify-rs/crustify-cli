@@ -22,7 +22,7 @@ the regex pass in `audit.py` for the subset of properties below.
 | `unsafe_fns_seam` | ...the sanctioned subset, by the same predicate a pointer position uses: a `SEAM_FNS` conversion or the C-ABI gateway. The smell is `unsafe_fns - unsafe_fns_seam` |
 | `unsafe_fns_pub` | ...of `unsafe_fns`, those with public visibility |
 | `wrapper_newtypes` | LAYOUT newtypes in the crate — a `#[repr(transparent)]` newtype whose single non-ZST field, after peeling further transparent newtypes, is a `#[repr(C)]` ADT by value, i.e. the C object's own bytes. Detected structurally; no trait or type name from ffibox enters it. HANDLES (transparent over a raw pointer / `NonNull`) are wrappers too but are NOT counted here: the set this reports is the one where `&W` / `&mut W` is forbidden, which is exactly the layout newtypes — a reference to a handle covers Rust-owned pointer storage and is ordinary |
-| `wrapper_newtypes_declared` | the `CCell`-declared count, the baseline the structural predicate replaces |
+| `wrapper_newtypes_declared` | the `CCell` / `CLayout`-declared count. The ONLY metric family reading a trait name, and it reads it as the SUBJECT — nothing else in the pass depends on a declaration |
 | `wrapper_declared_nonconformant` | ...declared but failing the structural test: a wrapper without the layout it claims. **Should be 0** |
 | `wrapper_newtypes_undeclared` | ...structural but not declared: what keying on `CCell` could not see |
 | `ffi_calls` | calls to a foreign item — one declared in an `extern` block (`is_foreign_item`), which is the FFI boundary itself and is crate-agnostic: a bindgen `*-sys` binding, `libc`, or a local `extern "C"` block all resolve to it. Calling one is an unsafe op, so this is the crate-wide unsafe-FFI-call surface. Resolution-based on the callee, so alias- and re-export-proof. The `UM_MODE=usage` pass reports the same calls broken out per symbol and per caller region (`ffi_calls` / `ffi_call_sites`) |
@@ -62,11 +62,10 @@ the regex pass in `audit.py` for the subset of properties below.
 
   No trait or type name from ffibox enters this, so a hand-written wrapper is
   policed like a generated one.
-- **wrapped C type** (`scan_wrappers`) — the `type C` of an `impl CCell` /
-  `impl CLayout`, giving `W -> C` and so "C has a wrapper". Declaration-keyed
-  because structure alone names no C type; the `*_wrapped` metrics and
-  `unsafe_blocks_wrapper_impl` read this map, and are 0 in a crate that
-  implements neither trait.
+- **wrapped C type** — `W -> C` from the same peel, so "C has a wrapper" needs
+  no declaration either: a LAYOUT newtype's C is the `#[repr(C)]` ADT the peel
+  lands on, a HANDLE's is its POINTEE. `None` where there is no ADT to name
+  (`*mut c_void`). The `*_wrapped` metrics read these values.
 - **wrapper impl** — an `impl` whose self-type (HIR path-resolved) is a declared wrapper.
 - **seam method** — fn named `as_ptr`/`as_mut_ptr`/`as_c_ptr`/`as_raw`/`from_ptr`/
   `from_raw`/`to_ptr`/`to_raw`/`into_raw` (raw ptrs there are the expected boundary).

@@ -99,7 +99,7 @@ fn is_type_wrapper(tcx: TyCtxt<'_>, did: DefId) -> bool {
     //
     // Decided structurally (see `structural_wrapper`), so a hand-written layout
     // newtype that never declares `CCell` is policed like a generated one.
-    structural_wrapper(tcx, did) == Some(true)
+    matches!(structural_wrapper(tcx, did), Some((true, _)))
 }
 
 /// True if `t` is `&W` or `&mut W` where `W` is a LAYOUT newtype (see
@@ -153,8 +153,29 @@ fn pointee_has_wrapper(tcx: TyCtxt<'_>, p: Ty<'_>, wrapped_c: &HashSet<DefId>) -
     }
 }
 
-/// The wrapper inventory of the current crate: `wrapper ADT -> its C type ADT`.
-type Wrappers = HashMap<DefId, DefId>;
+/// The wrapper inventory of the current crate: `wrapper ADT -> the C type it
+/// wraps`, `None` where the wrapper names no ADT (`*mut c_void`). Key presence
+/// IS `is_wrapper`; the values are `wrapped_c`.
+type Wrappers = HashMap<DefId, Option<DefId>>;
+
+/// Structural inventory: every local struct `structural_wrapper` admits.
+///
+/// Nothing here reads a trait, an associated item, or a type name from ffibox,
+/// so a hand-written wrapper and a `define_ctype!` one are found alike, and the
+/// pass carries no dependency on the framework it audits.
+fn scan_structural(tcx: TyCtxt<'_>) -> Wrappers {
+    let mut out = HashMap::new();
+    for ld in tcx.hir_crate_items(()).definitions() {
+        let did = ld.to_def_id();
+        if !matches!(tcx.def_kind(did), DefKind::Struct) {
+            continue;
+        }
+        if let Some((_, c)) = structural_wrapper(tcx, did) {
+            out.insert(did, c);
+        }
+    }
+    out
+}
 
 /// Scan local trait impls for the wrapper seam, reading each wrapper's C type
 /// from the `type C` associated item.
@@ -168,7 +189,7 @@ type Wrappers = HashMap<DefId, DefId>;
 ///
 /// `CLayout` is accepted alongside `CCell` so a tree part-way through a
 /// migration still resolves; whichever impl carries `type C` is the one read.
-fn scan_wrappers(tcx: TyCtxt<'_>) -> Wrappers {
+fn scan_wrappers(tcx: TyCtxt<'_>) -> HashMap<DefId, DefId> {
     let mut c_ty = HashMap::new();
     for ld in tcx.hir_crate_items(()).definitions() {
         let did = ld.to_def_id();
@@ -200,15 +221,30 @@ thread_local! {
     /// Built once per compilation (the driver is one rustc invocation per crate).
     static WRAPPERS: std::cell::RefCell<Option<Wrappers>> =
         const { std::cell::RefCell::new(None) };
+    static DECLARED: std::cell::RefCell<Option<HashMap<DefId, DefId>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 fn with_wrappers<R>(tcx: TyCtxt<'_>, f: impl FnOnce(&Wrappers) -> R) -> R {
     WRAPPERS.with(|c| {
         let mut b = c.borrow_mut();
         if b.is_none() {
-            *b = Some(scan_wrappers(tcx));
+            *b = Some(scan_structural(tcx));
         }
         f(b.as_ref().unwrap())
+    })
+}
+
+/// The `CCell` / `CLayout`-declared set. Read ONLY by
+/// `wrapper_newtypes_declared` / `_nonconformant` / `_undeclared`, where the
+/// declaration is the subject being measured rather than a dependency.
+fn is_declared_wrapper(tcx: TyCtxt<'_>, did: DefId) -> bool {
+    DECLARED.with(|c| {
+        let mut b = c.borrow_mut();
+        if b.is_none() {
+            *b = Some(scan_wrappers(tcx));
+        }
+        b.as_ref().unwrap().contains_key(&did)
     })
 }
 
@@ -265,24 +301,40 @@ fn is_zst_marker(tcx: TyCtxt<'_>, t: Ty<'_>) -> bool {
                     "PhantomPinned" | "PhantomData"))
 }
 
-/// `Some(is_layout)` when `did` is structurally a wrapper: `true` for a LAYOUT
-/// newtype (C object inline), `false` for a HANDLE (pointer).
-fn structural_wrapper(tcx: TyCtxt<'_>, did: DefId) -> Option<bool> {
+/// `Some((is_layout, c))` when `did` is structurally a wrapper: `is_layout` is
+/// `true` for a LAYOUT newtype (C object inline), `false` for a HANDLE
+/// (pointer). `c` is the C type it wraps, which the peel already reaches:
+///
+///   * LAYOUT -- the `#[repr(C)]` ADT the peel lands on IS the C type.
+///     `#[repr(transparent)] W(CType<ffi::C>)` peels through `CType`
+///     (transparent, its `PhantomPinned` skipped as a ZST marker) to `ffi::C`.
+///   * HANDLE -- the POINTEE is the C type. `CPtr<'a, T>` peels through
+///     `NonNull<T>`'s pattern type to `*const T`.
+///
+/// `None` for the pointee where there is no ADT to name (`*mut c_void`,
+/// `*mut u8`): still a wrapper, just one that maps to no C type.
+fn structural_wrapper(tcx: TyCtxt<'_>, did: DefId) -> Option<(bool, Option<DefId>)> {
     let def = tcx.adt_def(did);
     if !def.is_struct() || !def.repr().transparent() {
         return None;
     }
     let inner = peel_transparent(tcx, tcx.type_of(did).instantiate_identity().skip_norm_wip());
+    let adt_did = |t: Ty<'_>| match t.kind() {
+        ty::TyKind::Adt(d, _) => Some(d.did()),
+        _ => None,
+    };
     match inner.kind() {
         // handle: a raw pointer, or the pointer newtypes one is transparent over
-        ty::TyKind::RawPtr(..) | ty::TyKind::Ref(..) => Some(false),
-        ty::TyKind::Adt(d, _) => {
+        ty::TyKind::RawPtr(p, _) | ty::TyKind::Ref(_, p, _) => Some((false, adt_did(*p))),
+        ty::TyKind::Adt(d, args) => {
             let n = tcx.item_name(d.did());
             if matches!(n.as_str(), "NonNull") {
-                Some(false)
+                // Reached only when the pattern-type peel did not fire; the
+                // pointee is the sole type argument.
+                Some((false, args.types().next().and_then(adt_did)))
             } else if d.repr().c() {
                 // layout newtype over a `#[repr(C)]` type -- i.e. over C's bytes
-                Some(true)
+                Some((true, Some(d.did())))
             } else {
                 None
             }
@@ -296,9 +348,9 @@ fn is_wrapper(tcx: TyCtxt<'_>, did: DefId) -> bool {
     with_wrappers(tcx, |w| w.contains_key(&did))
 }
 
-/// The C type `did` wraps, from its seam's `type C`.
+/// The C type `did` wraps, from the structural peel.
 fn wrapper_c_ty(tcx: TyCtxt<'_>, did: DefId) -> Option<DefId> {
-    with_wrappers(tcx, |w| w.get(&did).copied())
+    with_wrappers(tcx, |w| w.get(&did).copied().flatten())
 }
 
 /// The `DefId` of an impl's self-type (`impl T` / `impl Tr for T` -> `T`), via
@@ -947,7 +999,7 @@ impl<'a, 'tcx> Visitor<'tcx> for NakedTyVisitor<'a, 'tcx> {
 /// `UM_MODE=seed`: per-seed audit metrics (own-region + naked footprint).
 fn seed_json(tcx: TyCtxt<'_>, krate: rustc_span::Symbol) -> String {
     // wrapped C types (for naked-ref matching + wrapper detection reuse).
-    let wrapped_c: HashSet<DefId> = with_wrappers(tcx, |w| w.values().copied().collect());
+    let wrapped_c: HashSet<DefId> = with_wrappers(tcx, |w| w.values().flatten().copied().collect());
     let seeds = resolve_seeds(tcx);
     let mut metrics: Vec<Counts> = (0..seeds.len()).map(|_| Counts::default()).collect();
     let mut sites: Vec<Sites> = (0..seeds.len()).map(|_| Sites::default()).collect();
@@ -1125,7 +1177,7 @@ impl Callbacks for MetricsCallbacks {
         }
         // Set of C types that have a wrapper (a safe wrapper exists). Each
         // wrapper contributes its seam's `type C`, either representation.
-        let wrapped_c: HashSet<DefId> = with_wrappers(tcx, |w| w.values().copied().collect());
+        let wrapped_c: HashSet<DefId> = with_wrappers(tcx, |w| w.values().flatten().copied().collect());
 
         let mut c = Counts::default();
         let mut sites = Sites::default();
@@ -1139,20 +1191,20 @@ impl Callbacks for MetricsCallbacks {
             let did = ld.to_def_id();
             match tcx.def_kind(did) {
                 DefKind::Struct => {
-                    let structural = structural_wrapper(tcx, did);
-                    let declared = is_wrapper(tcx, did);
+                    let is_layout = matches!(structural_wrapper(tcx, did), Some((true, _)));
+                    let declared = is_declared_wrapper(tcx, did);
                     // LAYOUT newtypes only. A handle is a wrapper too, but it
                     // is not the set this audit polices: `&handle` covers
                     // Rust-owned pointer storage and is ordinary, while `&W` on
                     // a layout newtype is the hazard `ref_to_type_wrapper`
                     // exists to keep at 0.
-                    if structural == Some(true) {
+                    if is_layout {
                         c.wrapper_newtypes += 1;
                         if !declared { c.wrapper_newtypes_undeclared += 1 }
                     }
                     if declared {
                         c.wrapper_newtypes_declared += 1;
-                        if structural != Some(true) {
+                        if !is_layout {
                             c.wrapper_declared_nonconformant += 1
                         }
                     }
