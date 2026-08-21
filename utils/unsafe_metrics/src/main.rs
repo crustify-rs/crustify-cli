@@ -1291,6 +1291,10 @@ impl Callbacks for MetricsCallbacks {
         //    of it (the crate-root module's span is the whole file), so
         //    unioning it whole would reinstate exactly what this is removing.
         //    Their members are separate definitions and bring their own bodies.
+        //  * BODIES are unioned separately, because `def_span` on a fn is its
+        //    SIGNATURE span, not the item's. Definitions alone counted headers
+        //    and no statements -- 4208 lines where git2's source has 20990,
+        //    which read as an 83% unsafe ratio.
         //
         // The line set is per file and deduplicated, so items sharing a line
         // (or several defs from one macro invocation) count it once. The
@@ -1321,6 +1325,21 @@ impl Callbacks for MetricsCallbacks {
                 } else {
                     e.extend(lo.line..=hi.line);
                 }
+            }
+            // Bodies: fn / const / static initializers and closures. Same
+            // `cfg` guarantee -- a stripped item owns no body -- and the same
+            // dedup, so a body overlapping its own signature line counts once.
+            for owner in tcx.hir_body_owners() {
+                let sp = tcx.hir_body_owned_by(owner).value.span.source_callsite();
+                let lo = sm.lookup_char_pos(sp.lo());
+                let hi = sm.lookup_char_pos(sp.hi());
+                if lo.file.src.is_none() || lo.file.start_pos != hi.file.start_pos {
+                    continue;
+                }
+                covered
+                    .entry(lo.file.start_pos.0)
+                    .or_default()
+                    .extend(lo.line..=hi.line);
             }
             for sf in sm.files().iter() {
                 let (Some(src), Some(set)) = (&sf.src, covered.get(&sf.start_pos.0))
