@@ -17,7 +17,7 @@ the regex pass in `audit.py` for the subset of properties below.
 ### Region attribution of unsafe blocks
 | field | meaning |
 |---|---|
-| `unsafe_blocks_wrapper_impl` | unsafe blocks inside `impl T` / `impl Tr for T` where `T` is a `define_*ctype!` wrapper |
+| `unsafe_blocks_wrapper_impl` | unsafe blocks inside `impl T` / `impl Tr for T` where `T` is a declared wrapper (`impl CCell` / `impl CLayout`) |
 | `unsafe_fns` | `unsafe fn` DECLARATIONS. A block is a local assertion its author discharges; an `unsafe fn` pushes the obligation onto every caller, and a `pub` one exports it out of the crate. Counted post-expansion, so macro-emitted ones are included |
 | `unsafe_fns_seam` | ...the sanctioned subset, by the same predicate a pointer position uses: a `SEAM_FNS` conversion or the C-ABI gateway. The smell is `unsafe_fns - unsafe_fns_seam` |
 | `unsafe_fns_pub` | ...of `unsafe_fns`, those with public visibility |
@@ -37,7 +37,7 @@ the regex pass in `audit.py` for the subset of properties below.
 | `raw_ptr_wrapped` | ...of the NON-seam remainder, pointee is a C type that HAS a wrapper (`*mut ffi::git_oid` where `GitOid` exists) — the actionable defect. A raw ptr to the *wrapper* is not counted: it already uses the wrapper |
 | `raw_ptr_in_wrapper` | ...of the NON-seam remainder, inside `impl <wrapper T>` — a raw ptr in the very type meant to hide it |
 | `field_ref_wrapped` | `&(*p).field` / `&mut (*p).field` where `p: *C` and `C` has a wrapper — a reference over a FIELD of memory C may write, the same rule that keeps `&W` out applied one level down. `addr_of!` / `&raw` lower to `BorrowKind::Raw` and are NOT counted, so this is exactly the sanctioned/forbidden split; **should be 0** |
-| `ref_to_type_wrapper` | `&W` or `&mut W` in signatures (incl. the `&self` / `&mut self` receiver) where `W` is a TYPE wrapper — implements `CCell` AND stores the C object inline (`CType<ffi::T>`), rather than holding a pointer to it. A reference of either kind over the object's own bytes asserts something about memory C may write through a pointer it retains, so access goes through the borrowed handles instead; **should be 0**. A reference to a POINTER wrapper (a handle, `#[repr(transparent)]` over `CPtr`) covers Rust-owned storage and is NOT counted |
+| `ref_to_type_wrapper` | `&W` / `&mut W` in signatures (incl. the `&self` / `&mut self` receiver) where `W` is a LAYOUT newtype — the `wrapper_newtypes` set, decided structurally. A reference of either kind over the C object's own bytes asserts noalias / readonly / validity on memory C may write through a pointer it retains; access goes through the borrowed handles instead. **Should be 0**, and is VACUOUSLY 0 wherever `wrapper_newtypes` is 0 — read the pair, never this alone. A reference to a HANDLE covers Rust-owned pointer storage and is NOT counted |
 | `field_proj_wrapped` | `(*p).field` (incl. `addr_of!((*p).field)`) where `p: *C` and `C` has a `define_*ctype!` wrapper |
 | `field_proj_outside_impl` | ...of those, the subset outside any impl/trait body — the smell (a port body bypassing the accessor instead of calling it); inside-impl projections are accessor definitions (sanctioned) |
 | `void_ptr_sanctioned` / `void_ptr_smell` | `*const/*mut c_void` in signatures, split: sanctioned (seam method / C-ABI boundary) vs smell (ordinary signatures, where a typed pointer/wrapper is preferred). Signature-scoped; `as *mut c_void` casts not counted |
@@ -51,13 +51,23 @@ the regex pass in `audit.py` for the subset of properties below.
 | `code_lines` | crate-wide code LoC (denominator): non-blank, non-`//`-comment lines, counted over the **union of HIR definition spans** rather than the raw file text. A `cfg`-stripped item has no `DefId`, so an inline `#[cfg(test)] mod tests` — never compiled under `cargo build`, so unable to reach any numerator — no longer inflates it (same for any `#[cfg(..)]`-disabled item). Macro-expanded defs map through `source_callsite()` to their invocation line; containers (`mod`/`impl`/`trait`/`extern` blocks) contribute only their opening and closing lines, since their full span still covers text `cfg` removed from inside them |
 
 ## Classification model (all resolution-based, not textual)
-- **wrapper type `T`** — a struct implementing the seam trait `CCell`, i.e.
-  carrying the `type C` associated item. `C` then maps to "has a wrapper".
-  Keying on the trait rather than the macro covers the generic and
-  lifetime-carrying wrappers the macro cannot express. The borrowed handles
-  (`TRef<'a>` / `TMut<'a>`) are NOT wrappers: they hold the pointer by value, so
-  a reference to one covers Rust-owned storage and is not counted.
-- **wrapper impl** — an `impl` whose self-type (HIR path-resolved) is a wrapper `T`.
+- **wrapper `W`** (`structural_wrapper`) — a `#[repr(transparent)]` struct whose
+  single non-ZST field, after peeling further transparent newtypes and
+  `NonNull`'s pattern type, is either:
+  - a `#[repr(C)]` ADT by value — a **LAYOUT newtype**, storage IS the C
+    object's bytes. This is the `wrapper_newtypes` set, and the set where
+    `&W` / `&mut W` is forbidden.
+  - a raw pointer / `&` / `NonNull` — a **HANDLE**, storage is a Rust-owned
+    pointer slot. A reference to one is ordinary and is not counted.
+
+  No trait or type name from ffibox enters this, so a hand-written wrapper is
+  policed like a generated one.
+- **wrapped C type** (`scan_wrappers`) — the `type C` of an `impl CCell` /
+  `impl CLayout`, giving `W -> C` and so "C has a wrapper". Declaration-keyed
+  because structure alone names no C type; the `*_wrapped` metrics and
+  `unsafe_blocks_wrapper_impl` read this map, and are 0 in a crate that
+  implements neither trait.
+- **wrapper impl** — an `impl` whose self-type (HIR path-resolved) is a declared wrapper.
 - **seam method** — fn named `as_ptr`/`as_mut_ptr`/`as_c_ptr`/`as_raw`/`from_ptr`/
   `from_raw`/`to_ptr`/`to_raw`/`into_raw` (raw ptrs there are the expected boundary).
 - **C-ABI boundary** (`in_ffi_export`) — the fn, or an enclosing one, carries

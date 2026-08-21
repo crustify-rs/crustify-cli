@@ -102,10 +102,10 @@ fn is_type_wrapper(tcx: TyCtxt<'_>, did: DefId) -> bool {
     structural_wrapper(tcx, did) == Some(true)
 }
 
-/// True if `t` is `&W` or `&mut W` where `W` is a TYPE wrapper (implements
-/// `CCell` and stores the C object inline). Catches the `&self` / `&mut self`
-/// receiver (whose type is `&Self` / `&mut Self` = `&W` / `&mut W`) and
-/// explicit reference params alike.
+/// True if `t` is `&W` or `&mut W` where `W` is a LAYOUT newtype (see
+/// `structural_wrapper`). Catches the `&self` / `&mut self` receiver (whose
+/// type is `&Self` / `&mut Self` = `&W` / `&mut W`) and explicit reference
+/// params alike.
 ///
 /// A reference of EITHER kind over a wrapped C object asserts something about
 /// memory C may write through a pointer it retains -- `noalias` and `readonly`
