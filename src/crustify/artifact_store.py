@@ -6,7 +6,7 @@ class ArtifactStore:
 
     Constructed with the **exact** directory it manages (resolved via
     ``crustify.layout.Layout``) — the repo-tier root ``crustify/`` or a
-    target-tier ``crustify/targets/<rel>/``. No path magic here.
+    active ``crustify/campaigns/<campaign>/``. No path magic here.
 
     Stage completion is data-driven: agents check for the existence of
     their output artifacts (files or directories). There is no

@@ -1,0 +1,60 @@
+{
+  "layers": [
+    [
+      {
+        "id": "alpha_st",
+        "node_kind": "type",
+        "subkind": "struct",
+        "defined_in": "include/alpha.h",
+        "loc": 2,
+        "deps": {"types": [], "syms": []}
+      },
+      {
+        "id": "alpha_new",
+        "node_kind": "symbol",
+        "subkind": "function_def",
+        "defined_in": "src/alpha.c",
+        "loc": 4,
+        "deps": {
+          "types": [{"name": "alpha_st", "defined_in": "include/alpha.h"}],
+          "syms": []
+        }
+      }
+    ],
+    [
+      {
+        "id": "alpha_use",
+        "node_kind": "symbol",
+        "subkind": "function_def",
+        "defined_in": "src/use.c",
+        "loc": 6,
+        "deps": {
+          "types": [{"name": "alpha_st", "defined_in": "include/alpha.h"}],
+          "syms": [{"name": "alpha_new", "defined_in": "src/alpha.c"}]
+        }
+      },
+      {
+        "id": "alpha_free",
+        "node_kind": "symbol",
+        "subkind": "function_def",
+        "defined_in": "src/alpha.c",
+        "loc": 3,
+        "deps": {
+          "types": [{"name": "alpha_st", "defined_in": "include/alpha.h"}],
+          "syms": []
+        }
+      },
+      {
+        "id": "alpha_cb",
+        "node_kind": "symbol",
+        "subkind": "callback",
+        "defined_in": "include/alpha.h",
+        "loc": 0,
+        "deps": {
+          "types": [{"name": "alpha_st", "defined_in": "include/alpha.h"}],
+          "syms": []
+        }
+      }
+    ]
+  ]
+}

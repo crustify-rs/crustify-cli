@@ -1,0 +1,13 @@
+
+[wrap dry-run] 5 unit(s) across 2 dependency layer(s) (lower → higher):
+  L0: 2 unit(s) → 2 batch(es) (parallel)
+  L1: 3 unit(s) → 2 batch(es) (parallel)
+
+About to wrap:
+  • alpha_st
+  • alpha_new
+  • alpha_use
+  • alpha_free
+  • alpha_cb
+
+4 batch(es) across 2 file(s).

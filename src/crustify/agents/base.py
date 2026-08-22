@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re as _re
+from dataclasses import dataclass
 from pathlib import Path
 
 from crustify.agentlog import AgentLog, open_agent_log
@@ -22,6 +24,20 @@ _MD_FIELD_RE = _re.compile(
     r"^-\s*(Skill name|Bin path|Doc path|Description)\s*:\s*(.*)$",
     _re.IGNORECASE)
 
+# A local role header wraps guidance around a repository-owned generic skill.
+# Keeping the anchor in the header makes that composition explicit in source.
+_GENERIC_SKILL_ANCHOR = "<!-- SKILL -->"
+
+
+@dataclass(frozen=True)
+class SkillSpec:
+    """A generic skill plus optional role-specific prompt guidance."""
+
+    dep: str
+    path: str
+    capability: str | None = None
+    role_header: str | None = None
+
 
 def _skill_meta(path: Path) -> tuple[str, str, str | None, Path | None]:
     """Parse ``name`` + ``description`` + optional ``bin`` + optional ``doc``
@@ -29,10 +45,9 @@ def _skill_meta(path: Path) -> tuple[str, str, str | None, Path | None]:
 
     Two shapes, because crustify has two kinds of skill. One carries a real
     procedure in its body and declares its metadata in YAML frontmatter. The
-    other IS its metadata, written as a plain markdown list
-    (``prompts/skill-oracle.md``) — either because the procedure lives in a
-    tool's ``--help``, or because it lives in a document the skill points at
-    with ``Doc path``.
+    other IS its metadata, written as a plain markdown list — either because
+    the procedure lives in a tool's ``--help``, or because it lives in a
+    document the skill points at with ``Doc path``.
 
     Deliberately minimal — no YAML dependency. Frontmatter: scalar ``name:``, a
     folded/indented ``description:`` (block scalar ``>-``/``>`` or inline), and
@@ -103,8 +118,7 @@ class CrustifyAgent:
 
     Each agent runs against a *target* (the subdirectory crustify is
     scoped to) and additionally has access to the *repo_root* (the
-    repository the target lives in, read from the target-tier
-    ``scope-config.json``). The two coincide for whole-repository ports.
+    repository the target lives in). The two coincide for repo-root targets.
 
     The ``tier`` class attribute decides which ``.crustify/`` directory
     this agent's ``output`` artifact lives in:
@@ -125,16 +139,9 @@ class CrustifyAgent:
     stage: str        # label used in skip messages + log filename
     prompt_dir: str | None = None  # optional subdir under prompts/ (e.g. "wrapper");
                                     # the prompt file is prompts/<prompt_dir>/<stage>.md
-    # The skills this agent is given, as (dep, path-under-dep) pairs resolved
-    # through the repo config's `deps` map. Hardcoded rather than declared in
-    # each SKILL.md or listed in cli-config.json: the set is a property of the
-    # ROLE, and the role is the class. `crustify-orchestrator` is deliberately
-    # absent — wave scheduling is not a worker agent's job, and a skill it can
-    # never act on is context it pays for on every request.
-    SKILLS: tuple[tuple[str, str], ...] = (
-        ("crustify", "src/crustify/prompts/skill-oracle.md"),
-        ("ffibox", "SKILL.md"),
-    )
+    # Core skills are a property of the role. Subclasses may add optional
+    # prompt-only capabilities selected from cli-config.json.
+    SKILLS: tuple[SkillSpec, ...] = ()
     output: str | None = None  # path under .crustify/; when set, artifact existence
                                # is the agent-level done signal (skip on re-run).
                                # When None the agent always runs — the orchestrator
@@ -160,7 +167,7 @@ class CrustifyAgent:
         # Repo-relative target id (e.g. "ssl/statem", or "." for the repo
         # root) — the value the prompt passes as crustify's second positional.
         self.target_rel = self.layout.rel_target(self.target)
-        # Target-tier store: crustify/targets/<rel>/ (logs, scope, config).
+        # Active campaign store (logs and invocation-local artifacts).
         self.target_store = ArtifactStore(self.layout.target_dir(self.target))
         # Repo-root-tier store: crustify/ (analysis, build.json).
         self.root_store = ArtifactStore(self.layout.root)
@@ -173,6 +180,9 @@ class CrustifyAgent:
             return
 
         prompt = self._prompt()
+        system_preamble = self.system_preamble()
+        arguments = self._arguments()
+        rendered_prompt = prompt.format(**arguments)
         from crustify import config as _cfg
         from crustify.agents.backends import get_backend
         from crustify.models import resolve as _resolve_model
@@ -183,12 +193,18 @@ class CrustifyAgent:
         backend = _resolve_model(model).backend
 
         with self._make_log() as log:
+            caps = ", ".join(self.prompt_capabilities()) or "none"
+            prompt_hash = hashlib.sha256(
+                (system_preamble + "\0" + rendered_prompt).encode()
+            ).hexdigest()
+            log.line(f"[crustify] prompt capabilities: {caps}")
+            log.line(f"[crustify] prompt hash: {prompt_hash}")
             get_backend(backend).run(
                 name=self.name,
                 model=model,
                 prompt_template=prompt,
-                arguments=self._arguments(),
-                system_preamble=self.system_preamble(),
+                arguments=arguments,
+                system_preamble=system_preamble,
                 work_dir=str(getattr(self, "_work_dir", None) or self.target),
                 log=log,
             )
@@ -196,8 +212,8 @@ class CrustifyAgent:
     def _log_stem(self) -> str:
         """Filename stem for this agent's logs, unique within a session.
 
-        ``stage_suffix`` disambiguates concurrent agents of the same stage
-        under ``--parallel`` so they never clobber each other's files.
+        ``stage_suffix`` disambiguates concurrent agents of the same stage so
+        they never clobber each other's files.
         """
         stem = self.stage.replace("/", "_").replace(" ", "_")
         if self.stage_suffix:
@@ -249,7 +265,7 @@ class CrustifyAgent:
             if self.prompt_dir else base / f"{self.stage}.md"
         )
         # No substitution beyond the caller's `.format(**arguments)`. The
-        # `<!-- PRINCIPLES -->` and `<!-- SKILLS -->` markers a stage prompt
+        # `<!-- CONVENTIONS -->` and `<!-- SKILLS -->` markers a stage prompt
         # carries are inert: they record where each part of the system preamble
         # sits relative to the task, and are deliberately NOT sentinels — a
         # marker that silently expanded would put the text back in the user
@@ -270,8 +286,10 @@ class CrustifyAgent:
                 "git_base": _cfg.SESSION_BASE}
 
     def _repo_config(self) -> dict:
-        """Repo-wide crustify config (``crustify/cli-config.json``): dep paths and
-        the SKILL.md set. Memoised; empty dict if the file is absent."""
+        """Repo-wide config: dependency paths, binaries and prompt capabilities.
+
+        Memoised per agent; an absent file is an empty configuration.
+        """
         cfg = getattr(self, "_repo_cfg_cache", None)
         if cfg is None:
             p = self.layout.repo_config
@@ -285,10 +303,25 @@ class CrustifyAgent:
         raw = self._repo_config().get("deps", {}).get(name)
         return Path(raw) if raw else fallback
 
+    def skill_specs(self) -> tuple[SkillSpec, ...]:
+        """The generic skills and role overlays rendered for this agent."""
+        return self.SKILLS
+
+    def prompt_capabilities(self) -> tuple[str, ...]:
+        """Optional capabilities selected for this prompt.
+
+        This is descriptive, not an access-control boundary: omitted
+        capabilities remain discoverable through the ordinary shell.
+        """
+        return tuple(
+            spec.capability for spec in self.skill_specs()
+            if spec.capability is not None
+        )
+
     def _render_skills(self) -> str:
         """Render this agent's :attr:`SKILLS` set as a metadata index
         (name — description + on-disk path), as its own section of the system
-        preamble — a sibling of principles.md, not a section inside it.
+        preamble — a sibling of conventions.md, not a section inside it.
 
         Mirrors a skill-aware harness's tier-1 load: the metadata rides in the
         system prompt unconditionally (the routing signal), while the body is
@@ -296,23 +329,28 @@ class CrustifyAgent:
         on codex, which has no skill mechanism of its own — the index is prose
         naming a file the agent opens with the tool it already has.
 
-        Descriptions are single-sourced from each SKILL.md's frontmatter, so
+        Descriptions are single-sourced from each skill's metadata, so
         they never drift from the skill itself. The framing sentence is emitted
-        here rather than kept in principles.md: it is about how to read the
-        index, so it belongs to the index, and principles.md stays principles."""
+        here rather than kept in conventions.md: it is about how to read the
+        index, so it belongs to the index, and conventions.md stays
+        conventions."""
         bins = self._repo_config().get("bins", {})
-        # `crustify` resolves without config in a source checkout; an
-        # out-of-tree dep (ffibox) has no meaningful fallback and is
-        # skipped when unconfigured rather than guessed at.
+        # `crustify` resolves without config in a source checkout.
+        # Out-of-tree capabilities have no meaningful fallback. When selected,
+        # a missing path is an error rather than a silently different prompt.
         fallback = {"crustify": _PKG_ROOT.parent.parent}
         blocks = []
-        for dep, rel in self.SKILLS:
-            root = self._dep(dep, fallback.get(dep))
+        for spec in self.skill_specs():
+            root = self._dep(spec.dep, fallback.get(spec.dep))
             if root is None:
-                continue
-            p = root / rel
+                raise SystemExit(
+                    f"prompt capability {spec.capability or spec.path!r}: "
+                    f"cli-config.json has no deps.{spec.dep} path")
+            p = root / spec.path
             if not p.exists():
-                continue
+                raise SystemExit(
+                    f"prompt capability {spec.capability or spec.path!r}: "
+                    f"skill file does not exist: {p}")
             name, desc, binname, doc = _skill_meta(p)
             block = f"- {name} — {desc}"
             # What to open, if anything. A frontmatter skill carries its own
@@ -330,6 +368,23 @@ class CrustifyAgent:
             binpath = bins.get(binname) if binname else None
             if binpath:
                 block += f"\n  binary: {binpath}"
+            if spec.role_header:
+                header = _PKG_ROOT / "prompts" / spec.role_header
+                if not header.is_file():
+                    raise SystemExit(
+                        f"prompt capability {spec.capability!r}: role header "
+                        f"does not exist: {header}")
+                template = header.read_text()
+                if template.count(_GENERIC_SKILL_ANCHOR) != 1:
+                    raise SystemExit(
+                        f"prompt capability {spec.capability!r}: role header "
+                        f"must contain one {_GENERIC_SKILL_ANCHOR} anchor: {header}")
+                guidance = template.replace(_GENERIC_SKILL_ANCHOR, "").strip()
+                if guidance:
+                    block += "\n  Additional role guidance:\n" + "\n".join(
+                        f"  {line}" if line else ""
+                        for line in guidance.splitlines()
+                    )
             blocks.append(block)
         body = "\n".join(blocks) if blocks else "(no skills configured)"
         return (
@@ -341,31 +396,31 @@ class CrustifyAgent:
             f"{body}"
         )
 
-    def _principles_md(self) -> Path:
-        """The always-on principles doc, at the checkout's ``docs/``.
+    def _conventions_md(self) -> Path:
+        """The always-on conventions doc, at the checkout's ``docs/``.
 
         Human-readable in its own right and read by anyone working on crustify,
         not only spliced into a prompt — which is what puts it beside
-        ``docs/playbook.md`` rather than under ``prompts/``. What lives in
+        ``docs/orchestrator-playbook.md`` rather than under ``prompts/``. What lives in
         ``prompts/`` is what the pipeline RENDERS: the stage templates and the
         skill descriptions. Neither provider CLI loads this from a canonical
         path — claude reads ``CLAUDE.md``, codex a repo-root ``AGENTS.md``, and
         it is at neither — so it reaches an agent only by being read here."""
-        return _PKG_ROOT.parent.parent / "docs" / "principles.md"
+        return _PKG_ROOT.parent.parent / "docs" / "conventions.md"
 
-    def _render_principles(self) -> str:
-        """principles.md verbatim. Empty string if the doc is absent.
+    def _render_conventions(self) -> str:
+        """conventions.md verbatim. Empty string if the doc is absent.
 
         No substitution: the skill index used to be spliced into a sentinel in
-        here, which made a principles doc that was partly not principles. The
+        here, which made a conventions doc that was partly not conventions. The
         two are concatenated in :meth:`system_preamble` instead."""
-        p = self._principles_md()
+        p = self._conventions_md()
         return p.read_text() if p.exists() else ""
 
     def system_preamble(self) -> str:
         """What the backend puts in its system slot, above the stage prompt.
 
-        The principles doc and the skill index go here rather than into the
+        The conventions doc and the skill index go here rather than into the
         stage prompt for one reason: the system prompt is not part of
         ``messages``, so nothing a long agent run does can summarize it away.
         A 100+ turn agent that has had its file contract compacted into a
@@ -379,11 +434,11 @@ class CrustifyAgent:
         at full concurrency still pays N writes; staggering the first agent is
         what collects the reads.)
 
-        Two independent documents, concatenated: principles.md is the same for
-        every agent, the skill index varies with :attr:`SKILLS`. The
-        `<!-- PRINCIPLES -->` and `<!-- SKILLS -->` markers in the stage prompts
+        Two independent documents, concatenated: conventions.md is the same for
+        every agent, the skill index varies with :meth:`skill_specs`. The
+        `<!-- CONVENTIONS -->` and `<!-- SKILLS -->` markers in the stage prompts
         record where each one lands relative to the task; neither is a
         substitution point."""
         return "\n\n---\n\n".join(
-            part for part in (self._render_principles().rstrip(),
+            part for part in (self._render_conventions().rstrip(),
                               self._render_skills()) if part)

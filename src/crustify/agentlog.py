@@ -19,7 +19,7 @@ format and splits the parsed stream two ways:
   ``<stage>.usage.json`` this run's accounting in CRUSTIFY's shape, built by
                          the backend from the CLI's session transcript - not a
                          provider object passed through. The one file anything
-                         parses; ``utils/log_cost.py`` reads it.
+                         parses; ``crustify-log-cost`` reads it.
 
 The raw stream itself is never stored. Tool-result events embed whole file
 bodies and command output, so a port wave's raw streams would outweigh
@@ -27,9 +27,8 @@ every other artifact crustify writes - and everything worth keeping from
 them is already in one of the two files above.
 
 The console receives the same text as ``<stage>.log``. Both files live
-under the *target* tier (``targets/<t>/logs/<session>/``) so they stay
-co-located with the invocation that produced them, regardless of which
-tier the agent's artifact belongs to.
+under ``campaigns/<campaign>/logs/<session>/`` so they stay co-located with
+the campaign that produced them.
 
 ``LOG_TO_FILE`` gates the files and ``LOG_TO_CONSOLE`` the console; with
 both off the loop still runs (the subprocess still has to be drained) and
@@ -85,7 +84,7 @@ class AgentLog:
         if log_dir is not None:
             # RESOLVED, and that is load-bearing. An isolated agent's log dir is
             # `Layout(<worktree>).logs(target)`, which only reaches the real
-            # directory through the `crustify/targets` symlink `link_shared`
+            # directory through the `crustify/campaigns` symlink `link_shared`
             # plants in the worktree. The agent PURGES its worktree as the last
             # step of landing, taking that symlink with it — and `usage()`
             # writes by PATH, after the agent returns. Unresolved, that write

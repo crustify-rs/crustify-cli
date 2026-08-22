@@ -11,8 +11,12 @@ dependencies = []
 
 [project.scripts]
 crustify-cli = "crustify.cli:main"
-crustify-oracle = "crustify.oracle:main"
+crustify-log-cost = "crustify.log_cost:main"
+crustify-orchestrator-prompt = "crustify.orchestrator_prompt:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["crustify*"]
+
+[tool.setuptools.package-data]
+crustify = ["prompts/*.md"]

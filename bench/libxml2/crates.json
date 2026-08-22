@@ -30,7 +30,7 @@
         "",
         "A wrap-only target homes its entities by IMPORT HEADER, not by",
         "translation unit: the orchestrator routes a wrap item through its",
-        "`scope.json` `wrap.declared_in`, so the module tree should mirror",
+        "the oracle API declaration inventory, so the module tree should mirror",
         "include/libxml/ rather than the 55 flat .c files. Expect roughly one",
         "module per public header, with `tu: null` on every `.rs` - nothing",
         "here is ported, so no module mirrors a C translation unit.",

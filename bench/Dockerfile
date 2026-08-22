@@ -7,17 +7,20 @@
 #   docker run --rm -it --name crustify-libgit2 \
 #       -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
 #       -e CRUSTIFY_CAMPAIGN=libgit2 \
-#       -v "$PWD:/opt/crustify-cli" \
+#       -v "$(dirname "$PWD")/crustify-cli:/opt/crustify-cli" \
+#       -v "$(dirname "$PWD")/crustify-oracle:/opt/crustify-oracle" \
+#       -v "$(dirname "$PWD")/crustify-audit:/opt/crustify-audit" \
+#       -v "$(dirname "$PWD")/ffibox:/opt/ffibox" \
 #       -v crustify-work:/work \
 #       crustify
 #
-# Two mounts, two lifetimes:
+# Source mounts and one persistent volume:
 #
-#   /opt/crustify-cli  Read-WRITE host checkout, and the reason this mount
-#                      exists: agents edit crustify itself over a campaign —
-#                      a skill, a playbook step, a query. Point it at a branch
-#                      you can review and a tree you can afford to lose; they
-#                      run under --dangerously-skip-permissions.
+#   /opt/crustify-cli  Required read-write host checkout.
+#   /opt/{crustify-oracle,crustify-audit,ffibox}
+#                      Optional read-write host checkouts. When one is absent,
+#                      the entrypoint clones its main branch into the container.
+#                      Mounted trees always win.
 #   /work              Named volume, the only thing that survives `--rm`:
 #                      target clone, CodeQL database, emitted Rust tree,
 #                      session branches, per-agent logs. Drop it and the run
@@ -27,18 +30,14 @@
 # checkout's bench/, and its TASK.md arrives through the mount above. Edit
 # that file on the host and the next run picks it up. Naming a campaign that
 # does not exist exits 2 with the path it looked for. bench/ is tracked, so a
-# name also resolves from the image's own clone when nothing is mounted.
+# name resolves from the mounted crustify-cli checkout.
 #
 # A task living outside the checkout mounts at /campaign, and wins when
 # present.
 #
-# ffibox needs no host clone — the image carries it at /opt/ffibox. Agents may
-# edit it, but that lives in the container layer, so `--rm` discards it:
-# commit and push from inside the container before the campaign ends.
-#
 # The campaign task is the only run-time input. Everything else is the
 # orchestrator's own work: clone the target into /work, install its libraries,
-# then Phase 1 of the playbook — build.json, crates.json, scope-config.json,
+# then Phase 1 of the playbook — build.json, crates.json, oracle-config.json,
 # CodeQL database and compiling crate shells — before any wave.
 #
 # One container name per campaign: `docker attach` reaches a detached run,
@@ -52,8 +51,6 @@
 
 FROM debian:12-slim
 
-ARG CRUSTIFY_CLI_REF=main
-ARG FFIBOX_REF=main
 ARG CODEQL_VERSION=v2.26.3
 ARG PYTHON_VERSION=3.13
 # Both backends by default. The playbook says to ask which are wanted, so
@@ -112,24 +109,10 @@ RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
         curl -fsSL https://chatgpt.com/codex/install.sh | sh; \
     fi
 
-# 6. Quick Setup steps 1 and 2. Under /opt, NOT /work: a volume on /work
-#    would shadow anything the image put underneath it.
-#
-#    ffibox is a sibling of the crustify checkout so the orchestrator can use
-#    the stable /opt/ffibox path in wrapper-crate manifests. Hence
-#    /opt/crustify-cli for the mount.
-#
-#    The crustify-cli clone earns its place through what it writes OUTSIDE
-#    itself — the dependency set into /opt/venv, the CodeQL library packs into
-#    ~/.codeql. A mount shadows the source but neither of those, so only a
-#    changed dependency set needs a rebuild. The clone also leaves the image
-#    runnable unmounted.
-RUN git clone https://github.com/crustify-rs/crustify-cli.git  /opt/crustify-cli \
-    && git clone https://github.com/crustify-rs/ffibox.git /opt/ffibox \
-    && git -C /opt/crustify-cli  checkout "${CRUSTIFY_CLI_REF}" \
-    && git -C /opt/ffibox checkout "${FFIBOX_REF}" \
-    && uv pip install --python /opt/venv -e /opt/crustify-cli \
-    && cd /opt/crustify-cli/utils/codeql && codeql pack install
+# 6. Quick Setup sources live under /opt. crustify-cli is a required runtime
+#    mount; the entrypoint uses mounted oracle/audit/ffibox trees when present
+#    and clones only the missing ones. It then installs the Python projects
+#    editable and installs the oracle's CodeQL pack before rendering the prompt.
 
 # The results table. Baked at /opt, seeded into /work by the entrypoint,
 # filled in place by the campaign.
@@ -139,8 +122,11 @@ COPY wrappers-results.md /opt/wrappers-results.md
 # cannot come from any clone.
 ENV CRUSTIFY_DEP_CRUSTIFY=/opt/crustify-cli \
     CRUSTIFY_DEP_FFIBOX=/opt/ffibox \
+    CRUSTIFY_DEP_ORACLE=/opt/crustify-oracle \
+    CRUSTIFY_DEP_AUDIT=/opt/crustify-audit \
     CRUSTIFY_BIN_CLI=/opt/venv/bin/crustify-cli \
-    CRUSTIFY_BIN_ORACLE=/opt/venv/bin/crustify-oracle
+    CRUSTIFY_BIN_ORACLE=/opt/venv/bin/crustify-oracle \
+    CRUSTIFY_BIN_AUDIT=/opt/venv/bin/crustify-audit
 
 # Drives the ORCHESTRATOR only; a wave's translate agents come from
 # `crustify-cli --model`, chosen per wave.
@@ -174,12 +160,31 @@ ENV CRUSTIFY_EFFORT=high
 ENV CRUSTIFY_BILLING=api
 
 RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
+      '# crustify-cli supplies this entrypoint and campaign task, so it remains' \
+      '# a required host mount. The three capability checkouts are optional.' \
+      '[ -f /opt/crustify-cli/pyproject.toml ] || {' \
+      '    echo "missing checkout mount: /opt/crustify-cli" >&2; exit 2; }' \
+      'ensure_checkout() {' \
+      '    path="$1"; marker="$2"; url="$3"' \
+      '    if [ ! -f "$path/$marker" ]; then' \
+      '        echo "no mounted checkout at $path; cloning $url" >&2' \
+      '        git clone --depth 1 "$url" "$path"' \
+      '    fi' \
+      '    [ -f "$path/$marker" ] || {' \
+      '        echo "invalid checkout at $path: missing $marker" >&2; exit 2; }' \
+      '}' \
+      'ensure_checkout /opt/crustify-oracle pyproject.toml https://github.com/crustify-rs/crustify-oracle.git' \
+      'ensure_checkout /opt/crustify-audit pyproject.toml https://github.com/crustify-rs/crustify-audit.git' \
+      'ensure_checkout /opt/ffibox Cargo.toml https://github.com/crustify-rs/ffibox.git' \
+      'uv pip install --python /opt/venv -e /opt/crustify-cli' \
+      'uv pip install --python /opt/venv -e /opt/crustify-oracle' \
+      'uv pip install --python /opt/venv -e /opt/crustify-audit' \
+      '(cd /opt/crustify-oracle && codeql pack install)' \
       '# Quick Setup step 4. /opt/crustify-cli is a mount point, so only a' \
       '# prompt generated now matches the checkout driving this run: the' \
       '# render inlines the skill index and resolves paths into that tree.' \
       '# Output goes to /tmp, outside both checkouts.' \
-      'gen=/opt/crustify-cli/utils/build-orchestrator-prompt.sh' \
-      '"$gen" /opt/ffibox -o /tmp/orchestrator.md' \
+      'crustify-orchestrator-prompt /opt/crustify-oracle /opt/crustify-audit -o /tmp/orchestrator.md' \
       'prompt=/tmp/orchestrator.md' \
       '# A mounted /campaign wins; otherwise CRUSTIFY_CAMPAIGN names one' \
       '# under the checkout. A named campaign that is absent is fatal, so a' \

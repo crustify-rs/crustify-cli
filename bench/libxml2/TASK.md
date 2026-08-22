@@ -3,14 +3,12 @@
 The user has chosen the following configuration:
 
 target repo: `https://gitlab.gnome.org/GNOME/libxml2.git`, tag v2.15.3 (commit c94eb0210183b9d7cb43f8e7fddc6be55843ef49)
-scope: WRAP campaign — `campaign_objective: wrap`, `api_headers` seeds off the whole published API
-       under `include/libxml/`. Nothing is owned; there is no target section.
+scope: WRAP campaign over the whole published API under `include/libxml/`.
 max-syms: default
 max-loc: default
 max-types: 1
 billing: API
 parallel-max: you pick an optimal value
-parallel-policy: default
 agent backend: ask user, showing available options
 model: ask user, showing available options
 
@@ -44,13 +42,12 @@ generated wrapper inherits it. Do not claim otherwise in the results.
 
 Run Phase 1 of the playbook end to end.
 The following artifacts are already authored, you can skip authoring them:
-    - `/campaign/{build, scope-config}.json`
+    - `/campaign/{build, oracle-config}.json`
 
 `/campaign/crates.json` is a **seeded shell**: crate identity, paths and link
 edges are settled, `modules` is empty. Fill it after `extract-ql`, when the
-entity inventory exists. Note the difference from a port campaign — a wrap-only
-target homes entities by IMPORT HEADER, so the module tree mirrors
-`include/libxml/`, and every `.rs` carries `tu: null`. Its `_comment_modules`
+entity inventory exists. For this API campaign the module tree mirrors
+`include/libxml/`. Its `_comment_modules`
 records a suggested grouping; verify it against the real inventory rather than
 trusting it.
 
@@ -62,18 +59,18 @@ Playbook toolchain is already installed.
 Before spending on Phase 2, report:
 
 ```
-crustify-oracle /work/libxml2 . query types  --imported-only
+crustify-oracle /work/libxml2 . query types --api-only
 crustify-oracle /work/libxml2 . query types  --imported-only --out-of-tree
-crustify-oracle /work/libxml2 . query symbols --imported-only
-crustify-oracle /work/libxml2 . query dag --stats
+crustify-oracle /work/libxml2 . query symbols --api-only
+crustify-oracle /work/libxml2 . query files --api-only
 ```
 
 `--out-of-tree` is the permanent FFI floor (system headers reached through the
 API); the complement is libxml2's own surface. libxml2 vendors nothing, so the
 out-of-tree share should be small — a large one means the scope is wrong.
 
-Everything is imported here, so `--targeted-only` returns nothing. That is
-correct, not a misconfiguration: a wrap campaign owns no C.
+`--targeted-only` reports the library named by `impl_files` and `api_headers`;
+`--api-only` reports the published surface to schedule for wrapping.
 
 ## Phase 2
 
@@ -84,10 +81,13 @@ Every wave is `--objective wrap`; there is no port stage. Report the plan from
 layer:
 
 ```
-crustify-oracle /work/libxml2 . query dag --layer <L> --imported-only
+crustify-oracle /work/libxml2 . query dag --layer <L> --api-only \
+    --api-headers-only
 ```
 
-One layer at a time, lowest first, using `--name`. libxml2 defines most of its
+One layer at a time, lowest first. Write each wave with `schedule --name ...
+--api-headers-only`, then pass its `campaign.json` to `crustify-cli translate`.
+libxml2 defines most of its
 tree structs publicly (`xmlNode`, `xmlDoc`, `xmlAttr`), so expect a much higher
 share of full-layout value types than OpenSSL's mostly-opaque surface — a
 struct whose definition is visible in an anchor header gets its fields walked
@@ -104,7 +104,8 @@ catalog.h          37 fns
 SAX2.h             36 fns
 ```
 
-Select by `--file include/libxml/<header>.h`, one subsystem per wave.
+Select with `schedule --file include/libxml/<header>.h --api-headers-only`, one
+subsystem per wave.
 
 **3. The remainder.** Whatever the closure has not reached, by DAG layer.
 
@@ -112,7 +113,7 @@ Select by `--file include/libxml/<header>.h`, one subsystem per wave.
 
 Record results in /work/wrappers-results.md.
 
-After each wave: `utils/log_cost.py` over the per-agent `<stage>.usage.json`
+After each wave: `crustify-log-cost` over the per-agent `<stage>.usage.json`
 for cost, the session branch diff for what landed, and
 `crustify-audit <repo> unsafe --name <wave names...> --json` for the unsafe and
 raw-pointer surface. Cost comes from token counts, never from

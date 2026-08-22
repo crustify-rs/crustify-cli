@@ -20,6 +20,7 @@ in your terminal.
 
 ```bash
 git clone https://github.com/crustify-rs/crustify-cli.git
+python -m pip install -e crustify-cli
 ```
 
 **2. Clone [`ffibox`](https://github.com/crustify-rs/ffibox).** It carries the smart
@@ -29,17 +30,31 @@ pointers and lifetime traits used to emit safe FFI wrappers for C/C++/Rust inter
 git clone https://github.com/crustify-rs/ffibox.git
 ```
 
-**3. Install an AI assistant** *(optional — skip if you already have one).*
+**3. Clone [`crustify-oracle`](https://github.com/crustify-rs/crustify-oracle).**
+
+```bash
+git clone https://github.com/crustify-rs/crustify-oracle.git
+```
+
+**4. Clone [`crustify-audit`](https://github.com/crustify-rs/crustify-audit).**
+
+```bash
+git clone https://github.com/crustify-rs/crustify-audit.git
+```
+
+**5. Install an AI assistant** *(optional — skip if you already have one).*
 
 ```bash
 curl -fsSL https://claude.ai/install.sh | bash        # Claude Code
 curl -fsSL https://chatgpt.com/codex/install.sh | sh  # OpenAI Codex
 ```
 
-**4. Spawn the orchestrator.** Render the orchestrator prompt and hand it to your assistant:
+**6. Spawn the orchestrator.** Render the orchestrator prompt and hand it to your assistant:
 
 ```bash
-utils/build-orchestrator-prompt.sh <ffibox-checkout> -o orchestrator.md
+crustify-orchestrator-prompt \
+  <crustify-oracle-checkout> <crustify-audit-checkout> \
+  -o orchestrator.md
 ```
 
 It will first ask you to point it at the repo root and the target subsystem(s) you want to translate
@@ -133,10 +148,10 @@ Billing modes: subscription-based (Claude Max, Codex Pro) or via API key (BYOK).
 
 Crustify enables LLM agents to analyze code with high precision by equipping them with a **_semantic
 oracle_** - a CLI tool that leverages [CodeQL](https://codeql.github.com/) to statically analyze a
-target repository and extract an exact dependency graph of types and symbols. We developed, tested,
-and shipped the `.ql` queries that index the CodeQL database to compose the graph (see [utils](utils/codeql/)),
-so agents do not have to re-invent them every time, which would re-introduce the very inaccuracy
-issues mentioned above.
+target repository and extract an exact dependency graph of types and symbols.
+The standalone [crustify-oracle](https://github.com/crustify-rs/crustify-oracle)
+ships the `.ql` queries and deterministic composer, so agents do not have to
+re-invent them and reintroduce the same analysis inaccuracies.
 
 The semantic oracle provides the following capabilities:
 
@@ -167,7 +182,8 @@ fine tuning for custom preferences.
 
 This phase prepares the build environment, bootstraps the semantic oracle, and creates the initial
 compiling Rust crate shells. It can be driven entirely by the **orchestrator agent**. Below
-is a simplified description of its stages, while the [playbook](docs/playbook.md), which the
+is a simplified description of its stages, while the
+[orchestrator playbook](docs/orchestrator-playbook.md), which the
 orchestrator agent also follows, contains the full picture.
 
 **Target discovery.** The orchestrator first identifies the build artifacts of the target
@@ -180,23 +196,17 @@ as a source of truth for downstream agents to obtain build/test commands.
 queries to generate `CSV` tables that store static information about code: argument/return/variable types,
 field accesses, typedef aliasing, and more. The tables are then consumed by the oracle to build the dependency graph.
 
-**Scope specification.** The orchestrator authors **`scope-config.json`** where it names the TUs and
+**Oracle target specification.** The orchestrator authors **`oracle-config.json`** where it names the TUs and
 headers of the target selected when bootstrapping the orchestrator agent. It names two file sets —
 **`impl_files`** (the sources and private headers that implement the library) and **`api_headers`**
-(the headers that publish its API) — and one verb, **`campaign_objective`**, which is what decides
-how they are read:
+(the headers that publish its API).
 Scope itself is the same either way: **targeted** is `impl_files` + `api_headers`, anchored on
 definition sites (the library this campaign owns); **imported** is what that reaches and does not
 own (its external dependencies); and the **api** view cuts across both, anchored on *declaration*
-sites, carrying what the headers publish. `campaign_objective` decides only how deep the dependency
-graph reads the library:
-  - **`port`** - walk every targeted body; a struct defined anywhere in the targeted set keeps its
-    full field layout.
-  - **`wrap`** - walk no bodies at all, only signatures; only a struct defined in `api_headers`
-    keeps its layout, everything else orders as an opaque handle.
-
-A section says what the campaign contains; `campaign_objective` says how deeply to read it; what one
-agent does with one selection is the translate stage's per-wave `--objective`.
+sites, carrying what the headers publish. The inventory is objective-neutral.
+`crustify-oracle schedule --api-headers-only` uses public signatures and public
+definitions; the default follows implementation bodies. The executor later
+supplies what agents do through `translate --objective`.
 
 **Crates specification.** The orchestrator authors **`crates.json`** with the
 target crate and the top-level crates that own imported dependencies. Setup
@@ -215,33 +225,42 @@ landing the wave.
 ### 2. Translation
 
 Here's where translation work happens. The sections below give a high-level view of Crustify's
-translation philosophy, while the complete workflow can be best understood from the prompts
-of the [type](src/crustify/prompts/types.md) and [symbol](src/crustify/prompts/symbols.md) agents,
-and the [principles](docs/principles.md) document.
+translation philosophy, while the complete workflow is in the
+[translator playbook](docs/translator-playbook.md), the thin
+[translator prompt](src/crustify/prompts/translator.md), and the
+[coding conventions](docs/conventions.md).
 
 **Agent Task.** In short, each translator agent is tasked with the following workflow:
-  - Read [principles](docs/principles.md)
-  - Use `crustify-oracle` to obtain the deps of your target set
+  - Read the [coding conventions](docs/conventions.md) and translator playbook
+  - Inspect the target set with the prompt capabilities enabled in `cli-config.json`
   - Locate the authored homes with `crates locate`
-  - Extend the worklist's bindgen allowlist and regenerate its `-sys` bindings
-  - Analyze pointer ownership and type lifetimes and submit findings to `ownership-store.json` via
-    `crustify-oracle`
+  - Extend the worklist's bindgen allowlist when required and regenerate its `-sys` bindings
+  - Establish pointer ownership and type lifetimes, submitting findings when
+    the configured semantic capability supports it
   - Emit safe wrappers for import items / port to native Rust target items
-  - Write unit tests in Rust, run the _safety audit_ pass (see below), fix issues
+  - Write unit tests in Rust, run configured deterministic safety review, fix issues
   - Re-export ported items, build and run original tests
   - Commit changes, merge in parent branch, fix conflicts, purge worktree once landed
 
-**Batch Scheduling.** Crustify employs a deterministic scheduler that queries the oracle's DAG
-to compose translation batches and routes them to the type/symbol agents. The
+`cli-config.json` selects optional translator instructions under
+`prompt_capabilities.translator`. The known names are `crustify-oracle`,
+`ffibox` and `crustify-audit`. Omitting one removes its skill metadata and
+translator guidance from the prompt only; it does not hide binaries, paths,
+dependencies or source trees from the agent's shell. Each agent log records the
+selected set and a hash of its rendered prompt.
+
+**Batch Scheduling.** `crustify-oracle schedule` composes deterministic batches
+in `campaign.json`. `crustify-cli translate` routes them through the type or
+symbol arm of one translator agent. The
 batching policy is governed by kind and DAG. First a batch is made of either types or symbols, never
 both. Second, a single agent's batch either contains items from a single DAG layer, or from multiple
 layers if their dep closure is also in the batch; lower layers get scheduled before higher ones.
 Selection is section-blind, and every batch of a run carries the run's `--objective`.
 
-**Workload Tuning.** Crustify also supports workload tuning: the symbol agent takes a batch of
-symbols capped by a configurable max number of symbols and `LoC` (currently `50` and `1000`), while
-the type agent gets a batch of types capped by a max number of types and a min number of fields
-(currently `5` and `10`). Both have tunable CLI parameters. Agents with separate batches
+**Workload Tuning.** Crustify also supports workload tuning: a symbol-route batch is
+capped by a configurable max number of symbols and `LoC` (currently `50` and `1000`), while
+a type-route batch is capped by a max number of types and a min number of fields
+(currently `5` and `10`). These are oracle scheduling parameters. Agents with separate batches
 run concurrently in **isolated worktrees** via a configurable concurrency threshold, i.e. max nr of
 parallel agents. The orchestrator agent chooses how to best use the scheduler for driving
 translation campaigns.
@@ -292,7 +311,7 @@ Crustify uses three binaries: the semantic oracle, the translation driver and
 the standalone Rust safety scanner.
 
 ```bash
-crustify-oracle <repo_root> <target> {extract-ql | query {types|symbols|files|dag}}
+crustify-oracle <repo_root> <target> {extract-ql | query {types|symbols|files|dag} | schedule}
 
 crustify-cli [globals] <repo_root> <target> {crates | translate}
 
@@ -301,31 +320,9 @@ crustify-audit <repo_root> unsafe [--name NAME ...] [--json]
 
 ### `crustify-oracle`
 
-Four query subjects, each with its own modes:
-
-| subject | modes | flags |
-|---|---|---|
-| `types` | enumerate · introspect · submit | `--fields` `--lifecycle-ops` `--users` `--field-touchers` `--manifest` `--api-only` `--in-tree` `--out-of-tree` |
-| `symbols` | enumerate · introspect · submit · lifecycle discovery · call-graph closure | `--lifetime-for` `--taking` `--calling` `--callees` `--callers` `--depth` `--array` `--manifest` `--in-tree` `--out-of-tree` |
-| `files` | the api headers / targeted set / imported closure | `--api-only` `--targeted-only` `--imported-only` |
-| `dag` | closure · layer slice · flattened-cycle twins | `--name` `--layer` `--scc` `--depth` `--loc` `--full` |
-
-`--name` filters, `--file` disambiguates a name defined in more than one place, `--targeted-only` /
-`--imported-only` narrow any subject on the OWNERSHIP axis while `--api-only` cuts the independent
-PUBLICATION axis (they intersect, so `--api-only --imported-only` is the re-export set), and
-`--update` is the only writer. `--in-tree` / `--out-of-tree`
-narrow an enumeration by whether an entry's home is inside the repository: `--imported-only
---out-of-tree` is the permanent FFI floor, `--imported-only --in-tree` the remaining port backlog.
-`query dag --full` recomposes scope as if `campaign_objective` were `port`, so a `wrap` campaign can
-read the body-deep graph without editing its config.
-
-`query symbols --callees` / `--callers` walk the **raw use graph** the C wrote — codebase-wide,
-unnarrowed, keyed `(name, defined_in)` — while `query dag --name` walks the **ordering graph**,
-scope-narrowed and layered. `--depth` bounds both (default 1 = direct edges); cycles terminate.
-
-`query <subject> --help` is the authority for what each flag means and for the record semantics
-behind it; `--update-help` prints the findings schema `--update` expects, `--schema` the record's
-own field definitions.
+The standalone oracle owns its commands, schemas and CodeQL queries. Consult
+its README and `crustify-oracle ... --help`; crustify-cli intentionally does
+not duplicate that interface.
 
 ### `crustify-cli` and `crustify-audit`
 
@@ -336,18 +333,17 @@ CLI surfaces are:
 |---|---|---|
 | `crates locate` | reads the home of an entity from `crates.json` | `--all` `--name` `--file` `--dir` |
 | `crates validate` | validates `crates.json` without inspecting or generating Rust | — |
-| `translate` | emits the wrappers, layer by layer, one agent per batch | `--name` `--file` `--dag-layer` `--transitive` `--skip` `--force` `--objective` `--max-syms` `--max-loc` `--max-types` `--min-fields` `--lifetime-for` `--dry-run` · `--model` `--billing` `--parallel` `--parallel-max` `--parallel-policy` `--override-base-prompt` `--no-override-base-prompt` `--no-console` `--no-file-log` |
+| `translate` | executes `campaign.json`, layer by layer, one agent per batch | `campaign.json` `--objective` `--dry-run` · `--model` `--billing` `--parallel-max` `--override-base-prompt` `--no-override-base-prompt` `--no-console` `--no-file-log` |
 | `crustify-audit … unsafe` | scans a Cargo workspace globally, or returns resolved sites for named C types and symbols | `--name` `--json` |
 
 `translate` is the only surface above that spawns agents. `crates` and
 `crustify-audit unsafe` are deterministic and read-only with respect to source
 code; the latter writes its report to `crustify/audit/unsafe.json`.
 
-`--objective wrap\|port\|review` says what to do with a selection; a fourth, `raw`, is set by
-`--lifetime-for` and selects the lifetime tier's discovery arm. `--transitive` expands each name
-through its dependency closure, `--force` schedules items the selection would otherwise drop, and
-`--max-syms`/`--max-loc` cap per-agent effort so a god object cannot blow one context. Start with
-`--dry-run`: a high-layer seed pulls in a large closure.
+`--objective wrap\|port\|review` says what to do with the campaign. Raw lifetime
+campaigns are generated by the oracle with `schedule --lifetime-for`. Set
+`--parallel-max 1` for serial execution; larger values cap concurrent batches
+inside each topological wave. Start with `--dry-run`.
 
 `<stage> --help` is the authority for what a flag means.
 
