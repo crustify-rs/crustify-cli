@@ -77,7 +77,7 @@ Agent-filled, absent until one is submitted.
 
 Per-field records:
 
-- Scalar single -> `{name}` (layout-agnostic; bindgen handles it).
+- Scalar single -> `{name}` (layout-agnostic; the FFI binding carries it).
 - Scalar array / by-value aggregate / aggregate array -> `{name, type, ref:"value", array?}`.
 - Pointer (single or array) -> `{name, type, ref:"pointer", ptr:{...}, array?}`.
 

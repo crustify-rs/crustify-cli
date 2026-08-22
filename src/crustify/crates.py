@@ -1,11 +1,11 @@
-"""Access layer for ``crates.json`` — the whole-repo crate/module decomposition.
+"""Read-only access and CLI operations for ``crates.json``.
 
 ``crates.json`` is the placement oracle: it maps every in-scope C symbol/type
 to the unique Rust ``.rs`` that homes it. It is authored outside crustify — by
 hand, or by an orchestrator — against the layout in
-``specs/crates.json``; this module is the consumer-side read / lookup /
-validate API the ``scaffold`` command uses against it. Schema
-authority: ``specs/crates.json``.
+``specs/crates.json``; this module is the consumer-side locate / lookup /
+validate API. It never materializes Rust source or Cargo files. Schema authority:
+``specs/crates.json``.
 
 Shape (eliding ``_comment`` keys)::
 
@@ -35,14 +35,25 @@ from __future__ import annotations
 
 import json
 import re
+import sys
+from pathlib import Path
 from typing import Optional
 
-# Member buckets. `macros` is homed for library attribution only — bindgen
-# owns a macro's whole surface, so nothing anchors or wraps one.
+# The composer package lives in the crustify checkout rather than the installed
+# package. ``locate`` reads scope only to distinguish an unknown name from an
+# in-scope placement miss.
+_CRUSTIFY_ROOT = Path(__file__).resolve().parent.parent.parent
+_COMPOSE_PARENT = _CRUSTIFY_ROOT / "utils" / "codeql"
+if str(_COMPOSE_PARENT) not in sys.path:
+    sys.path.insert(0, str(_COMPOSE_PARENT))
+
+# Member buckets. `macros` is homed for library attribution only — the
+# orchestrator-authored FFI crate owns its surface, so nothing anchors it.
 _KINDS = ("functions", "types", "callbacks", "macros", "globals")
+_NON_RAW_KEYWORDS = frozenset({"crate", "self", "super", "Self"})
 
 
-# --------------------------------------------------------------- load / save
+# ---------------------------------------------------------------------- load
 
 def load(layout) -> dict:
     """Load ``crates.json`` (the repo-root artifact). An absent file yields an
@@ -52,9 +63,186 @@ def load(layout) -> dict:
         return {"crates": {}}
     return json.loads(path.read_text())
 
+# --------------------------------------------------------------- CLI operations
 
-def save(layout, doc: dict) -> None:
-    layout.crates_json.write_text(json.dumps(doc, indent=2) + "\n")
+def locate(
+    target: Path,
+    *,
+    all: bool = False,
+    dir: str | None = None,
+    file: str | None = None,
+    name: list[str] | None = None,
+) -> None:
+    """Print the ``crates.json`` home of a read-only selection."""
+    from crustify.layout import Layout
+
+    layout = Layout.discover(target)
+    doc = load(layout)
+
+    if all:
+        if not doc.get("crates"):
+            raise SystemExit(
+                f"crates locate: crates.json is empty ({layout.crates_json}). "
+                "Populate it from specs/crates.json before locating items.")
+        entries = _all_entries(doc)
+    elif name:
+        _require_one_home(doc, name, file)
+        misses = [n for n in name if not lookup_all(doc, n, file=file)]
+        if misses:
+            universe = _in_scope_names(layout, target)
+            unknown = [n for n in misses if n not in universe] if universe else []
+            unplaced = [n for n in misses if n not in unknown]
+            msg = []
+            if unknown:
+                msg.append("not in scope (unknown symbol/type): "
+                           + ", ".join(repr(n) for n in unknown))
+            if unplaced:
+                msg.append("in scope but not placed in crates.json: "
+                           + ", ".join(repr(n) for n in unplaced)
+                           + " — add them to the oracle, then re-run.")
+            raise SystemExit("crates locate: " + "; ".join(msg))
+        entries, missing = entries_for_names(doc, name, file)
+        for n in missing:
+            print(f"crates locate: {n}: not placed", file=sys.stderr)
+        if missing and not entries:
+            raise SystemExit(1)
+    elif file is not None or dir is not None:
+        entries = _entries_for_path(doc, layout, target, file, dir)
+        if not entries:
+            raise SystemExit(
+                "crates locate: nothing in crates.json under "
+                f"{file if file is not None else dir!r}.")
+    else:
+        raise SystemExit(
+            "crates locate: pass one of --all / --name / --file / --dir.")
+
+    seen: set[Path] = set()
+    for entry in entries:
+        path = full_rs(layout, entry["crate_path"], entry["rs"])
+        if path not in seen:
+            seen.add(path)
+            print(path)
+
+
+def validate_command(target: Path) -> None:
+    """Run the existing ``crates.json`` consistency checks and print a gate."""
+    from crustify.layout import Layout
+
+    layout = Layout.discover(target)
+    doc = load(layout)
+    errors = validate(doc)
+
+    from crustify import manifests
+    errors += validate_depends_on(
+        doc, manifests.entries(layout, target, "types", stage="crates"))
+
+    if errors:
+        for error in errors:
+            print(f"crates validate: {error}", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"[crustify-cli crates validate] crates.json OK ({layout.crates_json})")
+
+
+def _in_scope_names(layout, target: Path) -> set[str]:
+    """Return the authoritative targeted/imported name universe when available."""
+    from compose import scope as compose_scope
+    from crustify import scope
+
+    try:
+        doc = scope.build(layout, target, stage="crates")
+    except SystemExit:
+        return set()
+    names: set[str] = set()
+    for section in ((doc.get(sec) or {}) for sec in compose_scope.SECTIONS):
+        for group in ("functions", "globals", "macros", "types"):
+            for entry in section.get(group) or []:
+                for key in ("name", "type"):
+                    if entry.get(key):
+                        names.add(entry[key])
+    return names
+
+
+def _entry(cname: str, crate: dict, rs: str, record: dict) -> dict:
+    return {"crate": cname, "crate_path": crate.get("crate_path"), "rs": rs,
+            "members": record.get("members") or {}, "tu": record.get("tu"),
+            "headers": record.get("headers") or []}
+
+
+def _all_entries(doc: dict) -> list[dict]:
+    out = []
+    for cname, crate in (doc.get("crates") or {}).items():
+        for module in (crate.get("modules") or {}).values():
+            for rs, record in (module.get("rs") or {}).items():
+                out.append(_entry(cname, crate, rs, record))
+    return out
+
+
+def _require_one_home(doc: dict, names: list[str], file: str | None) -> None:
+    """Refuse a name with several homes unless ``file`` disambiguates it."""
+    bad = []
+    for name in dict.fromkeys(names):
+        hits = lookup_all(doc, name, file=file)
+        if len(hits) > 1:
+            bad.append((name, hits))
+    if not bad:
+        return
+    lines = []
+    for name, hits in bad:
+        lines.append(f"  - {name}  ({len(hits)} homes)")
+        for hit in hits:
+            qualifier = hit.get("tu") or (hit.get("headers") or [None])[0]
+            lines.append(
+                f"      --file {qualifier or '?'}   → {hit['crate']}/{hit['rs']}")
+    narrowed = " (already narrowed by --file)" if file else ""
+    raise SystemExit(
+        f"crates locate: {len(bad)} name(s) are placed in more than one module"
+        f"{narrowed} — pass --file to pick one:\n" + "\n".join(lines))
+
+
+def entries_for_names(
+    doc: dict,
+    names: list[str],
+    file: str | None = None,
+) -> tuple[list[dict], list[str]]:
+    """Return the unique ``crates.json`` homes for ``names``."""
+    entries, missing, seen = [], [], set()
+    for name in names:
+        hits = lookup_all(doc, name, file=file)
+        if not hits:
+            missing.append(name)
+            continue
+        for hit in hits:
+            key = (hit["crate"], hit["rs"])
+            if key in seen:
+                continue
+            seen.add(key)
+            crate = doc["crates"][hit["crate"]]
+            record = crate["modules"][hit["module"]]["rs"][hit["rs"]]
+            entries.append(_entry(hit["crate"], crate, hit["rs"], record))
+    return entries, missing
+
+
+def _entries_for_path(doc, layout, target, file, dir) -> list[dict]:
+    wanted = _path_filter(layout, target, file if file is not None else dir)
+    out = []
+    for cname, crate in (doc.get("crates") or {}).items():
+        for module in (crate.get("modules") or {}).values():
+            for rs, record in (module.get("rs") or {}).items():
+                files = [f for f in [record.get("tu"),
+                                     *(record.get("headers") or [])] if f]
+                hit = (any(f == wanted for f in files) if file is not None else
+                       any(f == wanted or f.startswith(wanted + "/") for f in files))
+                if hit:
+                    out.append(_entry(cname, crate, rs, record))
+    return out
+
+
+def _path_filter(layout, target, selection: str) -> str:
+    import posixpath
+
+    rel = layout.rel_target(target)
+    base = "" if rel in ("", ".") else rel
+    return posixpath.normpath(posixpath.join(base, selection)).lstrip("/")
 
 
 # ------------------------------------------------------------------- lookup
@@ -100,6 +288,25 @@ def lookup(doc: dict, name: str, *, file: str | None = None) -> Optional[dict]:
     return hits[0] if hits else None
 
 
+def _safe_rs(rs: str) -> str:
+    """Map a C-faithful ``crates.json`` path to its physical Rust path."""
+    out = []
+    for segment in Path(rs).parts:
+        stem, dot, extension = segment.partition(".")
+        stem = re.sub(r"[^A-Za-z0-9_]+", "_", stem)
+        if stem in _NON_RAW_KEYWORDS:
+            stem += "_"
+        out.append(stem + dot + extension)
+    return str(Path(*out)) if out else rs
+
+
+def full_rs(layout, crate_path: str, rs: str) -> Path:
+    """Return the physical Rust path for a ``crates.json`` home."""
+    path = Path(crate_path)
+    crate_dir = path if path.is_absolute() else layout.repo_root / path
+    return crate_dir / _safe_rs(rs)
+
+
 # ----------------------------------------------------------------- validate
 
 def validate(doc: dict) -> list[str]:
@@ -112,7 +319,7 @@ def validate(doc: dict) -> list[str]:
       - **well-formedness** — every ``depends_on`` names a defined crate.
       - **module-path collision** — no ``src/x.rs`` beside a ``src/x/`` claimed
         by another entry. Rust accepts ``x.rs`` OR ``x/mod.rs`` as the body of
-        module ``x``, never both (E0761), and the scaffolder materializes a
+        module ``x``, never both (E0761), and the authored tree needs a
         ``mod.rs`` for every directory it has to wire. The convention is
         ``src/x/x.rs`` (module ``x::x``), which the workspace's
         ``clippy::module_inception = "allow"`` exists for.
@@ -190,11 +397,9 @@ def validate_depends_on(doc: dict, type_entries) -> list[str]:
     records' BY-VALUE type references. Returns error strings (``[]`` = consistent).
 
     A struct homed to crate A that embeds **by value** an entity homed to crate B
-    needs B's layout, so ``A.depends_on`` must contain B. A missing edge is
-    silent downstream: bindgen derives the ``-sys`` blocklist and the
-    ``pub use <dep>_sys::*`` imports from ``depends_on`` alone, so it mints its
-    own copy of B's type rather than importing B's — two distinct Rust types for
-    one C type, surfacing much later as a mismatch at ``cargo check``.
+    needs B's layout, so ``A.depends_on`` must contain B. A missing edge leaves
+    the orchestrator-authored Rust/FFI crate topology inconsistent and otherwise
+    surfaces only when the workspace is compiled.
 
     Deliberately restricted to ``ref == "value"`` fields. A **pointer** to a
     foreign type needs no layout (an incomplete type binds fine), so a missing
@@ -207,8 +412,6 @@ def validate_depends_on(doc: dict, type_entries) -> list[str]:
     Placement itself is NOT checked here (this reads it as ground truth); a
     misplaced member moves the reference and its owner together.
     """
-    from pathlib import Path
-
     crates = doc.get("crates") or {}
     owner: dict[str, str] = {}       # member name -> owning crate
     for crate, c in crates.items():

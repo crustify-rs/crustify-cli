@@ -212,9 +212,8 @@ def link_shared(wt: Path, repo: Path) -> None:
     prompt as the literal "(no skills configured)" inside principles.md.
 
     ``crates.json`` joins the shared set on the **eager pre-seed** contract:
-    the placement oracle must be fully populated for the wave's units BEFORE
-    the wave starts (`scaffold --dag-layer N` / `scaffold --all`, single-
-    threaded → deterministic, no race), so agents only ever READ it — no
+    the orchestrator must fully populate the placement oracle for the wave's
+    units BEFORE the wave starts, so agents only ever READ it — no
     mid-wave miss-fill, no per-worktree `cp`, no merge-back. A genuine miss
     would write THROUGH the symlink into the shared main copy (a race); that is
     the signal the pre-seed was incomplete, to be hardened with a `chmod 444`

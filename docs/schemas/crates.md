@@ -11,8 +11,8 @@ independent of porting progress. Port/wrap status and per-target scope live in
 ## crates.\<name\>
 
 One entry per link unit, keyed by crate name. Crate names ARE the link-unit
-keys — they match `build.json`'s `libraries` or `executables`, and bindgen uses them as the
-library identity.
+keys — they match `build.json`'s `libraries` or `executables` and identify the
+wrapper and FFI crates that own its entities.
 
 | field | meaning |
 |---|---|
@@ -80,8 +80,8 @@ for placement; `tu`/`headers` disambiguate.
 Macros are the one deliberate exclusion from porting and wrapping: their whole
 surface belongs to the `-sys` crate — a `crustify_<NAME>` shim for a callable
 one, a `pub const` for a value one — and the C `#define` stays. They are listed
-so bindgen can resolve which library owns each (it puts them in that crate's
-`ALLOWED_MACROS`); no `.rs` anchor is ever laid for them.
+so translator agents can extend the owning crate's bindgen allowlist lazily;
+no `.rs` anchor is ever laid for them.
 
 **Anonymous types are never members.** CodeQL names every anonymous
 struct/union/enum with one synthetic placeholder (`(unnamed enum)`,

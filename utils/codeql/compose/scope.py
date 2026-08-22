@@ -230,7 +230,7 @@ def _doc(scope_src) -> dict:
 #: either bare noun is ambiguous at a glance — `targeted` / `imported` name what
 #: was DONE to an entity by the scope composer and collide with nothing. The
 #: pair before them was worse still: `"port"` and `"wrap"` are ALSO
-#: `campaign_objective` / `--objective` values, audit stage labels and scheduler
+#: `campaign_objective` / `--objective` values, agent labels and scheduler
 #: pool keys, so a sweep over those literals could not tell a section key from a
 #: verb.
 TARGETED = "targeted"

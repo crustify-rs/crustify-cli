@@ -79,7 +79,7 @@ anything. A 30-field type meets the floor alone and gets the batch to itself,
 which is the old behaviour for exactly the types that earned it.
 
 DECLARED fields, which is what the dag carries (a type node's ``loc`` is its
-field count). It overcounts: the scaffolder anchors only the target-touched
+field count). It overcounts: the scheduler anchors only the target-touched
 subset, so ``evp_keymgmt_st`` reads 35 fields against 0 anchors on disk. That
 makes this a coarse floor, not a work estimate — which is why the type cap
 above is the binding one in practice.
@@ -146,4 +146,3 @@ by the scheduler for the duration of a worktree-isolated wave (see
 lands on it with ``git push <git-common-dir> HEAD:refs/heads/{git_base}`` and
 rebases onto it on rejection, so it needs the ref name -- not a path -- and only
 the scheduler knows it. Empty outside a wave."""
-

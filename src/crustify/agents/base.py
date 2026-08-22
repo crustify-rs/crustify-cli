@@ -152,8 +152,8 @@ class CrustifyAgent:
         # An isolated-wave agent passes its WORKTREE as `repo_root` (only when a
         # worktree is actually in play) so every `crustify-cli <repo_root> …` the
         # prompt runs — and every artifact path (rust/, logs) — resolves to the
-        # worktree, not the pinned main repo. Without it, parallel agents' scaffold
-        # writes + commits leak into the shared main checkout. Default (None) keeps
+        # worktree, not the pinned main repo. Without it, parallel agents' Rust-tree
+        # writes and commits leak into the shared main checkout. Default (None) keeps
         # the pinned-main behaviour for the in-place / non-isolated path.
         self.layout = Layout(repo_root) if repo_root is not None else Layout.discover(self.target)
         self.repo_root = self.layout.repo_root

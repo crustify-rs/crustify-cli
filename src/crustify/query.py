@@ -69,7 +69,7 @@ def query(
                            the whole record with ``--with-details``;
                            ``--fields`` / ``--lifecycle-ops`` (types) print
                            its windowable lists. (The entry's ``.rs`` module is
-                           found via ``scaffold --name``, not here.)
+                           found via ``crates locate --name``, not here.)
       * ``--name A B …`` → several records at once (no facet).
     """
     kind = "type" if subject == "types" else "symbol"
@@ -630,7 +630,7 @@ def _enumerate(
     rows.sort(key=lambda e: (e.get(tagkey) or "", e.get("defined_in") or ""))
 
     # One TSV line per (name, kind, defined_in, declared_in) — the
-    # provenance the scaffolder places on, plus the `kind` it buckets by
+    # provenance recorded by crates.json, plus the `kind` it buckets by
     # (function_* → functions, macro_* → macros, global_* → globals; a type's
     # struct/enum/callback/string/array all → types). `defined_in` is
     # empty for a TU-less entity; `declared_in` is comma-joined. Deduped by
@@ -659,7 +659,7 @@ def _introspect(
     its windowable ``--fields`` / ``--lifecycle-ops`` / ``--users`` /
     ``--field-touchers`` lists, the ``--manifest`` types.json that homes it, or
     a ``--update`` findings ingest. (The entry's ``.rs`` module is found via
-    ``scaffold --name``.)"""
+    ``crates locate --name``.)"""
     from crustify import dag as D
 
     if (fields or lifecycle_ops or users or field_touchers or manifest
@@ -825,7 +825,7 @@ def _scope_touched_fields(layout, target, tag: str, defined_in: str | None,
     (:data:`~compose.scope.TARGETED` | :data:`~compose.scope.IMPORTED`). Empty if no
     scope.json. Drives the --targeted-only/--imported-only narrowing for --fields
     and --field-touchers, and — through `scope_touched_index` — which fields the
-    scaffolder anchors."""
+    scheduler-local anchors."""
     by_file = scope_touched_index(layout, target, which).get(tag) or {}
     if defined_in and defined_in in by_file:
         return set(by_file[defined_in])
@@ -2147,9 +2147,9 @@ def query_dag(
         does with each kind.
 
         The groups ARE the routing: `types` go to the type wrapper, `callbacks`
-        and `functions` to the symbol wrapper, `macros` to nobody -- bindgen
-        owns their `-sys` shims, so no stage facades them. They stay a group
-        rather than being dropped so a caller can see the closure is complete;
+        and `functions` to the symbol wrapper, and `macros` have no standalone
+        unit -- their consumers extend the owning `-sys` crate lazily. They stay
+        a group rather than being dropped so a caller can see the closure is complete;
         every wrap/port consumer just ignores the key.
 
         `layer` and `depth` are emitted unconditionally because they exist
@@ -2307,4 +2307,3 @@ def query_files(
         print(f"\n# imported ({len(import_files)})")
         for f in import_files:
             print(f)
-

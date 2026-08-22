@@ -2,7 +2,7 @@
   "_comment": [
     "REPO-ROOT-tier crate/module decomposition for libxml2 v2.15.3.",
     "",
-    "SEEDED SHELL - `modules` is empty on purpose, and Phase 1 fills it.",
+    "SEEDED SHELL - `modules` is empty on purpose; Phase 2 homes each wave lazily.",
     "The member lists are an enumeration of the entity inventory, which does",
     "not exist until `extract-ql` has produced the T1 tables; authoring them",
     "ahead of the database would be guessing at names. The crate identity,",
@@ -29,7 +29,7 @@
         "Fill during Phase 1, after `extract-ql`.",
         "",
         "A wrap-only target homes its entities by IMPORT HEADER, not by",
-        "translation unit: scaffold routes a wrap item through its",
+        "translation unit: the orchestrator routes a wrap item through its",
         "`scope.json` `wrap.declared_in`, so the module tree should mirror",
         "include/libxml/ rather than the 55 flat .c files. Expect roughly one",
         "module per public header, with `tu: null` on every `.rs` - nothing",

@@ -10,12 +10,12 @@ One agent for every wrap unit the ``--name`` scheduler produces:
     field-access discipline (the symbol stays in C; you only add the safe
     wrapper).
 
-Wrap-scope *macros* are **not** handled here — they are header-defined, so
-bindgen owns their `-sys` shims (see scaffold/bindgen). Port-scope (TU) macros
-are the port agent's job.
+Ordinary wrap-scope *macros* are not standalone units. The translator that
+needs one extends the owning `-sys` crate's bindgen allowlist or shim lazily.
+Port-scope (TU) macros are the port agent's job.
 
 The deterministic :mod:`crustify._schedule` resolves *which* units, *what
-order*, and *which `.rs`*; this agent fills the scaffolded anchors for one
+order*, and *which `.rs`*; this agent fills the scheduler-local anchors for one
 batch. Idempotency is the per-item ``// crustify:todo`` placeholder (filled →
 removed), not a whole-file sentinel.
 """
@@ -72,7 +72,7 @@ class TranslateAgent(CrustifyAgent):
         fallback_deps: list[str] | None = None,         # deps not wrapped yet → raw ffi::T
         naked_users: list[str] | None = None,           # users to switch onto this wrapper
         # pull path (single struct/union/enum): the agent discovers everything via
-        # `crustify-cli query`/`scaffold`; the scheduler hands only the field window.
+        # oracle queries; the scheduler hands only the field window.
         # syms batch:
         rs_out: str | None = None,
         syms: list[dict] | None = None,

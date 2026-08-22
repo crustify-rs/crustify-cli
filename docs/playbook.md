@@ -1,11 +1,11 @@
 # Playbook
 
 Driving crustify, in two phases. Setup: toolchain install through the first
-commit of the scaffolded Rust tree — authoring `build.json`, `cli-config.json`
-and a target's `scope-config.json`, building the CodeQL database and extracting
-the T1/T2 tables, crate placement, scaffold and bindgen. Translation: planning,
-running, landing and auditing waves of translate agents over that tree. Read
-Setup before any wave; every later stage reads what it produces.
+commit of the initial Rust tree — authoring `build.json`, `cli-config.json` and
+a target's `scope-config.json`, building the CodeQL database, extracting the
+T1/T2 tables, and seeding crate shells. Translation: preparing, running,
+landing and scanning waves with `crustify-audit`. Read Setup
+before any wave; every later stage reads what it produces.
 
 Paths below are relative to the crustify checkout (`deps.crustify` in
 `cli-config.json`). Run any command's `--help` for exact flags — argparse is the
@@ -30,7 +30,7 @@ are the only complete spec.
 
 ## Phase 1 — Setup
 
-From an untouched checkout to the first commit of the scaffolded Rust tree.
+From an untouched checkout to the first commit of the initial Rust tree.
 
 ### 1. Toolchains and checkouts
 
@@ -39,10 +39,11 @@ From an untouched checkout to the first commit of the scaffolded Rust tree.
 | Python ≥ 3.13 | system or `uv` |
 | Claude Code CLI | `curl -fsSL https://claude.ai/install.sh \| bash` |
 | OpenAI Codex CLI | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` |
-| Rust | rustup: `cargo`, `clippy`, nightly toolchain |
+| Rust | rustup: `cargo`, `clippy`; nightly with `rustc-dev` and `llvm-tools` |
 | `bindgen-cli` | `cargo install bindgen-cli` |
 | CodeQL | the CodeQL CLI bundle, on `PATH` |
 | `ffibox` | `git clone https://github.com/crustify-rs/ffibox.git` |
+| `crustify-audit` | `git clone git@github.com:crustify-rs/crustify-audit.git` beside `ffibox`; `python -m pip install -e <checkout>` |
 
 On macOS arm64 the CodeQL bundle needs Rosetta.
 
@@ -196,57 +197,40 @@ git -C <repo> checkout -b crustify/<target>-<model>
 mkdir -p <repo>/crustify/targets/<target>/logs
 ```
 
-### 7. Crate placement and scaffold
+### 7. Seed crate shells
 
-Author `crustify/crates.json` — the whole-repo crate/module decomposition and
-the placement oracle. Schema: `docs/schemas/crates.md`; layout example:
-`specs/crates.json`.
+Author `crustify/crates.json`, the placement oracle. Schema:
+`docs/schemas/crates.md`; example: `specs/crates.json`.
 
-Crate names ARE the link-unit keys: they match `build.json`'s `libraries` and
-`executables`, and bindgen uses them as the library identity. `depends_on` comes
-from `link_dependencies` and must be acyclic. Every library with bound entities
-needs a `sys_crate`.
+Seed the campaign's target crate and the top-level crates that own its imported
+dependencies. Leave `modules` empty and do not home items yet. Crate names
+match `build.json`'s link-unit keys; `depends_on` comes from
+`link_dependencies` and is acyclic.
 
-Use the oracle for the inventory to home, and `build.json` for the artefact
-hierarchy:
+The orchestrator creates minimal compiling wrapper crates. Each starts with a
+`Cargo.toml` and empty crate root. Do not create campaign modules yet.
 
-```bash
-crustify-oracle <repo_root> <target> query types  --targeted-only
-crustify-oracle <repo_root> <target> query symbols --imported-only
-```
+Use Rust edition 2024. Wrapper crates inherit workspace lints that deny
+`clippy::undocumented_unsafe_blocks` and allow `clippy::module_inception`.
+Do not apply those lints to generated `<lib>-sys` code.
 
-Then materialize the tree and gate it:
+For each target or imported library crate, create its `<lib>-sys` placeholder:
+`Cargo.toml`, `src/lib.rs`, `build.rs` and the bindgen input. Its bindgen
+pipeline must compile with an empty, no-match agent-owned allowlist. Translator
+agents populate that allowlist lazily.
 
-```bash
-crustify-cli <repo_root> <target> scaffold --all
-crustify-cli <repo_root> <target> scaffold --validate
-```
-
-### 8. `bindgen`
+Gate the shells:
 
 ```bash
-crustify-cli <repo_root> <target> bindgen [--libs LIB …]
+crustify-cli <repo_root> <target> crates validate
+cargo build
+cargo test
 ```
 
-Partitions the import surface by owning crate into `<lib>-sys` crates.
-**They come out incomplete by design**: `build.rs` carries the per-kind
-allowlists but no `fn main`, and `bindgen.h`'s shim block is empty. Finishing
-them needs a compiler in the loop, so complete them by hand.
+### 8. Commit
 
-- Write `fn main` and the clang args; generate the bindings.
-- Diff the allowlists against the emitted `bindings.rs` to assess completeness,
-  and fix what is missing.
-- Write thin unit tests proving each `-sys` crate passes `cargo build` and
-  `cargo test`.
-- **Do not shim a macro that has no bindgen binding.** Worker agents generate
-  those on demand during translate; a hand-written shim collides with what they
-  emit.
-
-### 9. Commit
-
-Commit the scaffolded `rust/` tree on `crustify/<target>-<model>`. Translate waves land
-on branches based off this commit, so it is the baseline every later diff and
-promotion is read against.
+Commit the initial `rust/` tree on `crustify/<target>-<model>`. Translate waves
+branch from this baseline.
 
 ### Gates before the first wave
 
@@ -255,7 +239,7 @@ promotion is read against.
 | baseline recorded | `build.json.test_baseline` names pass/total and every disabled test |
 | T1/T2 populated | `crustify/codeql/{t1,t2}/` non-empty |
 | scope is what you meant | `query files --targeted-only` / `--imported-only` |
-| placement consistent | `scaffold --validate` exits clean |
+| placement consistent | `crates validate` exits clean |
 | FFI crates link | `cargo build` + `cargo test` on each `<lib>-sys` |
 | DAG resolves | `query dag --layer 0` returns the leaf set |
 
@@ -266,6 +250,26 @@ promotion is read against.
 A wave is one `crustify-cli … translate` invocation: the scheduler selects
 units, batches them under budget, and spawns one agent per batch in its own git
 worktree. Waves repeat bottom-up until the target is closed.
+
+### Prepare each wave
+
+Before `translate`, the orchestrator:
+
+1. chooses the next target wave from the oracle;
+2. runs wrap waves for any unsatisfied imported items in its dependency closure;
+3. homes each selected wave's items in `crates.json`;
+4. creates its `.rs` files and connects them to the crate root;
+5. runs `crustify-cli <repo_root> <target> crates validate`;
+6. confirms the affected crate shells compile.
+
+Imported waves run lazily and recursively before the target wave that needs
+them. They use the imported crate shells seeded during Setup.
+
+The scheduler inserts TODO anchors. Translator agents extend their worklist's
+bindgen allowlists and regenerate bindings in their worktrees.
+
+Do not change `crates.json` during a wave. When landing parallel agents, union
+their `<lib>-sys` allowlist changes and rerun the affected crate tests.
 
 ### Choosing the objective
 
@@ -292,12 +296,35 @@ After agents' changesets land in the session branch, check their logs to make su
 C and Rust targets build and the tests pass. No need to check the C build/tests for
 a wrap wave.
 
+Run the deterministic scan over the merged wave, seeding the exact C type and
+symbol names scheduled in it:
+
+```bash
+crustify-audit <repo_root> unsafe --name <wave names...> --json
+```
+
+Inspect each entry's source-site lists. A site is a lead, not a failure: fix a
+wrapper bypass or unsound reference, and leave a necessary FFI seam in place
+with its safety justification. The named pass also returns the tree-wide
+`counts` block.
+
+`crustify/audit/unsafe.json` is reproducible and gitignored. The
+orchestrator's post-merge scan is the wave record.
+
 After verifying everything is green, promote session branches to the cannonical branch.
+
+At the end of the campaign, record one unseeded tree-wide scan:
+
+```bash
+crustify-audit <repo_root> unsafe --json
+```
 
 ### Review objective
 
 Run the `--objective review` stage if the user instructed you to do so, chosing the model
-they've selected.
+they've selected. This agentic review is independent of the deterministic
+`crustify-audit unsafe` gate above. `crustify-audit ub` is outside the campaign
+workflow.
 
 ### Accounting
 
