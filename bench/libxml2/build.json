@@ -81,7 +81,7 @@
 
   "_comment_executables": [
     "Built by the same cmake run and present in the CodeQL database, but",
-    "outside the target: scope-config.json names only include/libxml/, so",
+    "outside the target: oracle-config.json names only include/libxml/, so",
     "none of their entities enters scope. Recorded for link-topology",
     "completeness. `runtest` / `runsuite` / `testapi` carry the",
     "port-equivalence baseline."

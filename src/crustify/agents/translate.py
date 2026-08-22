@@ -1,23 +1,17 @@
 """TranslateAgent — the merged wrap-stage codegen agent (agent half).
 
-One agent for every wrap unit the ``--name`` scheduler produces:
+One agent for every batch recorded in ``campaign.json``:
 
   * a **type** batch (a struct / union / enum + a budget slice of its field
-    accessors) — the lifecycle + field-accessor recipe in ``types.md``;
-    synthetic string / array clusters use their own prompts, and
+    accessors) — the type route in ``translator.md``, and
   * a **free-symbol** batch (functions / globals not bound to one type) —
-    ``symbols.md``: a thin safe view over the FFI surface, no
-    field-access discipline (the symbol stays in C; you only add the safe
-    wrapper).
+    the symbol route in ``translator.md``.
 
 Ordinary wrap-scope *macros* are not standalone units. The translator that
 needs one extends the owning `-sys` crate's bindgen allowlist or shim lazily.
-Port-scope (TU) macros are the port agent's job.
 
-The deterministic :mod:`crustify._schedule` resolves *which* units, *what
-order*, and *which `.rs`*; this agent fills the scheduler-local anchors for one
-batch. Idempotency is the per-item ``// crustify:todo`` placeholder (filled →
-removed), not a whole-file sentinel.
+The standalone oracle selects and orders units. The executor resolves their
+authored `.rs` homes and this agent fills one batch's scheduler-local anchors.
 """
 from __future__ import annotations
 
@@ -25,27 +19,28 @@ import json
 import re
 from pathlib import Path
 
-from crustify.agents.base import CrustifyAgent, _PKG_ROOT
+from crustify.agents.base import CrustifyAgent, SkillSpec, _PKG_ROOT
 
-# struct/union/enum share the type recipe.
-_PROMPT_BY_KIND: dict[str, str] = {
-    "struct":           "types.md",
-    "union":            "types.md",
-    "enum":             "types.md",
-    # A type-minting macro (`generates` non-empty) — the GENERATOR of a template
-    # family. Its deliverable is a struct, so it takes the type recipe: the
-    # generic its instances alias, with the `CCell` impl, the layout gate and
-    # the field accessors that only `types.md` describes.
-    #
-    # Every macro that reaches this table is a generator: `wrap._is_macro`
-    # excludes all others from the selection, so `subkind == "macro"` here
-    # already means "minting". `_schedule.form_units` is what puts one in a type
-    # batch; this entry is the other half of that routing.
-    "macro":            "types.md",
+_TYPE_KINDS = ("struct", "union", "enum", "macro")
+
+_CORE_SKILLS = (
+    SkillSpec("crustify", "src/crustify/prompts/skill-translator.md"),
+)
+
+_CAPABILITY_SKILLS: dict[str, SkillSpec] = {
+    "crustify-oracle": SkillSpec(
+        "crustify-oracle", "SKILL.md", capability="crustify-oracle",
+        role_header="skill-oracle.md",
+    ),
+    "ffibox": SkillSpec(
+        "ffibox", "SKILL.md", capability="ffibox",
+        role_header="skill-ffibox.md",
+    ),
+    "crustify-audit": SkillSpec(
+        "crustify-audit", "SKILL.md", capability="crustify-audit",
+        role_header="skill-audit.md",
+    ),
 }
-# Type kinds with no wrapper codegen yet. Callbacks are NOT here: they route as
-# sym-units (see _schedule.form_units) to symbols.md §3.
-_NOT_YET: tuple[str, ...] = ()
 
 
 class TranslateAgent(CrustifyAgent):
@@ -79,8 +74,7 @@ class TranslateAgent(CrustifyAgent):
         # Lifetime-discovery mode (`translate --lifetime-for`):
         # instead of a resolved worklist, the agent is handed a SPEC and finds
         # the lifecycle primitives itself. Rides in `syms` as a mode marker so
-        # the prompt has one input to read, exactly as the retired analyzer's rode in
-        # `manifests`.
+        # the prompt has one input to read.
         lifetime_for: str | None = None,
         # What the agent is being asked to DO with this batch, handed straight
         # to the prompt as `{objective}`: "wrap" | "port" | "review" | "raw".
@@ -91,11 +85,16 @@ class TranslateAgent(CrustifyAgent):
         # finding a filled anchor on disk, which was indistinguishable from
         # being asked to nativize one.
         objective: str = "wrap",
+        prompt_capabilities: tuple[str, ...] | None = None,
         repo_root: Path | None = None,         # worktree root in an isolated wave
     ) -> None:
         super().__init__(target, repo_root=repo_root)
         self._batch_kind = batch_kind
         self._objective = objective
+        self._prompt_capabilities = (
+            tuple(prompt_capabilities) if prompt_capabilities is not None
+            else self.configured_capabilities(self.layout)
+        )
         self._deps = list(deps or [])
         self._tags = list(tags or [])
         self._kinds = list(kinds or [])
@@ -114,6 +113,38 @@ class TranslateAgent(CrustifyAgent):
         self._syms = ([{"lifetime_for": lifetime_for}] if lifetime_for
                       else list(syms or []))
 
+        if self._batch_kind not in ("type", "syms"):
+            raise ValueError(f"TranslateAgent: unsupported batch kind {self._batch_kind!r}")
+        if self._batch_kind == "type":
+            unsupported = sorted(set(self._kinds) - set(_TYPE_KINDS))
+            if unsupported:
+                raise ValueError(
+                    f"TranslateAgent: unsupported type kind(s) {unsupported}; "
+                    f"expected one of {list(_TYPE_KINDS)}")
+
+    @staticmethod
+    def configured_capabilities(layout) -> tuple[str, ...]:
+        """Read the translator's prompt-only capability set once."""
+        p = layout.repo_config
+        cfg = json.loads(p.read_text()) if p.exists() else {}
+        block = cfg.get("prompt_capabilities") or {}
+        names = block.get("translator") or []
+        if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+            raise SystemExit(
+                "cli-config.json: prompt_capabilities.translator must be a list of names")
+        unknown = sorted(set(names) - set(_CAPABILITY_SKILLS))
+        if unknown:
+            raise SystemExit(
+                "cli-config.json: unknown translator prompt capability: "
+                + ", ".join(unknown))
+        # Preserve authored order in the prompt; collapse accidental repeats.
+        return tuple(dict.fromkeys(names))
+
+    def skill_specs(self) -> tuple[SkillSpec, ...]:
+        return _CORE_SKILLS + tuple(
+            _CAPABILITY_SKILLS[name] for name in self._prompt_capabilities
+        )
+
     @property
     def stage(self) -> str:  # type: ignore[override]
         """The per-agent log stem: ``<objective>-<kind>_<key>``, e.g.
@@ -124,7 +155,7 @@ class TranslateAgent(CrustifyAgent):
         `--dag-layer` selects types and symbols alike). So the wave-level
         identity (`Stage.verb` -> session branch, worktree dirs) tags with the
         objective alone, and the full pair lands on the agent's own files —
-        which is where it pays, since `utils/log_cost.py` buckets by this
+        which is where it pays, since `crustify-log-cost` buckets by this
         prefix and can now price `wrap-type` against `port-type` directly."""
         if self._batch_kind == "type":
             key = self._tags[0] if self._tags else "batch"
@@ -136,24 +167,8 @@ class TranslateAgent(CrustifyAgent):
         return (f"{self._objective}-{unit}_"
                 f"{re.sub(r'[^A-Za-z0-9_]+', '_', key or 'batch')}")
 
-    @property
-    def _kind(self) -> str:
-        """Family is homogeneous in kind; dispatch the prompt on the first tag."""
-        return self._kinds[0] if self._kinds else ""
-
     def _prompt(self) -> str:
-        if self._batch_kind == "syms":
-            return (_PKG_ROOT / "prompts" / "symbols.md").read_text()
-        if self._kind in _NOT_YET:
-            raise NotImplementedError(
-                f"TranslateAgent: kind {self._kind!r} ({self._tags}) — "
-                f"wrapper codegen not implemented for this kind yet.")
-        prompt_file = _PROMPT_BY_KIND.get(self._kind)
-        if prompt_file is None:
-            raise ValueError(
-                f"TranslateAgent: unsupported manifest kind {self._kind!r} for "
-                f"{self._tags!r}. Expected one of {sorted(_PROMPT_BY_KIND)}.")
-        return (_PKG_ROOT / "prompts" / prompt_file).read_text()
+        return (_PKG_ROOT / "prompts" / "translator.md").read_text()
 
     def _arguments(self) -> dict:
         common = {
@@ -162,35 +177,27 @@ class TranslateAgent(CrustifyAgent):
             # every key the base adds — a template naming one dies with KeyError
             # before the agent issues a request.
             **super()._arguments(),
-            "objective":      self._objective,
+            "task_objective": self._objective,
             "workspace_root": str(self.layout.rust),
             "build_json":     str(self.layout.build_json),
-            # NOTE: no `principles` key. The principles doc and skill index are
+            # NOTE: no `conventions` key. The conventions doc and skill index are
             # no longer a `.format` slot — they go to the backend's system slot
             # via `system_preamble()`, out of reach of context compaction.
         }
-        # All wrap paths are now PULL: the agent discovers its job via `crustify
-        # query`/`query dag`/`query sym`. The scheduler hands only identity.
-        if self._batch_kind == "syms":
-            # syms-pull: the pooled symbol names (+ defined_in for collisions).
-            common["syms"] = json.dumps(self._syms)
-            return common
-        # types-pull, shaped exactly like syms-pull: the batch's type names
-        # (+ defined_in for collisions). `_schedule.pack` pools up to
-        # `max_types` of them, so this is a LIST — handing only `tags[0]` here
-        # silently dropped the rest of a pooled batch.
-        #
-        # No `kind`: the agent reads it off the record it fetches anyway, and
-        # every kind routes to this one prompt, so passing it added a slot the
-        # scheduler had to keep true. It stays on `self._kinds` for the prompt
-        # dispatch above, which is internal.
-        #
-        # The agent pulls the field set, the reverse-derived lifecycle and the
-        # cast graph from each record itself; nothing about the accessor
-        # surface is handed over, since an import type already carries only
-        # its target-touched fields.
-        files = self._entry_files or [None] * len(self._tags)
-        common["types"] = json.dumps(
-            [{"name": n, "defined_in": f}
-             for n, f in zip(self._tags, files)])
+        common["campaign_objective"] = self._objective
+
+        if self._lifetime_for:
+            route = "raw-lifetime"
+            items = self._syms
+        elif self._batch_kind == "syms":
+            route = "symbol"
+            items = self._syms
+        else:
+            route = "type"
+            files = self._entry_files or [None] * len(self._tags)
+            items = [
+                {"name": n, "defined_in": f, "kind": k}
+                for n, f, k in zip(self._tags, files, self._kinds)
+            ]
+        common["worklist"] = json.dumps({"route": route, "items": items})
         return common

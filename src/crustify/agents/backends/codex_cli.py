@@ -8,7 +8,7 @@ from the session rollout the CLI persists independently of stdout format.
 Codex never reports cost - not in text mode, not under ``--json``, and its
 JSON stream does not even name the model - so ``<stage>.usage.json`` is
 built from the rollout's ``token_count`` events and priced by
-``utils/log_cost.py`` against the billing service's rates.
+``crustify-log-cost`` against the billing service's rates.
 
 Two codex-specific traps, both handled below: its ``input_tokens`` is
 *inclusive* of cached reads (Anthropic's is not), and its tool surface is
@@ -280,7 +280,7 @@ class CodexCliBackend:
         # Same system text as the claude backend, placed the only way codex
         # allows: `model_instructions_file` is a REPLACE slot, so the preamble
         # always goes through it and codex's own model instructions give way.
-        # Unconditional, because the preamble carries the principles doc and
+        # Unconditional, because the preamble carries the conventions doc and
         # skill index that every agent needs beyond compaction's reach.
         #
         # The filename is content-addressed. `codex_home` is shared across a

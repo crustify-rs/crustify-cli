@@ -27,7 +27,7 @@ from typing import NamedTuple
 class Route(NamedTuple):
     backend: str    # registered name in crustify.agents.backends
     model: str      # id handed to the provider CLI, verbatim
-    provider: str   # billing service; selects the rate table in log_cost.py
+    provider: str   # billing service; selects crustify-log-cost's rate table
 
 
 # provider -> backend that can drive it.

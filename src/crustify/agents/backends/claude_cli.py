@@ -11,7 +11,7 @@ is the trade the module previously declined; observability during the run
 turned out to be worth more than not owning one.
 
 Accounting still comes from the session transcript the CLI persists
-independently of stdout format, priced by ``utils/log_cost.py``.
+independently of stdout format, priced by ``crustify-log-cost``.
 
 Why not ``--output-format json``, which reports ``total_cost_usd``
 directly: it is the same buffering problem (one JSON blob at exit), and
@@ -110,7 +110,7 @@ def _render(evt: dict) -> list[str]:
 # whether the CLI's own prompt is appended to or replaced outright.
 #
 # Kept thin because it is role framing, not instructions - those live in
-# principles.md. Length here is not the cost it once looked like: this text is
+# conventions.md. Length here is not the cost it once looked like: this text is
 # byte-identical across a wave, so it is a cacheable prefix billed at ~0.1x on
 # every run after the first that writes it.
 _BASE_PROMPT = (
@@ -227,7 +227,7 @@ class ClaudeCliBackend:
             "--permission-mode", "bypassPermissions",
             "--add-dir", str(wd),
         ]
-        # The system text is unconditional now: it carries the principles doc
+        # The system text is unconditional now: it carries the conventions doc
         # and the skill index, which every agent needs and which must sit where
         # context compaction cannot reach. `OVERRIDE_BASE_PROMPT` no longer
         # decides *whether* we write here, only whether the CLI's own prompt

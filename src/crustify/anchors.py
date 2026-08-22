@@ -33,48 +33,6 @@ def _has_field_anchor(text: str, tag: str, field: str) -> bool:
         text) is not None
 
 
-def _port_touched(layout, target) -> dict[str, set] | None:
-    """Return type fields touched by targeted-section code.
-
-    ``None`` preserves the pre-analysis fallback in which every declared field
-    is eligible for an anchor.
-    """
-    from crustify import scope
-    from crustify.query import scope_touched_index
-
-    try:
-        scope.build(layout, target, stage="translate")
-    except SystemExit:
-        return None
-
-    from compose import scope as compose_scope
-    index = scope_touched_index(layout, target, compose_scope.TARGETED)
-    return {tag: {field for fields in by_file.values() for field in fields}
-            for tag, by_file in index.items()} or None
-
-
-def field_map(layout, target=None) -> dict[str, list[str]]:
-    """Map each type tag to the field TODOs its scheduled batch should receive."""
-    if target is None:
-        return {}
-
-    from crustify import manifests
-
-    touched = _port_touched(layout, target)
-    out: dict[str, list[str]] = {}
-    for entry in manifests.entries(layout, target, "types", stage="translate"):
-        tag = entry.get("name") or entry.get("type")
-        if not tag:
-            continue
-        names = [field["name"] for field in (entry.get("fields") or [])
-                 if isinstance(field, dict) and field.get("name")]
-        if touched is not None:
-            keep = touched.get(tag, set())
-            names = [name for name in names if name in keep]
-        out[tag] = names
-    return out
-
-
 def place_anchors(
     layout,
     target: Path,

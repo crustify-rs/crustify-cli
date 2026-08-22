@@ -5,8 +5,8 @@ crate/module decomposition and the placement oracle. Layout example:
 [`specs/crates.json`](../../specs/crates.json).
 
 Target-agnostic and cumulative: "which unique Rust `.rs` homes this C entity",
-independent of porting progress. Port/wrap status and per-target scope live in
-`scope.json`, never here.
+independent of porting progress. Oracle inventory and campaign plans live
+outside this manifest.
 
 ## crates.\<name\>
 
@@ -86,7 +86,7 @@ no `.rs` anchor is ever laid for them.
 **Anonymous types are never members.** CodeQL names every anonymous
 struct/union/enum with one synthetic placeholder (`(unnamed enum)`,
 `(unnamed class/struct/union)`), so dozens of distinct definitions collide on a
-single string that nothing can reference. They are filtered before `scope.json`,
+single string that nothing can reference. They are filtered by the oracle,
 so they never reach here. Their contents are not lost: `entities/fields.ql`
 flattens an anonymous member into its named parent under a qualified field name
 (`asn1_type_st` gets `value.asn1_string`), and that parent is a member as usual.
@@ -129,16 +129,8 @@ Invariants:
 
 ## anchors
 
-The scheduler lays one anchor per member of a batch, in that agent's worktree,
-resolving each member's home through this file. The agent replaces the line with
-a doc comment naming what it emitted.
-
-| anchor | for |
-|---|---|
-| `// crustify:todo: <name>` | a member, unfilled |
-| `// crustify:todo: <name>.<field>` | one per field of a type member |
-| `/// Wraps: <name>{.<field>}` | filled — a safe view over the FFI seam |
-| `/// Replaces: <name>{.<field>}` | filled — a native Rust translation |
+The scheduler resolves each batch member's home through this manifest and lays
+the anchors defined in the [coding conventions](../conventions.md#anchors).
 
 A field item is owner-qualified because a file-grained module holds many types.
 Which fields a type carries follows the composer's section shaping: an

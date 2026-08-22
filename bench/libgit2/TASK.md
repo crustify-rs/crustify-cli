@@ -9,7 +9,6 @@ max-loc: default
 max-types: 1
 billing: API
 parallel-max: the orchestrator picks an optimal value
-parallel-policy: default
 agent backend: ask user, showing available options
 model: ask user, showing available options
 
@@ -17,7 +16,7 @@ model: ask user, showing available options
 
 Run Phase 1 of the playbook end to end.
 The following artifacts are already authored, you can skip authoring them: 
-    - `/campaign/{build, scope-config, crates}.json`
+    - `/campaign/{build, oracle-config, crates}.json`
 
 Skip installing the playbook's toolchain if already installed.
 
@@ -34,20 +33,24 @@ crustify-oracle /work/<libgit2-checkout> src query types --imported-only
 crustify-oracle /work/<libgit2-checkout> src query dag --layer <L> --imported-only
 ```
 
-Wave one layer at a time, lowest first, using `--name`.
+Wave one layer at a time, lowest first. Write each selection with
+`crustify-oracle ... schedule --output <campaign.json> --name ...`, then run
+`crustify-cli ... translate <campaign.json> --objective wrap --dry-run`.
 
 **2. The import symbols the target needs at layers L0–>L2.** First, compute the
 symbol target closure at layers L0->L2. Second, compute their import symbol deps
 (functions, callbacks, globals). These are functions and globals target code at
-L0->L2 calls but does not own. Select by `--name`.
+L0->L2 calls but does not own. Select with `schedule --name`.
 
 **3. The god objects.** The three target types with more than 25 declared
 fields, and their transitive closure:
 
 ```
+crustify-oracle /work/<libgit2-checkout> src schedule \
+    --output /work/god-objects.json \
+    --name git_indexer git_packbuilder git_repository --transitive
 crustify-cli /work/<libgit2-checkout> src translate \
-    --name git_indexer git_packbuilder git_repository \
-    --transitive --objective wrap --dry-run
+    /work/god-objects.json --objective wrap --dry-run
 ```
 
 ## Autonomy
@@ -58,7 +61,7 @@ Wait for the user's go before promoting a session branch and proceeding with the
 
 Record results in `/work/wrappers-results.md` and use the exact format of the template.
 
-After each wave: `utils/log_cost.py` over the per-agent `<stage>.usage.json`
+After each wave: `crustify-log-cost` over the per-agent `<stage>.usage.json`
 for cost, the session branch diff for what landed, and
 `crustify-audit <repo> unsafe --name <wave names...> --json` for the unsafe and
 raw-pointer surface. Cost comes from token counts, never from

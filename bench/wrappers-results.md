@@ -15,7 +15,6 @@
 - **`--max-loc`** — `<n>`
 - **`--min-fields`** — `<n>`
 - **`--parallel-max`** — `<n>`
-- **`--parallel-policy`** — `<per-agent | serialize-per-file | per-file>`
 - **branch** — `<branch>`, tip `<sha>`
 - **deps** — crustify-cli `<sha>` (`<branch>`), ffibox `<sha>` (`<branch>`)
 
@@ -33,7 +32,6 @@ self-review, and any disagreement is what makes the pass informative.
 - **`--max-loc`** — `<n>`
 - **`--min-fields`** — `<n>`
 - **`--parallel-max`** — `<n>`
-- **`--parallel-policy`** — `<policy>`
 - **branch** — `<branch>`, tip `<sha>`
 - **agents** — `<n>`, over `<n>` session(s)
 
@@ -81,7 +79,8 @@ the campaign's.
 ## Raw lifetime discovery
 
 Goal: turn the untyped lifecycle primitives into Rust lifetime contracts before
-any wrapper needs one. `--lifetime-for void` then `--lifetime-for string`, one
+any wrapper needs one. Oracle `schedule --lifetime-for void` then
+`schedule --lifetime-for string`, one
 agent each, objective `raw` (set by the tier, not `--objective`). `strategies`
 counts the deleter/cloner ZSTs emitted; the four trait columns count the
 `unsafe impl`s that bind them.
@@ -143,7 +142,7 @@ code reads `+0/-0`.
 
 ## Safety audit
 
-`crustify-cli <repo> <target> audit --all`, `global` section — tree-wide, not
+`crustify-audit <crate> unsafe`, unseeded — tree-wide, not
 per seed. Two snapshots: the tree the review pass judged, and the tree it
 produced.
 
@@ -194,7 +193,7 @@ produced.
 | `ref_to_type_wrapper` | `<n>` | `<n>` | `<n>` | `&`/`&mut` on a layout newtype — **target 0** |
 | `field_proj_wrapped` | `<n>` | `<n>` | `<n>` | projection VOLUME — shares one HIR shape with `addr_of!`, not a violation |
 | `field_proj_outside_impl` | `<n>` | `<n>` | `<n>` | projections outside any accessor — **target 0** |
-| `field_ref_wrapped` | `<n>` | `<n>` | `<n>` | `&(*p).field` — the rule principles.md states — **target 0** |
+| `field_ref_wrapped` | `<n>` | `<n>` | `<n>` | `&(*p).field` — forbidden by the translator playbook — **target 0** |
 | `void_ptr_sanctioned` | `<n>` | `<n>` | `<n>` | `*c_void` in a seam / `ffi_export` / `extern "C"` signature |
 | `void_ptr_smell` | `<n>` | `<n>` | `<n>` | `*c_void` elsewhere; `void_ptr_sites` names each one |
 

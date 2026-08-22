@@ -74,8 +74,7 @@ inspectable-failure guarantee of finding F12, as a signal rather than a pile.
 Worktrees fork from **HEAD**: uncommitted changes in the main checkout are not
 carried into them, so a wave is expected to start from a committed tree. What
 HEAD cannot carry either is the gitignored, read-only-across-a-wave state
-(`codeql`, `targets`, `.providers`, `cli-config.json`,
-`cli-config.json`);
+(`oracle/codeql`, campaign logs, `.providers`, `cli-config.json`);
 :func:`link_shared` symlinks those from the main checkout so a worktree is a
 complete functional crustify tree without duplicating them.
 
@@ -173,7 +172,7 @@ def add_worktree(repo: Path, base_ref: str, slug: str) -> Path:
 #: for that reason — an agent submits through `query --update` into its own
 #: copy and its landing commit carries the findings, the route its Rust output
 #: already takes.
-_SHARED = (".providers", "codeql", "targets", "tmp", "cli-config.json")
+_SHARED = (".providers", "oracle", "campaigns", "tmp", "cli-config.json")
 
 #: Shared entries created ON DEMAND rather than by an earlier stage, so the
 #: main checkout may not hold them yet when the first wave starts. They are
@@ -185,10 +184,10 @@ _SHARED_LAZY_DIRS = (".providers", "tmp")
 def link_shared(wt: Path, repo: Path) -> None:
     """Symlink the gitignored, read-only-across-a-wave crustify artifacts from
     the main checkout into the worktree, so the worktree is a *complete*
-    functional crustify tree (its `Layout` resolves `codeql` /
-    `targets` / `crates.json` / `build.json` to the single shared copy) without
-    duplicating them. They never change during a wave; agent logs written under
-    `targets/` thus land in the shared tree.
+    functional crustify tree. Oracle extraction/cache data and campaign logs
+    resolve to the shared copy without being duplicated. Tracked
+    `oracle-config.json`, `campaign.json`, and ownership-store entries already
+    present in the worktree win over the recursive links.
 
     `build.json` is gitignored, so it reaches a worktree by NO other route. The
     wrap/port agents only READ it (the build descriptor's `build_commands` +
@@ -205,11 +204,11 @@ def link_shared(wt: Path, repo: Path) -> None:
 
     ``cli-config.json`` is here for the same reason as ``build.json``: it is
     hand-authored, machine-local (absolute paths to the crustify and
-    ffibox checkouts, and to their binaries), and therefore not committed
+    ffibox / audit checkouts, and to their binaries), and therefore not committed
     — so HEAD cannot carry it into a worktree. Without the symlink an agent's
     ``Layout.repo_config`` resolves to a file that is not there, every skill
     path fails to resolve, and the whole set silently disappears from its system
-    prompt as the literal "(no skills configured)" inside principles.md.
+    prompt as the literal "(no skills configured)" beside conventions.md.
 
     ``crates.json`` joins the shared set on the **eager pre-seed** contract:
     the orchestrator must fully populate the placement oracle for the wave's
@@ -246,11 +245,9 @@ def _link_into(src: Path, dst: Path) -> None:
 
     The plain case is a whole shared dir that the worktree does not have. The
     recursive case exists because a shared dir may be PARTIALLY materialized by
-    the checkout: `targets/` holds the tracked `<t>/scope-config.json` beside the
-    gitignored `scope.json`, `deps-dag.json` and `logs/`, so `git worktree add`
-    creates `targets/<t>/` and a whole-dir symlink would be skipped. Skipping it
-    would send the wave's per-agent logs into the worktree, where the purge takes
-    them — losing exactly the cost and wall records a run is measured by.
+    the checkout: tracked oracle configs, ownership findings, and campaign plans
+    coexist with gitignored extraction caches and logs. Existing tracked files
+    win while missing derived children are linked.
 
     A destination that already exists as a symlink or file is left alone: it is
     either a previous link or a tracked artifact that must win."""

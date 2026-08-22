@@ -39,14 +39,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-# The composer package lives in the crustify checkout rather than the installed
-# package. ``locate`` reads scope only to distinguish an unknown name from an
-# in-scope placement miss.
-_CRUSTIFY_ROOT = Path(__file__).resolve().parent.parent.parent
-_COMPOSE_PARENT = _CRUSTIFY_ROOT / "utils" / "codeql"
-if str(_COMPOSE_PARENT) not in sys.path:
-    sys.path.insert(0, str(_COMPOSE_PARENT))
-
 # Member buckets. `macros` is homed for library attribution only — the
 # orchestrator-authored FFI crate owns its surface, so nothing anchors it.
 _KINDS = ("functions", "types", "callbacks", "macros", "globals")
@@ -89,18 +81,9 @@ def locate(
         _require_one_home(doc, name, file)
         misses = [n for n in name if not lookup_all(doc, n, file=file)]
         if misses:
-            universe = _in_scope_names(layout, target)
-            unknown = [n for n in misses if n not in universe] if universe else []
-            unplaced = [n for n in misses if n not in unknown]
-            msg = []
-            if unknown:
-                msg.append("not in scope (unknown symbol/type): "
-                           + ", ".join(repr(n) for n in unknown))
-            if unplaced:
-                msg.append("in scope but not placed in crates.json: "
-                           + ", ".join(repr(n) for n in unplaced)
-                           + " — add them to the oracle, then re-run.")
-            raise SystemExit("crates locate: " + "; ".join(msg))
+            raise SystemExit(
+                "crates locate: not placed in crates.json: "
+                + ", ".join(repr(n) for n in misses))
         entries, missing = entries_for_names(doc, name, file)
         for n in missing:
             print(f"crates locate: {n}: not placed", file=sys.stderr)
@@ -132,34 +115,11 @@ def validate_command(target: Path) -> None:
     doc = load(layout)
     errors = validate(doc)
 
-    from crustify import manifests
-    errors += validate_depends_on(
-        doc, manifests.entries(layout, target, "types", stage="crates"))
-
     if errors:
         for error in errors:
             print(f"crates validate: {error}", file=sys.stderr)
         raise SystemExit(1)
     print(f"[crustify-cli crates validate] crates.json OK ({layout.crates_json})")
-
-
-def _in_scope_names(layout, target: Path) -> set[str]:
-    """Return the authoritative targeted/imported name universe when available."""
-    from compose import scope as compose_scope
-    from crustify import scope
-
-    try:
-        doc = scope.build(layout, target, stage="crates")
-    except SystemExit:
-        return set()
-    names: set[str] = set()
-    for section in ((doc.get(sec) or {}) for sec in compose_scope.SECTIONS):
-        for group in ("functions", "globals", "macros", "types"):
-            for entry in section.get(group) or []:
-                for key in ("name", "type"):
-                    if entry.get(key):
-                        names.add(entry[key])
-    return names
 
 
 def _entry(cname: str, crate: dict, rs: str, record: dict) -> dict:
@@ -390,64 +350,6 @@ def _ref_tags(type_str: str | None) -> list[str]:
     s = re.sub(r"[*\[\]()]", " ", type_str)
     return [t for t in s.split()
             if re.match(r"^[A-Za-z_]\w*$", t) and t not in _NON_TAG]
-
-
-def validate_depends_on(doc: dict, type_entries) -> list[str]:
-    """Cross-check ``depends_on`` against member placement and the composed
-    records' BY-VALUE type references. Returns error strings (``[]`` = consistent).
-
-    A struct homed to crate A that embeds **by value** an entity homed to crate B
-    needs B's layout, so ``A.depends_on`` must contain B. A missing edge leaves
-    the orchestrator-authored Rust/FFI crate topology inconsistent and otherwise
-    surfaces only when the workspace is compiled.
-
-    Deliberately restricted to ``ref == "value"`` fields. A **pointer** to a
-    foreign type needs no layout (an incomplete type binds fine), so a missing
-    edge there is not a defect — and demanding one would report OpenSSL's real
-    C-level circularity (``libcrypto``'s ``BIO_POLL_DESCRIPTOR.value.ssl`` is an
-    ``SSL *``) as an authoring error, when the only fix would be a crate cycle
-    Rust forbids. Pointer args/returns are excluded for the same reason, so
-    syms.json is not read at all.
-
-    Placement itself is NOT checked here (this reads it as ground truth); a
-    misplaced member moves the reference and its owner together.
-    """
-    crates = doc.get("crates") or {}
-    owner: dict[str, str] = {}       # member name -> owning crate
-    for crate, c in crates.items():
-        for m in (c.get("modules") or {}).values():
-            for r in (m.get("rs") or {}).values():
-                for names in (r.get("members") or {}).values():
-                    for nm in names or []:
-                        owner.setdefault(nm, crate)
-    if not owner:
-        return []
-
-    declared = {c: set(v.get("depends_on") or []) for c, v in crates.items()}
-    errors: list[str] = []
-    seen: set[tuple[str, str]] = set()   # (crate, dep) — one error per edge
-
-    for t in type_entries:
-        if True:
-            tag = t.get("name") or t.get("type")
-            home = owner.get(tag)
-            if not home:
-                continue
-            for f in t.get("fields") or []:
-                if f.get("ref") != "value":
-                    continue
-                for ref in _ref_tags(f.get("type")):
-                    dep = owner.get(ref)
-                    if (not dep or dep == home
-                            or dep in declared.get(home, ())
-                            or (home, dep) in seen):
-                        continue
-                    seen.add((home, dep))
-                    errors.append(
-                        f"{home}.depends_on is missing {dep!r}: "
-                        f"{tag}.{f.get('name')} embeds {ref!r} by value, and "
-                        f"{ref!r} is homed to {dep}")
-    return errors
 
 
 def _find_cycle(adj: dict[str, list[str]]) -> list[str] | None:

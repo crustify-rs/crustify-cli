@@ -13,7 +13,10 @@ docker build -t crustify bench/
 docker run --rm -it --name crustify-libgit2 \
     -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
     -e CRUSTIFY_CAMPAIGN=libgit2 \
-    -v "$PWD:/opt/crustify-cli" \
+    -v "$(dirname "$PWD")/crustify-cli:/opt/crustify-cli" \
+    -v "$(dirname "$PWD")/crustify-oracle:/opt/crustify-oracle" \
+    -v "$(dirname "$PWD")/crustify-audit:/opt/crustify-audit" \
+    -v "$(dirname "$PWD")/ffibox:/opt/ffibox" \
     -v crustify-work:/work \
     crustify
 ```
@@ -38,8 +41,6 @@ Set with `--build-arg` on `docker build`.
 
 | arg | default | effect |
 |---|---|---|
-| `CRUSTIFY_CLI_REF` | `main` | ref checked out in the image's crustify-cli clone |
-| `FFIBOX_REF` | `main` | ref checked out at `/opt/ffibox` |
 | `CODEQL_VERSION` | `v2.26.3` | CodeQL CLI release |
 | `PYTHON_VERSION` | `3.13` | interpreter for `/opt/venv` |
 | `INSTALL_CLAUDE` | `1` | install the claude backend |
@@ -50,8 +51,12 @@ Set with `--build-arg` on `docker build`.
 | path | mode | lifetime |
 |---|---|---|
 | `/opt/crustify-cli` | read-write | host checkout; agents commit to it, so give them a reviewable branch |
+| `/opt/crustify-oracle` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub, then installed editable |
+| `/opt/crustify-audit` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub, then installed editable |
+| `/opt/ffibox` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub and used by generated Cargo manifests |
 | `/work` | named volume | target clone, CodeQL database, emitted crates, session branches; survives `--rm` |
 | `/campaign` | read-only, optional | a `TASK.md` outside the checkout; wins over `CRUSTIFY_CAMPAIGN` |
 
 Results are tracked in `wrappers-results.md`. The Dockerfile header documents
-what each flag buys.
+what each flag buys. The three optional source mounts may be omitted from
+`docker run`; their `main` branches are then cloned into the ephemeral container.

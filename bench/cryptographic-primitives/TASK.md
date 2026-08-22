@@ -10,7 +10,6 @@ The user has chosen the following configuration:
 - max-types: 2
 - billing: API
 - parallel-max: you pick an optimal value
-- parallel-policy: default
 - agent backend: codex
 - model: gpt-5.6-sol
 - review mode: run the review objective on all waves at the end of the campaign using gpt-5.6-sol as the model

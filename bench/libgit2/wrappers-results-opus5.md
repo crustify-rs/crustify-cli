@@ -356,7 +356,7 @@ through a function comes along. 72 units over 8 dependency layers.
 
 ## Safety audit
 
-`crustify-cli <repo> <target> audit --all`, `global` section — tree-wide, not
+`crustify-audit <repo> unsafe --json`, `global` section — tree-wide, not
 per seed. Two snapshots: at the import-closure promotion and at the final tree.
 
 ### Headline — at the import closure (`be5f6d064`)
@@ -388,7 +388,7 @@ per seed. Two snapshots: at the import-closure promotion and at the final tree.
 | `ref_to_type_wrapper` | `3` | `&W`/`&mut W` on an inline-`CType` wrapper — **target 0** |
 | `field_proj_wrapped` | `482` | projection VOLUME — shares one HIR shape with `addr_of!`, not a violation |
 | `field_proj_outside_impl` | `0` | projections outside any accessor — **target 0** |
-| `field_ref_wrapped` | `0` | `&(*p).field` — the rule principles.md states — **target 0** |
+| `field_ref_wrapped` | `0` | `&(*p).field` — forbidden by the translator playbook — **target 0** |
 | `raw_ptr_derefs` | `490` | `*p` on a raw pointer (volume) |
 | `void_ptr_sanctioned` | `85` | `*c_void` in a seam / `ffi_export` / `extern "C"` signature |
 | `void_ptr_smell` | `154` | `*c_void` elsewhere — dominated by the `from_void_ptr`/`as_mut_void_ptr` pair |
@@ -422,7 +422,7 @@ per seed. Two snapshots: at the import-closure promotion and at the final tree.
 | `ref_to_type_wrapper` | `3` | `&W`/`&mut W` on an inline-`CType` wrapper — **target 0** |
 | `field_proj_wrapped` | `1270` | projection VOLUME — shares one HIR shape with `addr_of!`, not a violation |
 | `field_proj_outside_impl` | `0` | projections outside any accessor — **target 0** |
-| `field_ref_wrapped` | `0` | `&(*p).field` — the rule principles.md states — **target 0** |
+| `field_ref_wrapped` | `0` | `&(*p).field` — forbidden by the translator playbook — **target 0** |
 | `raw_ptr_derefs` | `1278` | `*p` on a raw pointer (volume) |
 | `void_ptr_sanctioned` | `136` | `*c_void` in a seam / `ffi_export` / `extern "C"` signature |
 | `void_ptr_smell` | `261` | `*c_void` elsewhere — dominated by the `from_void_ptr`/`as_mut_void_ptr` pair |
@@ -530,7 +530,7 @@ cannot all be true; it looks like a name-collision edge case. Unchanged on
 
 **Tooling defects hit during the campaign**, both still present on `ref`:
 
-1. `utils/log_cost.py` reports `$0.00` for any translate-stage wave. Its
+1. `crustify-log-cost` reports `$0.00` for any translate-stage wave. Its
    `kind()` returns the translate-era buckets (`wrap-type`, `wrap-symbol`,
    `raw-symbol`) but the summary loop iterates a hardcoded list of the
    PRE-translate names, so every row is counted and then never printed.
@@ -574,7 +574,7 @@ exists and why `libgit2-sys` carries no link directive of its own.
 **`field proj` 1270 is volume, not violations** — see the import-closure copy's
 note. `field_proj_wrapped` counts `addr_of!((*p).f)` and a bare `(*p).f`
 identically, because `addr_of!` takes a place expression and both lower to one
-HIR shape. The rule the current principles.md actually states — never form
+HIR shape. The rule the current translator playbook states — never form
 `&(*p).field` — is `field_ref_wrapped`, and it is **0** across the tree.
 
 **The one real regression: `rp_wrap_nonseam_args` 0 → 4.** Raw pointers in

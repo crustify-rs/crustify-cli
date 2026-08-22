@@ -8,7 +8,7 @@ Each backend shells out to a provider CLI, one subprocess per agent, and
 streams its stdout into the agent's :class:`~crustify.agentlog.AgentLog`.
 Running the agent out-of-process is what makes per-agent accounting exact:
 the provider reports usage for that invocation and nothing else, so
-concurrent agents under ``--parallel`` cannot interleave their numbers.
+concurrent agents cannot interleave their numbers.
 
 The contract is deliberately thin, matching what crustify actually needs:
 render a prompt, run an agent confined to a shell tool in a work dir, and
