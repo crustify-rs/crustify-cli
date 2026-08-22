@@ -114,6 +114,7 @@ You do not wait for the user's approval before launching waves.
 Record results in `/work/wrappers-results.md` using the exact format of the template.
 
 After each wave: `utils/log_cost.py` over the per-agent `<stage>.usage.json`
-for cost, the session branch diff for what landed, and `audit` for the unsafe
-and raw-pointer surface. Cost comes from token counts, never from
+for cost, the session branch diff for what landed, and
+`crustify-audit <repo> unsafe --name <wave names...> --json` for the unsafe and
+raw-pointer surface. Cost comes from token counts, never from
 provider-reported dollars.

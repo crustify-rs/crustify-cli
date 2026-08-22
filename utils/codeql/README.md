@@ -1,4 +1,4 @@
-# `utils/codeql/` - CodeQL substrate + deterministic composers
+# `utils/codeql/` - CodeQL substrate + analysis composers
 
 The fact layer under the pipeline. **Committed, vetted CodeQL queries** extract
 the C codebase into CSVs; **deterministic Python composers** join those into the
@@ -50,10 +50,8 @@ scalar/aggregate), `includes`.
 | `import_closure.py` | the `imported` section: the objective-independent external frontier reached by the targeted set; `api_headers` separately defines the `api` view | scope / wave scheduling |
 | `types_manifest.py` / `syms_manifest.py` | `types.json` / `syms.json` skeletons + full dependency edges | `analyze types` / `symbols` |
 | `deps_dag.py` | in-memory unified layered types+symbols DAG (cast-centrality + fallback/back-fill edges); `analyze dag --dump` snapshots it | `analyze dag`, `query dag`, wrap scheduler |
-| `scaffold_manifest.py` | **legacy** — only `sync_workspace` (the shared `rust/` Cargo workspace member list) is still live, called from `bindgen_manifest`. `crates.json` has no producer: it is authored outside the pipeline (see `docs/schemas/crates.md`), and `.rs` stubs come from `crustify.scaffold` | `bindgen` |
-| `bindgen_manifest.py` | `<lib>-sys` crate scaffolds - per-kind allowlists + include closure (no `fn main`, no shims) | `bindgen` |
 | `manifest_merge.py` | union-by-key merge of agent findings into a manifest | `query --update` |
-| `check_types_consistency.py` | consistency gate (every op homed once; acyclic) | standalone (`python -m`, manual) |
+| `check_types_consistency.py` | analysis-record consistency gate | standalone (`python -m`, manual) |
 
 All artifacts are deterministic from the CSVs + `scope-config.json`; the analyze
 `types`/`symbols` skeletons carry judgement fields that the WRAP-stage

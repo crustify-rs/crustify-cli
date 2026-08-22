@@ -1,5 +1,5 @@
 {
-  "_comment": "Whole-repo crate/module decomposition — the target architecture of the Rust port. Field meaning and the placement algorithm: docs/schemas/crates.md. Authored outside crustify; `crustify-cli scaffold` only reads it.",
+  "_comment": "Cumulative crate/module placement oracle for the Rust tree. Field meaning and the placement algorithm: docs/schemas/crates.md. The orchestrator authors it lazily; `crustify-cli crates locate|validate` only reads it.",
 
   "crates": {
     "libssl": {
@@ -57,7 +57,7 @@
           "rust_path": "src/comp",
           "rs": {
             "src/comp/comp.rs": {
-              "_comment": "No TU — a header-only module. stack_st_SSL_COMP is declared but never defined, so it homes by its best-fit header. OPENSSL_malloc is homed for library attribution only: bindgen owns it, no anchor is laid.",
+              "_comment": "No TU — a header-only module. stack_st_SSL_COMP is declared but never defined, so it homes by its best-fit header. OPENSSL_malloc is homed for library attribution only: translator agents add its `-sys` binding lazily, and no anchor is laid.",
               "tu": null,
               "headers": ["include/openssl/comp.h", "include/internal/cryptlib.h"],
               "members": {

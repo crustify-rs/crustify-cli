@@ -23,7 +23,7 @@ Model
   already been translated. It schedules every selected member (bounded only by
   the budget), checking only that each member's home ``.rs`` exists on disk
   (crates.json placement — see :func:`resolve_path`). Re-running a wave therefore
-  re-emits; per-element idempotency (the scaffolder's ``// crustify:todo`` fill
+  re-emits; per-element idempotency (the scheduler's ``// crustify:todo`` fill
   markers and the agent's fill-or-skip) is the agent's concern, not the
   scheduler's.
 
@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-# Scaffolded anchors (see scaffold_manifest._type_block / _sym_block / _file_stub).
+# Scheduler-local anchors are laid after each batch worktree is forked.
 
 from crustify.dag import (        # the DAG model + its readers (not scheduling)
     SymKey, Node, load_nodes, load_type_meta, ordered_ops,
@@ -83,15 +83,15 @@ def resolve_names(
 
 def bare_gate(nodes: list[Node]) -> None:
     """Refuse to schedule any symbol left unclassified
-    (``kind: null`` → ``subkind == "symbol"``). Moved here from the scaffolder:
+    (``kind: null`` → ``subkind == "symbol"``). This is a schedule-time gate:
     the bare kind only exists in the DAG, never in the fresh composer."""
     bad = sorted({(n.id, n.defined_in or "?") for n in nodes if n.is_bare})
     if bad:
         listing = "\n".join(f"  - {n}  ({f})" for n, f in bad)
         raise SystemExit(
             f"schedule: {len(bad)} selected symbol(s) are unclassified "
-            f"(kind=null). Run `analyze symbols` so every symbol carries a "
-            f"subkind before wrap/port:\n{listing}")
+            f"(kind=null). Rebuild the CodeQL tables or fix symbol "
+            f"classification before translation:\n{listing}")
 
 
 # --------------------------------------------------------------------- units
@@ -100,9 +100,10 @@ def is_generator(n) -> bool:
     """``n`` is a type-minting macro — a macro whose expansion is a whole
     aggregate, so it stands for a FAMILY of same-shaped types.
 
-    The one predicate two stages share: :mod:`crustify.translate` uses it to exempt
-    generators from "macros are bindgen's", and :func:`form_units` to route them
-    to the type wrapper. Keeping one definition is the point — the two were
+    The one predicate two paths share: :mod:`crustify.translate` uses it to
+    exempt generators from ordinary `-sys` macro handling, and
+    :func:`form_units` routes them to the type wrapper. Keeping one definition
+    is the point — the two were
     written apart and are the same question ("does this macro owe Rust a type?"),
     so they must not be able to disagree about a given node.
 
@@ -131,7 +132,7 @@ class Unit:
 
     def label(self) -> str:
         # No field/op counts: `fields` here is the type's DECLARED list, while
-        # the scaffolder anchors only the target-touched subset, so the two
+        # the scheduler anchors only the target-touched subset, so the two
         # disagree — `evp_keymgmt_st` reported 35 fields against 0 anchors on
         # disk. The agent works from the anchors, so a count taken from
         # anywhere else is at best noise and at worst an instruction to exceed
@@ -186,7 +187,7 @@ def form_units(
 # --------------------------------------------------------------- name → file
 
 def resolve_path(node: Node, doc: dict, layout) -> Path | None:
-    """The scaffolded ``.rs`` that homes this node, per ``crates.json`` (the
+    """The existing ``.rs`` that homes this node, per ``crates.json`` (the
     placement oracle), verified present on disk — the file the agent fills.
 
     Placement, NOT anchor text, is the source of truth here: this consults
@@ -195,15 +196,14 @@ def resolve_path(node: Node, doc: dict, layout) -> Path | None:
     Returns ``None`` only when crates.json has no home for the node, or that home
     was never materialized on disk. ``def_file`` disambiguates a name collision;
     a loose by-name lookup is the fallback when ``defined_in`` doesn't line up.
-    This is the scheduler's only contact with the scaffolded tree — the scheduler
+    This is the scheduler's only contact with the authored tree — the scheduler
     no longer parses anchors at all (it schedules blindly; see module docstring)."""
     from crustify import crates as _crates
-    from crustify.scaffold import _full_rs
     hit = (_crates.lookup(doc, node.id, file=node.defined_in or None)
            or _crates.lookup(doc, node.id))
     if not hit:
         return None
-    p = Path(_full_rs(layout, hit["crate_path"], hit["rs"]))
+    p = _crates.full_rs(layout, hit["crate_path"], hit["rs"])
     return p if p.exists() else None
 
 
@@ -275,7 +275,7 @@ def pack(
     leaving it unset pools them together.
     Default ``False``: symbols pool by budget alone, so one agent may carry
     symbols from several sources. The defining file is not a write boundary —
-    the scaffolder homes symbols by ``crates.json``, several sources routinely
+    ``crates.json`` may home symbols from several sources in one Rust file, so
     land in one ``.rs``, and an agent is handed names, not a file — so splitting
     on it bought nothing and cost agents: a layer whose symbols trail off into
     one- and two-symbol files spawned an agent per file, each paying full
@@ -486,12 +486,12 @@ class Stage:
 
 
 def _chains_by_home(batches: list[Batch], doc: dict, layout) -> dict[str, list[Batch]]:
-    """Group batches into write-disjoint chains keyed by scaffolded home ``.rs``.
+    """Group batches into write-disjoint chains keyed by their home ``.rs``.
 
     Write-safety, not C-source layout, defines a chain: two batches that write
     the same ``.rs`` MUST be in one chain (run serially in one worktree), else
     with ``--parallel`` their separate worktrees both edit that file and collide
-    at merge. The file-grained scaffolder homes multiple C sources into one
+    at merge. The placement oracle may home multiple C sources into one
     ``.rs`` (e.g. ``oid.c`` + ``oid.h`` → ``oid.rs``), so chaining by source
     ``defined_in`` races them; chaining by home ``.rs`` serializes them.
 
@@ -543,7 +543,7 @@ def run(
     validates or tears down. Only a caller-supplied ``emit_fn`` (a test double)
     takes the in-place path."""
     failures: list[tuple[Batch, BaseException]] = []
-    # `serialize-per-file` chains by scaffolded home `.rs` (write-disjoint), NOT
+    # `serialize-per-file` chains by the recorded home `.rs` (write-disjoint), NOT
     # by C source file — multiple sources (oid.c + oid.h) home into one `.rs`, so
     # source chaining would race their parallel worktrees on that file. Falls
     # back to source grouping only when no rust tree is available (layout-less
@@ -626,12 +626,12 @@ def _place_batch_anchors(b: "Batch", layout, target, stage) -> None:
     on an opaque type it would lay placeholders for accessors nobody owes
     (`bio_st`: 16 declared, 0 touched), which then hold the type open forever.
     """
-    from crustify.scaffold import place_anchors, _field_map
+    from crustify.anchors import field_map, place_anchors
     names = [u.node.id for u in b.units]
     if not names:
         return
     review = getattr(stage, "verb", None) == "review"
-    fmap = _field_map(layout, target)
+    fmap = field_map(layout, target)
     fields = {nm: f for nm in names if (f := fmap.get(nm))}
     n, unanchored = place_anchors(layout, target, names, fields=fields,
                                   emit=not review)
@@ -899,16 +899,16 @@ def schedule(
     wave_units = {tuple(w): [u for li in w for u in by_layer[li]] for w in waves}
     all_batches = [b for w in waves for b in pack(wave_units[tuple(w)], **pack_kw)]
 
-    # Plan-time placement check: every batch member must have its home `.rs`
-    # materialized on disk, or emit would fail mid-run — after parallel siblings
+    # Plan-time placement check: every batch member must have its orchestrator-
+    # authored home `.rs` on disk, or emit would fail after parallel siblings
     # already ran. Surface it HERE (covers dry-run too), before any agent spawns.
     #
     # The check is deliberately BARE: it asks crates.json (the placement oracle)
     # for the item's home `.rs` and verifies the file EXISTS — it does NOT parse
     # anchors. An item whose anchor was hand-edited or written with a non-canonical
     # form (e.g. a backticked ``Replaces: `name```) still has its file on disk, so
-    # it must not read as "unplaced"; only a genuinely un-scaffolded item (no
-    # crates.json home, or its `.rs` never materialized) trips this. Skipped for
+    # it must not read as "unplaced"; only a missing crates.json home or `.rs`
+    # file trips this. Skipped for
     # layout-less callers (tests) that cannot resolve crates.json.
     layout = getattr(stage, "layout", None)
     if layout is not None:
@@ -923,9 +923,9 @@ def schedule(
             listing = "\n".join(f"  - {n}  ({f})" for n, f in sorted(missing))
             raise SystemExit(
                 f"{stage.verb}: {len(missing)} selected item(s) have no home "
-                f"`.rs` on disk — the scaffolder never materialized them (no "
-                f"crates.json home, or a stale tree). Re-run "
-                f"`crustify-cli <target> scaffold` and retry:\n{listing}")
+                f"`.rs` on disk (no crates.json home, or the orchestrator has "
+                f"not created the recorded file). Author the missing module(s) "
+                f"and retry:\n{listing}")
 
     if not all_batches:
         print("schedule: no batches produced (nothing to do).")

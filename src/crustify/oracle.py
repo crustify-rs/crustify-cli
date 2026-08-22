@@ -1,8 +1,8 @@
 """oracle.py — `crustify-oracle`, the read side of the pipeline.
 
 Everything that ANSWERS questions about the C, split from everything that
-CHANGES the Rust. `crustify-cli` keeps the stages that write — scaffold,
-bindgen, wrap, audit; the oracle keeps extraction and query.
+CHANGES the Rust. `crustify-cli` keeps translation writes while its `crates`
+interface is read-only; the oracle keeps extraction and query.
 
     crustify-oracle <repo_root> <target> extract-ql
     crustify-oracle <repo_root> <target> query types   --name X [...]
@@ -65,7 +65,7 @@ def _add_query_flags(p: argparse.ArgumentParser, *, facets: bool) -> None:
     introspect one entry — always the WHOLE record (several names → several
     records). On a type, `--fields`/`--lifecycle-ops` print its windowable lists
     (`facets`). The .rs module of an entry is found via
-    `crustify-cli <target> scaffold --name <X>`, not here."""
+    `crustify-cli <repo> <target> crates locate --name <X>`, not here."""
     sc = p.add_mutually_exclusive_group()
     sc.add_argument("--imported-only", action="store_true", dest="imported_only",
                     help="Narrow to the IMPORTED section — this campaign's "
@@ -327,7 +327,8 @@ def _add_query_command(sub) -> None:
             "globals / macros, each {id, layer, defined_in} plus depth in "
             "closure mode; empty groups are omitted. The groups route the work: "
             "types to the type wrapper, callbacks and functions to the symbol "
-            "wrapper, macros to nobody (bindgen owns their -sys shims). `layer` "
+            "wrapper, macros to no standalone unit (their consumers extend "
+            "the owning -sys crate lazily). `layer` "
             "and `depth` exist only here — no other subject reports them."
         ),
     )

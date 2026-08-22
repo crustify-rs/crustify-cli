@@ -210,9 +210,10 @@ fully-checked Rust. This is load-bearing - the steps assume it.
 
 ## File contract (file-grained - load-bearing)
 
-One Rust module per C source file, shared across batches. Find the module for a
-target or a dependency (type / callback / symbol) with `crustify-cli scaffold`,
-which reflects the established placement policy.
+One Rust module per C source file, shared across batches. The orchestrator homes
+each scheduled target or dependency in `crates.json` and creates its module
+before the wave. Inspect that placement with `crustify-cli <repo_root> <target>
+crates locate --name NAME`.
 
 Each item you own arrives as one todo line, laid in your own worktree:
 

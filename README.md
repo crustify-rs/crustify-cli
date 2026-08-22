@@ -157,16 +157,16 @@ The semantic oracle provides the following capabilities:
 ## How it works
 
 Crustify is a pipeline consisting of two phases, each with its own stages and structured I/O
-artifacts, where work is split between **deterministic composers for mechanical tasks** and **LLMs
-for semantic reasoning and codegen**. The composers are implemented in Python and packaged as two
-CLI binaries that can be driven by LLMs and humans alike. The pipeline is designed to allow humans
+artifacts, where work is split between deterministic analysis and scheduling and **LLMs
+for semantic reasoning and codegen**. Its CLI binaries can be driven by LLMs and humans alike.
+The pipeline is designed to allow humans
 to verify and modify the artifacts produced by the LLM between stages, facilitating debugging and
 fine tuning for custom preferences.
 
 ### 1. Setup
 
-This phase prepares the build environment, bootstraps the semantic oracle, and scaffolds an empty Rust
-tree prior to any translation work. It can be driven entirely by the **orchestrator agent**. Below
+This phase prepares the build environment, bootstraps the semantic oracle, and creates the initial
+compiling Rust crate shells. It can be driven entirely by the **orchestrator agent**. Below
 is a simplified description of its stages, while the [playbook](docs/playbook.md), which the
 orchestrator agent also follows, contains the full picture.
 
@@ -198,18 +198,19 @@ graph reads the library:
 A section says what the campaign contains; `campaign_objective` says how deeply to read it; what one
 agent does with one selection is the translate stage's per-wave `--objective`.
 
-**Crates specification.** The orchestrator authors **`crates.json`** where it sketches a hierarchy
-of Rust crates, modules, and `.rs` source files that govern how the Rust tree will be organized, and
-assigns each target type/symbol to a TU. It then runs a deterministic composer to scaffold a
-skeleton Rust tree on disk based on `crates.json`. This step also emits a `-sys` companion crate for
-every target crate, which will home the `bindgen` bindings. Users may adjust `crates.json` to their
-liking for a custom Rust-tree organization.
+**Crates specification.** The orchestrator authors **`crates.json`** with the
+target crate and the top-level crates that own imported dependencies. Setup
+leaves `modules` empty and creates minimal compiling crate shells. Before each
+wave, the orchestrator homes that wave's items, creates their `.rs` modules and
+gates the manifest with `crates validate`. `crates locate` is the read-only way
+to resolve an item's authored home.
 
-**FFI bindings.** The orchestrator emits FFI bindings via `bindgen` by first running a mechanic
-composer that emits an incomplete `build.rs` for every `-sys` crate, allowlisting the C/C++ items
-that need a Rust binding. The allowlists are composed mechanically based on the dependency relations
-fetched from the oracle. The orchestrator is then tasked to complete each `build.rs` driver, build
-it, and ensure all required bindings are properly emitted.
+**FFI bindings.** Every wrapper crate has a compiling `<lib>-sys` placeholder
+whose bindgen pipeline starts with an empty, no-match agent-owned allowlist.
+Translator agents extend that allowlist lazily for their scheduled worklist and
+required FFI dependencies, regenerate bindings in their worktrees, and test the
+affected `-sys` crate. The orchestrator unions parallel allowlist changes when
+landing the wave.
 
 ### 2. Translation
 
@@ -221,7 +222,8 @@ and the [principles](docs/principles.md) document.
 **Agent Task.** In short, each translator agent is tasked with the following workflow:
   - Read [principles](docs/principles.md)
   - Use `crustify-oracle` to obtain the deps of your target set
-  - Identify the `bindgen` bindings of your items; add if any missing
+  - Locate the authored homes with `crates locate`
+  - Extend the worklist's bindgen allowlist and regenerate its `-sys` bindings
   - Analyze pointer ownership and type lifetimes and submit findings to `ownership-store.json` via
     `crustify-oracle`
   - Emit safe wrappers for import items / port to native Rust target items
@@ -261,20 +263,21 @@ can be nativized, but its storage (i.e. heap allocation) is still owned by C; (b
 cross the FFI boundary anymore, then its storage can also be nativized. The orchestrator agent must
 decide when a type is ready to be nativized.
 
-**Safety Audit.** Crustify ships a deterministic pass over the compiled Rust's `HIR` and `typeck`
-that counts the number of unsafe lines/statements/blocks and the number of raw pointers, flagging
-FFI types/symbols that already have a safe wrapper or Rust-native shape, as well as the number of
-references taken to a wrapped C type and field projections outside `impl` blocks. The translator agents are
-instructed to use the audit pass to collect unsafe and potentially-UB sites, and to fix them unless
-justified.
+**Safety Audit.** `crustify-audit unsafe` is a deterministic pass over compiled
+Rust HIR and typeck. It reports tree-wide unsafe/raw-pointer metrics and, for
+named C types or symbols, resolved raw-pointer declaration and dereference
+sites. Type seeds also report manual `Deref`/`DerefMut` implementations and
+shared or mutable wrapper-slice materializations. Translator agents run only
+this deterministic verb; `crustify-audit ub` is not part of translation.
 
 **LLM-as-a-Judge.** Each translator agent can act as a reviewer for an existing Rust translation or
 for an ownership judgement submitted to `ownership-store.json`. Agents are instructed to enter this
 mode via a simple paragraph in their prompt, and they are told to fix any mistakes if they find. The
 orchestrator agent can run reviewer agents by running `crustify-cli translate --objective review`.
 
-**Idempotency.** The scaffolder emits placeholder anchors (`// crustify:todo`) for every in-scope
-item, and translator agents are asked to promote them for done work. This helps the
+**Idempotency.** Before scheduling a wave, the orchestrator creates its modules
+and the scheduler inserts placeholder anchors (`// crustify:todo`) for the selected
+items. Translator agents promote them for done work. This helps the
 orchestrator with accounting and idempotency upon resuming an interrupted campaign.
 
 **Regression and Equivalence Testing.** Translator agents are asked to surround the ported C/C++
@@ -285,13 +288,15 @@ test suites with both the Rust code on and off, which catches regressions and en
 
 ## CLI
 
-Crustify facilitates LLM agents to interact with the pipeline via two binaries: the semantic oracle
-and the CLI translation driver.
+Crustify uses three binaries: the semantic oracle, the translation driver and
+the standalone Rust safety scanner.
 
 ```bash
 crustify-oracle <repo_root> <target> {extract-ql | query {types|symbols|files|dag}}
 
-crustify-cli [globals] <repo_root> <target> {scaffold | bindgen | translate | audit}
+crustify-cli [globals] <repo_root> <target> {crates | translate}
+
+crustify-audit <repo_root> unsafe [--name NAME ...] [--json]
 ```
 
 ### `crustify-oracle`
@@ -322,18 +327,21 @@ scope-narrowed and layered. `--depth` bounds both (default 1 = direct edges); cy
 behind it; `--update-help` prints the findings schema `--update` expects, `--schema` the record's
 own field definitions.
 
-### `crustify-cli`
+### `crustify-cli` and `crustify-audit`
 
-Four stages, run in this order the first time:
+The orchestrator authors crate shells and bindgen placeholders. The remaining
+CLI surfaces are:
 
 | stage | does | flags |
 |---|---|---|
-| `scaffold` | homes each C entity in the `.rs` that carries its `// Wraps:` / `// Replaces:` anchor, via `crates.json` | `--all` `--name` `--create` `--validate` `--file` `--dir` |
-| `bindgen` | composes the `<lib>-sys` FFI crates, partitioning the import surface by owning crate | `--libs` `--reset` |
+| `crates locate` | reads the home of an entity from `crates.json` | `--all` `--name` `--file` `--dir` |
+| `crates validate` | validates `crates.json` without inspecting or generating Rust | — |
 | `translate` | emits the wrappers, layer by layer, one agent per batch | `--name` `--file` `--dag-layer` `--transitive` `--skip` `--force` `--objective` `--max-syms` `--max-loc` `--max-types` `--min-fields` `--lifetime-for` `--dry-run` · `--model` `--billing` `--parallel` `--parallel-max` `--parallel-policy` `--override-base-prompt` `--no-override-base-prompt` `--no-console` `--no-file-log` |
-| `audit` | scans the emitted tree for `unsafe`, raw pointers and naked `ffi::`, as JSON on stdout | `--all` `--name` `--crate` `--mod` `--file` `--dir` |
+| `crustify-audit … unsafe` | scans a Cargo workspace globally, or returns resolved sites for named C types and symbols | `--name` `--json` |
 
-`translate` is the only stage that spawns agents; the other three are deterministic composers.
+`translate` is the only surface above that spawns agents. `crates` and
+`crustify-audit unsafe` are deterministic and read-only with respect to source
+code; the latter writes its report to `crustify/audit/unsafe.json`.
 
 `--objective wrap\|port\|review` says what to do with a selection; a fourth, `raw`, is set by
 `--lifetime-for` and selects the lifetime tier's discovery arm. `--transitive` expands each name
@@ -456,7 +464,7 @@ plan with.
 
 ### Unsafe surface
 
-`crustify-cli audit` at the close of experiment 2 — a deterministic scan, no LLM:
+The deterministic safety scan at the close of experiment 2 produced:
 
 | target | `unsafe` LoC | share of tree LoC | `unsafe` blocks | inside an `impl T` |
 |---|---|---|---|---|

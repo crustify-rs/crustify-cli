@@ -443,7 +443,7 @@ def compose_import(
         declaring header there readmits the private headers the narrowing
         exists to exclude, while >1 survivor additionally stamps
         `reexport: true`, which sorts a private `*_local.h` ahead of the public
-        header and sends scaffold to home the item under it. Such an item has
+        header and causes placement to home the item under it. Such an item has
         one honest home, so return one: `canonical_decl`'s ranking (in-repo
         header > in-repo source > external, generated deprioritised)."""
         clo = target_paths if tu is None else closure(tu)

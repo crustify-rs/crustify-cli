@@ -35,7 +35,7 @@ counted and reported under ``no-price`` instead.
 Both tables are fetched once and cached to ``--price-cache``.
 
 Two views:
-  * per agent KIND  (port / wrap / merge / scaffold / analyze) — kind from
+  * per agent KIND  (port / wrap / merge / setup) — kind from
     the log filename prefix; wall-clock = the record's ``duration_ms``,
     counted under ``no-wall`` when the record predates that stamp.
   * per WAVE        — session dirs mapped to the wave whose commit
@@ -248,14 +248,15 @@ def kind(fn):
                  ("port-type", "port-type"), ("port-symbol", "port-symbol"),
                  ("review-type", "review-type"),
                  ("review-symbol", "review-symbol"),
-                 # pre-`translate` logs (one merged wrap agent, retired port
-                 # stage) — kept so the campaign's measured history still buckets:
+                 # Historical pre-`translate` log prefixes remain bucketed so
+                 # existing campaign measurements stay readable.
                  ("port_", "port"), ("wrap_", "wrap"), ("merge", "merge"),
-                 ("scaffolder", "scaffold"),
-                 # retired agents, kept so historical logs still bucket:
-                 ("type_analyzer", "analyze"),
-                 ("symbol_analyzer", "analyze"), ("buffer", "analyze"),
-                 ("bindgen", "bindgen")):
+                 # Historical setup-agent prefixes share one compatibility
+                 # bucket so old campaign measurements remain readable.
+                 ("scaffolder", "setup"),
+                 ("type_analyzer", "setup"),
+                 ("symbol_analyzer", "setup"), ("buffer", "setup"),
+                 ("bindgen", "setup")):
         if fn.startswith(p):
             return k
     return "other"
@@ -349,7 +350,7 @@ def main():
     # `translate`-era bucket (`wrap-type`, `review-symbol`, ...) came to be
     # counted into `kr` and then silently dropped from both its row and the
     # Sigma, under-reporting a campaign by whatever those agents cost.
-    _FIRST = ["port", "wrap", "merge", "scaffold", "analyze", "bindgen"]
+    _FIRST = ["port", "wrap", "merge", "setup"]
     order = [k for k in _FIRST if kr.get(k)]
     order += sorted(k for k in kr if k not in _FIRST and k != "other")
     if kr.get("other"):
@@ -406,9 +407,8 @@ def main():
         grand += t
         print(f"  L{layer:<3} wrap={b['wrap']:6.1f} port={b['port']:6.1f} "
               f"merge={b['merge']:5.1f} review={b['review']:6.1f}  total={t:6.1f}")
-    print(f"  WAVE Σ = ${grand:.2f}  | + scaffold ${kc['scaffold']:.2f} "
-          f"+ analyze ${kc['analyze']:.2f} = "
-          f"${grand + kc['scaffold'] + kc['analyze']:.2f}")
+    print(f"  WAVE Σ = ${grand:.2f}  | + setup ${kc['setup']:.2f} = "
+          f"${grand + kc['setup']:.2f}")
     return 0
 
 

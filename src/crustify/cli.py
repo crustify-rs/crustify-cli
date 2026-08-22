@@ -217,9 +217,8 @@ def main() -> None:
         "--parallel",
         action="store_true",
         default=False,
-        help="Enable command-specific parallelization. Different "
-             "commands interpret this differently — see each command's "
-             "help. The analyze subjects are composer-only and ignore it.",
+        help="Enable translate-agent parallelization. Read-only commands "
+             "ignore it.",
     )
     parser.add_argument(
         "--parallel-policy",
@@ -259,133 +258,49 @@ def main() -> None:
     # the parent's subcommand listing) and `description=` (which renders on the
     # stage's own --help). Without the second, `crustify-cli … <stage> --help`
     # prints a usage line and a flag list and never says what the stage does.
-    _audit_blurb = (
-        "Deterministic audit (no LLM): entity-seeded global scan of the "
-        "ported Rust tree, printed as JSON to stdout (nothing written to "
-        "disk). Per seed: its own unsafe / raw-pointer / naked-ffi surface; "
-        "plus a tree-wide `global` section (outside-impl raw ptrs, the "
-        "ffi:: type-surface partition, and a c_void filter) and `totals`.")
-    audit_p = sub.add_parser(
-        "audit", help=_audit_blurb, description=_audit_blurb,
+    # -- crates (read-only crates.json interface) ------------------------
+    _crates_blurb = (
+        "Read-only access to the authored crates.json placement oracle. "
+        "Locate C symbols/types in Rust modules or validate placement "
+        "consistency; never writes Rust or Cargo files.")
+    crates_p = sub.add_parser(
+        "crates", help=_crates_blurb, description=_crates_blurb,
     )
-    # Seed selectors (entity-seeded, global search) — mirror wrap/port. The
-    # search is always global; the selector only picks the seed types/symbols.
-    audit_sel = audit_p.add_mutually_exclusive_group(required=True)
-    audit_sel.add_argument(
+    crates_sub = crates_p.add_subparsers(dest="crates_command", required=True)
+
+    locate_p = crates_sub.add_parser(
+        "locate",
+        help="Resolve crates.json entries to their Rust .rs paths.",
+        description="Resolve crates.json entries to their Rust .rs paths "
+                    "without modifying the tree.",
+    )
+    # `--file` lives outside the group because it is both a standalone
+    # selection and a qualifier for an ambiguous `--name`.
+    locate_sel = locate_p.add_mutually_exclusive_group()
+    locate_sel.add_argument(
         "--all", action="store_true",
-        help="Seed every wrapped type ∪ symbol (same as naming them all).",
+        help="Print every Rust module path recorded in crates.json.",
     )
-    audit_sel.add_argument(
-        "--name", nargs="+", action="extend", default=None, metavar="NAME",
-        help="Seed these type tags / symbol names (e.g. `--name git_oid "
-             "git_oid_cpy`). Each is audited for its own surface + naked "
-             "ffi:: footprint.",
-    )
-    audit_sel.add_argument(
-        "--crate", default=None, metavar="CRATE",
-        help="Seed every entity homed in this crate (e.g. `--crate libgit2`).",
-    )
-    audit_sel.add_argument(
-        "--mod", default=None, dest="mod", metavar="MOD",
-        help="Seed entities homed under a module path prefix (under the crate's "
-             "src/, e.g. `--mod include` or `--mod src/libgit2`).",
-    )
-    audit_sel.add_argument(
+    locate_sel.add_argument(
         "--dir", default=None, metavar="DIR",
-        help="Alias of --mod: seed entities homed under this path prefix.",
+        help="Print homes reached by C files under DIR, relative to the target.",
     )
-    audit_sel.add_argument(
+    locate_sel.add_argument(
+        "--name", nargs="+", action="extend", default=None, metavar="NAME",
+        help="Locate these type tags and/or symbol names. A name with several "
+             "homes is refused unless --file disambiguates it.",
+    )
+    locate_p.add_argument(
         "--file", default=None, metavar="FILE",
-        help="Seed entities homed in one .rs file (by sub-path or basename, "
-             "e.g. `--file oid.rs`).",
+        help="Locate entries reached by this C file, or qualify --name by its "
+             "defining translation unit/header.",
     )
 
-    # -- scaffold (crates.json-driven .rs oracle) ------------------------
-    _scaffold_blurb = (
-        "Resolve C symbols/types to their Rust .rs via crates.json. "
-        "Deterministic, no LLM: the placement oracle is authored outside "
-        "this stage, and an unplaced selection is a hard error. `--all` "
-        "materializes the whole target; `--validate` runs the consistency "
-        "gate.")
-    scaffold_p = sub.add_parser(
-        "scaffold", help=_scaffold_blurb, description=_scaffold_blurb,
-    )
-    # Selection is required and explicit — there is no default.
-    # Not `required=True`: `--file` alone is a valid selection but lives outside
-    # the group (it doubles as `--name`'s qualifier). scaffold() raises if the
-    # whole selection is empty.
-    scaffold_sel = scaffold_p.add_mutually_exclusive_group()
-    scaffold_sel.add_argument(
-        "--all", action="store_true",
-        help="Scaffold the entire in-scope tree (every in-scope source file, "
-             "both port and wrap scope).",
-    )
-    scaffold_sel.add_argument(
-        "--dir", default=None, metavar="DIR",
-        help="Scaffold the crate(s) + module tree for every in-scope source "
-             "file found under DIR, a path relative to the target "
-             "(e.g. `--dir .` for the target dir, `--dir ../util`).",
-    )
-    scaffold_sel.add_argument(
-        "--name", nargs="+", action="extend", default=None, metavar="NAME",
-        help="Resolve the named entit(ies) — type tags and/or symbol names "
-             "(e.g. `--name git_odb git_odb_read`) — to the .rs module(s) "
-             "homing their `// Replaces:` (port) / `// Wraps:` (wrap) anchor. A name "
-             "with several homes (one per `tu` — a tag defined privately in more "
-             "than one TU, or file-local statics) is REFUSED: they are different "
-             "entities sharing a spelling, so pass `--file` to say which. Query "
-             "mode prints the homed path (or `not created`); add --create to "
-             "write the stub(s). The authoritative way an agent locates a "
-             "wrapper module or where a dep lives.",
-    )
-    scaffold_sel.add_argument(
-        "--validate", action="store_true",
-        help="Run the crates.json consistency gate (every entity homed in "
-             "exactly one .rs; crate depends_on acyclic) and exit.",
-    )
-    scaffold_p.add_argument(
-        "--file", default=None, metavar="FILE",
-        help="On its own, scaffold the crate + stub for the single in-scope "
-             "source file at <target>/FILE, matching the file's elements "
-             "wherever their wrappers home (e.g. `--file odb.h` reaches git_odb "
-             "even though its wrapper homes at include/git2/odb.h). With "
-             "`--name`, it QUALIFIES the name — the defining `tu` or a header "
-             "that reaches it — which is how a name with several homes is "
-             "disambiguated.",
-    )
-    scaffold_p.add_argument(
-        "--create", action="store_true",
-        help="Write the stub files + module tree for the selection. Without it, "
-             "scaffold runs in QUERY mode: it prints the homed .rs path(s) of "
-             "the selection (the authoritative way to locate a wrapper module / "
-             "a dep's module), or a `not created` note for anything not yet on "
-             "disk. Idempotent (stub files written only when absent).",
-    )
-
-    # -- bindgen (deterministic -sys FFI-crate composer) -----------------
-    _bindgen_blurb = (
-        "Scaffold the <lib>-sys FFI crates from the analysis tree "
-        "(deterministic; no LLM). Partitions the import surface by "
-        "owning crate (crates.json) into <target>/rust/crates/<lib>-sys/. "
-        "Crates come out incomplete: build.rs carries the per-kind "
-        "allowlists but no fn main, and bindgen.h's shim block is "
-        "empty — finishing them needs a compiler in the loop.")
-    bindgen_p = sub.add_parser(
-        "bindgen", help=_bindgen_blurb, description=_bindgen_blurb,
-    )
-    bindgen_p.add_argument(
-        "--libs", nargs="+", default=None, metavar="LIB",
-        help="Restrict to these libraries (e.g. libssl). "
-             "Default: every in-scope library.",
-    )
-    bindgen_p.add_argument(
-        "--reset", action="store_true",
-        help="Recompute the composer-owned state from scratch instead of "
-             "accumulating onto it: build.rs's ALLOWED_*/BLOCKLIST_FOREIGN stop "
-             "being a cross-target union (so an entity that left the scope "
-             "leaves the array), and bindgen.h's include block is re-seeded "
-             "(discarding hand ordering). Never touches the "
-             "crustify:allowlist-agent block or the crustify:shims block.",
+    crates_sub.add_parser(
+        "validate",
+        help="Run the existing crates.json consistency checks.",
+        description="Check uniqueness, crate dependency validity/cycles, "
+                    "module-path collisions, and by-value dependency edges.",
     )
 
     # -- translate ---------------------------------------------------------
@@ -400,7 +315,7 @@ def main() -> None:
         "dependency-layer order. "
         "Select with --name. One unified scheduler dispatches each unit "
         "to its wrapper (type / symbol); no subject split. Requires the "
-        "scaffold + bindgen stages to have run for each library being "
+        "orchestrator-authored Rust tree and FFI crate to exist for each library being "
         "wrapped. What an agent DOES with a selection is --objective, "
         "and it is taken as given: nothing downstream substitutes a per-unit "
         "verb, so one run carries one objective. Select the units that share "
@@ -467,20 +382,8 @@ def main() -> None:
     if getattr(args, "override_base_prompt", None) is not None:
         crustify_config.OVERRIDE_BASE_PROMPT = args.override_base_prompt
 
-    if args.command == "audit":
-        from crustify.audit import audit as _audit
-        _audit(target, all=getattr(args, "all", False),
-               names=getattr(args, "name", None),
-               crate=getattr(args, "crate", None), mod=getattr(args, "mod", None),
-               dir=getattr(args, "dir", None), file=getattr(args, "file", None))
-
-
-    elif args.command == "scaffold":
-        _handle_scaffold(args, target)
-
-    elif args.command == "bindgen":
-        _handle_bindgen(args, target)
-
+    if args.command == "crates":
+        _handle_crates(args, target)
 
     elif args.command == "translate":
         _handle_wrap(args, target)
@@ -489,23 +392,16 @@ def main() -> None:
 
 # -- analyze dispatch -----------------------------------------------------
 
-# -- scaffold dispatch ----------------------------------------------------
+# -- crates dispatch ------------------------------------------------------
 
-# -- scaffold dispatch (deterministic crate-skeleton composer) -----------
+def _handle_crates(args: argparse.Namespace, target: Path) -> None:
+    from crustify import crates
 
-def _handle_scaffold(args: argparse.Namespace, target: Path) -> None:
-    from crustify.scaffold import scaffold
-    scaffold(target, all=args.all, dir=args.dir, file=args.file,
-             name=getattr(args, "name", None),
-             create=getattr(args, "create", False),
-             validate=getattr(args, "validate", False))
-
-
-# -- bindgen dispatch (deterministic -sys FFI-crate composer) ------------
-
-def _handle_bindgen(args: argparse.Namespace, target: Path) -> None:
-    from crustify.bindgen import bindgen
-    bindgen(target, libs=args.libs, reset=args.reset)
+    if args.crates_command == "locate":
+        crates.locate(target, all=args.all, dir=args.dir, file=args.file,
+                      name=args.name)
+    elif args.crates_command == "validate":
+        crates.validate_command(target)
 
 
 # -- query dispatch -------------------------------------------------------

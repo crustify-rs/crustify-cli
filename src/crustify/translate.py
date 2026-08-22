@@ -9,7 +9,7 @@ what they read to choose it); a confirmation prompt lists first-layer deps.
 
 This module owns only the stage-specific pieces — the selection predicate
 (:func:`_selection_pred`), the lifecycle-op index (:func:`_lifecycle_ops`),
-the bindgen gate, and the emit seam to
+the orchestrator-authored FFI-crate gate, and the emit seam to
 :class:`crustify.agents.translate.TranslateAgent`. Scope (wrap/port) is applied
 **here**, never in the DAG, via the same ``compose.scope`` classifier the
 manifests use — as a filter the caller opts into, not a routing decision.
@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 
 # The composer package lives at ``utils/codeql/compose/`` in the crustify
-# checkout, not as an installed package. Mirror scaffold.py / analyze.py.
+# checkout, not as an installed package. Mirror query.py / scope.py.
 _CRUSTIFY_ROOT = Path(__file__).resolve().parent.parent.parent
 _COMPOSE_PARENT = _CRUSTIFY_ROOT / "utils" / "codeql"
 if str(_COMPOSE_PARENT) not in sys.path:
@@ -50,17 +50,13 @@ def _preflight(target: Path, layout: "Layout") -> Path:
     # refuses with the exact command to run when those are missing.
     from crustify import scope as _scope_mod
     scope_json = _scope_mod.build(layout, target, stage="wrap")
-    # NO scaffolding here. The wrap stage READS the scaffolded tree — its agents
-    # locate their modules via `scaffold --name` (query mode) and fill anchors;
-    # they never create files, and neither does this. `scaffold` is a stage the
-    # operator runs, and the scheduler's plan-time placement check already fails
-    # with the exact remedy when an item's home `.rs` is missing.
+    # The translate stage reads the orchestrator-authored Rust tree. Its agents
+    # locate modules through crates.json and fill scheduler-local anchors; they
+    # never create module files, and neither does this preflight. The scheduler's
+    # plan-time placement check fails before spawning when a home `.rs` is absent.
     #
-    # It used to call `scaffold(target, all=True, create=True)` here, which
-    # re-scaffolded the WHOLE target on every invocation — `--dry-run` included.
-    # That made a read-only command mutate the tree: after a `crates.json` home
-    # was corrected, a dry run silently regenerated the moved type's stub, which
-    # then blocked the fast-forward of the very wave that had filled it.
+    # Preflight deliberately does not materialize the Rust tree. A dry run must
+    # remain read-only, and module creation belongs to the orchestrator.
     return scope_json
 
 
@@ -113,8 +109,8 @@ def _lifecycle_ops(entry_pair) -> dict:
     return out
 
 
-def _check_bindgen(layout: "Layout", target: Path, linked: set[str]) -> None:
-    """Ensure each library a job binds has a scaffolded ``<lib>-sys`` crate.
+def _check_ffi_crates(layout: "Layout", linked: set[str]) -> None:
+    """Ensure each selected library has an orchestrator-authored ``-sys`` crate.
 
     The Rust workspace is repo-root-shared (``crustify/rust``), so the
     ``-sys`` crates live there as ``rust/<lib>-sys``, not under the target."""
@@ -124,8 +120,8 @@ def _check_bindgen(layout: "Layout", target: Path, linked: set[str]) -> None:
     )
     if missing:
         raise SystemExit(
-            f"wrap: bindgen -sys crate missing for {missing!r}. Run "
-            f"`crustify-cli {target} bindgen --libs {' '.join(missing)}` first."
+            f"translate: orchestrator-authored -sys crate missing for "
+            f"{missing!r}. Author and build it before scheduling these units."
         )
 
 
@@ -203,7 +199,7 @@ def _translate_emit(
     """Production emit: one :class:`TranslateAgent` per scheduled batch. A type
     batch carries the type + this batch's op slice; a syms batch carries the
     pooled free symbols. The agent resolves each module's path itself via
-    `scaffold --name` (query mode); nothing is pre-resolved here."""
+    `crates locate --name`; nothing is pre-resolved here."""
     from crustify.agents.translate import TranslateAgent
 
     def emit(batch) -> None:  # batch: _schedule.Batch
@@ -350,12 +346,12 @@ _ANCHOR_RE = _re.compile(
 #: Three spellings, because a tree spans conventions: the neutral placeholder
 #: (`// crustify:todo: T.f`, groups 3/4 — the line IS the placeholder), the verb
 #: an agent fills it with (`/// Wraps: T.f`), and the `// Field:` two-line shape
-#: a pre-neutral scaffold laid, whose placeholder sits BELOW it.
+#: a legacy tree generator laid, whose placeholder sits BELOW it.
 _FIELD_RE = _re.compile(
     r"^\s*(?://+\s*(?:Field|Wraps|Replaces):\s*([A-Za-z_]\w*)\.(\S+)"
     r"|//\s*crustify:todo:\s*([A-Za-z_]\w*)\.(\S+))")
 #: The BARE legacy placeholder — the whole line, no name. It is what a
-#: pre-neutral scaffold laid under an unfilled `// Wraps: <name>`, and the only
+#: legacy tree generator laid under an unfilled `// Wraps: <name>`, and the only
 #: thing the two-line reader is allowed to accept below an anchor. A NAMED todo
 #: line belongs to its own item: `crustify:todo` as a substring would let the
 #: next item's placeholder, two lines down, hold this one open forever.
@@ -391,34 +387,32 @@ def _closure_names(seeds: list[str], by_key, by_name, keep) -> list[str]:
 def _pending_names(names: list[str], layout, target: Path) -> tuple[list[str], list[str]]:
     """Split into (pending, already-wrapped) on the per-item `crustify:todo`.
 
-    `scaffold` lays every item as one ``// crustify:todo: <name>`` line; the
+    The scheduler lays every item as one ``// crustify:todo: <name>`` line; the
     wrapper replaces it with a ``/// Wraps:`` or ``/// Replaces:`` doc comment
     naming what it did, so a SURVIVING todo is the on-disk record that the item
-    is still open. (A tree scaffolded before the neutral anchor carries the
+    is still open. (A tree generated before the neutral anchor carries the
     older two-line ``// Wraps: <name>`` + bare ``// crustify:todo`` shape; the
     same test reads both, since it keys on the todo token.) Cheaper and more honest than tracking state elsewhere: it
     lives next to the code it describes and cannot drift from it."""
     from crustify import crates as _crates
-    from crustify.scaffold import _TODO, _entries_for_names
     doc = _crates.load(layout)
     pending, done = [], []
     for nm in names:
-        entries, missing = _entries_for_names(doc, [nm])
-        if missing:                      # never scaffolded -> nothing filled
+        entries, missing = _crates.entries_for_names(doc, [nm])
+        if missing:                      # no placement -> nothing filled
             pending.append(nm)
             continue
         open_ = False
         for e in entries:
             # `crate_path` is repo-root-relative (`crustify/rust/<crate>`), not
             # relative to `layout.rust` — joining it there double-prefixes.
-            cp = Path(e["crate_path"] or "")
-            p = (cp if cp.is_absolute() else layout.repo_root / cp) / e["rs"]
+            p = _crates.full_rs(layout, e["crate_path"], e["rs"])
             try:
                 lines = p.read_text().splitlines()
             except OSError:
                 open_ = True             # home not on disk yet
                 break
-            # The anchor is matched loosely on purpose. `scaffold` lays it as
+            # The anchor is matched loosely on purpose. The scheduler lays it as
             # `// Wraps: <name>`, but a wrapper routinely promotes it to a doc
             # comment with a trailing gloss — `/// Wraps: stack_st
             # (crypto/stack/stack.c) — the element-ownership-agnostic surface`
@@ -446,10 +440,10 @@ def _pending_names(names: list[str], layout, target: Path) -> tuple[list[str], l
             # accessor it owes is not.
             #
             # The ANCHOR'S EXISTENCE is the authorization -- no scope query
-            # here. The scaffolder lays a `// Field:` anchor only for a field
+            # here. The scheduler lays an accessor anchor only for a field
             # target code touches, so every anchor present is one the
             # wrapper owes. This used to intersect with a target field set
-            # because the scaffolder anchored every DECLARED field, and without
+            # because older generated trees anchored every DECLARED field, and without
             # that filter an opaque type (`evp_pkey_st`: 21 anchors, 0
             # target-section) stayed pending forever on placeholders nobody would
             # fill. Narrowing emission removed the reason for it.
@@ -594,13 +588,14 @@ def translate_types(
             "have emptied the selection; --objective review|port acts on "
             "filled items).")
 
-    # Macros are header-defined: bindgen owns their <lib>-sys shims, so no stage
-    # facades them. Exclude macro_* symbols from selection, and drop any --name
+    # Ordinary macros are header-defined and have no standalone translation
+    # unit. Their consumers extend the owning <lib>-sys crate lazily. Exclude
+    # macro_* symbols from selection, and drop any --name
     # that resolves ONLY to macros so it neither schedules a wrap job nor
     # reports as "unknown".
-    # ...with ONE exception: a macro that MINTS TYPES. `bindgen owns the shim`
-    # is true of a constant or a function-like macro -- there is nothing to
-    # facade. A generator is different: its expansion is a whole aggregate, so
+    # ...with ONE exception: a macro that MINTS TYPES. A constant or ordinary
+    # function-like macro needs only an FFI binding or shim. A generator is
+    # different: its expansion is a whole aggregate, so
     # the family wants one generic Rust type that its instances alias, and that
     # generic is code this stage has to write. `generates` carries EVERY minting
     # macro (`compose.macro_families` sets no count threshold: a family of one
@@ -619,13 +614,14 @@ def translate_types(
         hits = [by_key[k] for k in (by_name.get(nm) or []) if base_in_scope(by_key[k])]
         (skipped if (hits and all(_is_macro(n) for n in hits)) else kept).append(nm)
     if skipped:
-        print(f"[crustify-cli translate] skipping {len(skipped)} macro(s) — bindgen owns "
-              f"their -sys shims: {', '.join(sorted(skipped))}")
+        print(f"[crustify-cli translate] skipping {len(skipped)} standalone macro(s) — "
+              f"their consumers extend the owning -sys crate: "
+              f"{', '.join(sorted(skipped))}")
     sel_names = kept
     if not sel_names:
         raise SystemExit(
             "wrap: nothing to wrap — selection resolved only to macros "
-            "(bindgen owns their -sys shims).")
+            "(their consumers extend the owning -sys crate lazily).")
 
     # Scope gate. Out of scope is the ONLY refusal: both halves route to the
     # same agents, so scope no longer decides which stage takes an entity —
@@ -660,9 +656,9 @@ def translate_types(
             f"{'entity is' if len(bad_oos)==1 else 'entities are'} out of scope "
             f"(in neither the targeted nor the imported section):\n{listing}")
 
-    # Bindgen gate for the libraries actually being wrapped. A selected unit's
-    # owning library is its crate in crates.json (crate name == link unit);
-    # a unit not placed there contributes nothing (skipped).
+    # FFI-crate gate for the libraries actually being translated. A selected
+    # unit's owning library is its crate in crates.json (crate name == link
+    # unit); a unit not placed there contributes nothing (skipped).
     sel_nodes, _ = S.resolve_names(sel_names, by_key, by_name, in_scope)
     from crustify import crates as _crates
     _doc = _crates.load(layout)
@@ -671,8 +667,8 @@ def translate_types(
         hit = _crates.lookup(_doc, n.id, file=n.defined_in)
         return hit["crate"] if hit else None
 
-    _check_bindgen(layout, target,
-                   {lib for n in sel_nodes if (lib := _lib_of(n))})
+    _check_ffi_crates(layout,
+                      {lib for n in sel_nodes if (lib := _lib_of(n))})
 
     # `Node -> scope.IMPORTED | scope.TARGETED`, the free-symbol pool key. Batching
     # locality only -- it no longer picks an objective (see `batch_objective`).

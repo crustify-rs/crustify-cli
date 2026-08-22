@@ -449,8 +449,8 @@ def _import_reachable(
         # only in the bodies of target-reachable functions, never their
         # signatures). No path guard: anything legitimately import-section and
         # needed by the target earns a record, external or not (an external
-        # type like pthread_mutex_t is already admitted by-value via S5; the
-        # scaffolder decides bindgen-vs-record home downstream, not this gate).
+        # type like pthread_mutex_t is already admitted by-value via S5; crate
+        # placement decides its binding/record home downstream, not this gate).
         for fn_name, fn_def_file in reach.functions_using_type_in_body(tname, tdef):
             if fn_def_file not in target_paths and reach.is_function_port_reachable(fn_name, fn_def_file):
                 return True
@@ -620,7 +620,7 @@ def compose(
         seen.add(cand_id)
         decls = scope.parse_decl_files(r["decl_files"])
         # The entry's stored `declared_in` FIELD gets the FULL decl list (set
-        # just before append) so the scaffolder reasons over every decl site
+        # just before append) so placement can reason over every decl site
         # and no instantiation header is dropped. The skeleton builders only
         # STORE that field — they don't read it. This LOCAL is the single
         # canonical pick for the one place that needs one file: the typedef
@@ -668,7 +668,7 @@ def compose(
         in_target = scope_enabled and (r["name"], r["def_file"]) in tgt_types
         decls = scope.parse_decl_files(r["decl_files"])
         # The entry's stored `declared_in` FIELD gets the FULL decl list (set
-        # just before append) so the scaffolder reasons over every decl site
+        # just before append) so placement can reason over every decl site
         # and no instantiation header is dropped. The skeleton builders only
         # STORE that field — they don't read it. This LOCAL is the single
         # canonical pick for the one place that needs one file: the typedef

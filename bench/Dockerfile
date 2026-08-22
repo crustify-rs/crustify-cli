@@ -39,7 +39,7 @@
 # The campaign task is the only run-time input. Everything else is the
 # orchestrator's own work: clone the target into /work, install its libraries,
 # then Phase 1 of the playbook — build.json, crates.json, scope-config.json,
-# CodeQL database, scaffold, bindgen — before any wave.
+# CodeQL database and compiling crate shells — before any wave.
 #
 # One container name per campaign: `docker attach` reaches a detached run,
 # `docker exec -it <name> bash` opens a shell beside the orchestrator, and a
@@ -115,10 +115,9 @@ RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
 # 6. Quick Setup steps 1 and 2. Under /opt, NOT /work: a volume on /work
 #    would shadow anything the image put underneath it.
 #
-#    ffibox MUST be a sibling of the crustify checkout — scaffold resolves it
-#    as <crustify>/../ffibox and bakes that path into every generated
-#    Cargo.toml, and cli-config.json cannot override it. Hence /opt/crustify-cli
-#    for the mount: any other path breaks the sibling resolution.
+#    ffibox is a sibling of the crustify checkout so the orchestrator can use
+#    the stable /opt/ffibox path in wrapper-crate manifests. Hence
+#    /opt/crustify-cli for the mount.
 #
 #    The crustify-cli clone earns its place through what it writes OUTSIDE
 #    itself — the dependency set into /opt/venv, the CodeQL library packs into
