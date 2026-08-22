@@ -3,6 +3,9 @@
 One target per directory. Each holds the `TASK.md` a run is given, plus
 whatever Phase 1 artifacts are authored ahead of time.
 
+Copy [`TASK.md`](TASK.md) to start a campaign request. It is the canonical
+user-facing template; campaign directories contain filled instances.
+
 `Dockerfile` bootstraps the orchestrator that runs one.
 
 Both commands from the repo root:
