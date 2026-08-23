@@ -331,6 +331,19 @@ they've selected. This agentic review is independent of the deterministic
 `crustify-audit unsafe` gate above. `crustify-audit ub` is outside the campaign
 workflow.
 
+### UB patch promotion
+
+Run `crustify-audit ub` only with the user's explicit approval. The UB agent
+owns both the evidence and the repair: it creates a dedicated branch in the
+target repository, follows that repository's conventions, implements focused
+regression tests, builds the affected targets, runs their gates, reruns the
+reproduction, and commits the patch without merging it. The orchestrator does
+not rewrite that patch. Inspect its diff and evidence, independently rerun the
+relevant build, test, and reproduction gates, and merge the agent branch into
+the canonical campaign branch only when they are green and the change is
+confined to the confirmed finding. Otherwise leave it unpromoted and report the
+specific failure.
+
 ### Accounting
 
 Use `crustify-log-cost` over the per-agent `<stage>.usage.json` to compute cost
