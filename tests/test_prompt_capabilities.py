@@ -117,6 +117,7 @@ class PromptCapabilityTests(unittest.TestCase):
         symbol = TranslateAgent(
             self.repo, batch_kind="syms",
             syms=[{"name": "fixture_free", "defined_in": "fixture.c"}],
+            objective="wrap",
             repo_root=self.repo,
         )
         raw = TranslateAgent(
@@ -125,6 +126,9 @@ class PromptCapabilityTests(unittest.TestCase):
         )
         self.assertEqual(symbol._prompt(), raw._prompt())
         self.assertEqual(json.loads(symbol._arguments()["worklist"])["route"], "symbol")
+        rendered = symbol._prompt().format(**symbol._arguments())
+        self.assertIn("task objective: `wrap`", rendered)
+        self.assertIn("campaign objective: `wrap`", rendered)
         self.assertEqual(json.loads(raw._arguments()["worklist"])["route"], "raw-lifetime")
 
     def test_unknown_capability_is_rejected(self) -> None:

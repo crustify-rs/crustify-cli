@@ -97,6 +97,13 @@ Anything C can still observe preserves its ABI and any layout C observes.
 Imported entities remain C-owned and receive safe wrappers; only
 campaign-owned entities progress toward native Rust ownership.
 
+In a port campaign limited to a user-selected subset, a targeted entity outside
+that migration set may intentionally receive `wrap`. Treat the worklist
+objective as authoritative: the inventory section says who owns the source,
+not whether this particular campaign ports it. Such a wrapper is the explicit
+boundary around the selected native subset, and its C implementation remains
+in place.
+
 `review` examines existing semantic findings and Rust code as an LLM judge.
 Verify every ownership, lifetime and safety claim against the source; submit
 corrected findings when that capability is enabled, and fix the Rust where the
