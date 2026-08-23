@@ -111,6 +111,7 @@ class PromptCapabilityTests(unittest.TestCase):
         self.assertIn('"name": "fixture_st"', rendered)
         self.assertIn("task objective: `wrap`", rendered)
         self.assertIn("campaign objective: `wrap`", rendered)
+        self.assertIn("only when C sources changed", rendered)
 
     def test_symbol_and_raw_lifetime_routes_use_the_same_prompt(self) -> None:
         self.configure([])

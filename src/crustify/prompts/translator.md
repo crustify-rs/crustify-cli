@@ -38,9 +38,11 @@ worklist, its objective, dependency order and authored Rust homes.
 6. Follow the worklist route and task objective in the translator playbook.
    Fill only the scheduled anchors and the lower-layer raw references that the
    new safe surface makes replaceable.
-7. Write focused unit tests and run the configured Rust, C and sanitizer gates.
-   Run every enabled deterministic safety-review capability according to its
-   role guidance. Fix failures and unsafe wrapper bypasses.
+7. Write focused unit tests and run the configured Rust gates. Run the C build
+   and sanitizer tests only when C sources changed; for a port objective, also
+   run them with the Rust feature enabled. Run every enabled deterministic
+   safety-review capability according to its role guidance. Fix failures and
+   unsafe wrapper bypasses.
 8. Replace scheduler TODOs with canonical anchors. Confirm the diff contains
    no unrelated work and summarize any bindgen allowlist or shim changes for
    the orchestrator.
