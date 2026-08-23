@@ -4,9 +4,15 @@ import io
 import unittest
 from contextlib import redirect_stdout
 from crustify import campaign
+from crustify.translate import lifetime_objective
 
 
 class CampaignReviewPlacementTests(unittest.TestCase):
+    def test_raw_lifetime_campaign_preserves_review_objective(self) -> None:
+        self.assertEqual(lifetime_objective("review"), "review")
+        self.assertEqual(lifetime_objective("wrap"), "raw")
+        self.assertEqual(lifetime_objective("port"), "raw")
+
     def test_review_retains_an_unplaced_item_as_context(self) -> None:
         missing = {("negative_finding", "src/example.c")}
         output = io.StringIO()

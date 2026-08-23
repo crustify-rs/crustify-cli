@@ -55,7 +55,13 @@ LIFETIME_TIERS = ("void", "string")
 LIFETIME_OBJECTIVE = "raw"
 
 
-def translate_lifetime_for(target: Path, spec: str, *, dry_run: bool = False) -> None:
+def lifetime_objective(objective: str) -> str:
+    """Use discovery for normal campaigns, but preserve explicit reviews."""
+    return "review" if objective == "review" else LIFETIME_OBJECTIVE
+
+
+def translate_lifetime_for(target: Path, spec: str, *, objective: str = "wrap",
+                           dry_run: bool = False) -> None:
     """Execute the single raw-lifetime item represented by a campaign."""
     if spec not in LIFETIME_TIERS:
         raise SystemExit(
@@ -65,11 +71,13 @@ def translate_lifetime_for(target: Path, spec: str, *, dry_run: bool = False) ->
     from crustify.agents.translate import TranslateAgent
     from crustify.layout import Layout
 
+    effective_objective = lifetime_objective(objective)
     if dry_run:
+        policy = ("explicit --objective review" if effective_objective == "review"
+                  else "set by the tier")
         print(f"[translate dry-run] --lifetime-for {spec}: one agent, "
-              f"objective {LIFETIME_OBJECTIVE} (set by the tier, not "
-              f"--objective), no composed worklist (the agent discovers the "
-              f"primitives).")
+              f"objective {effective_objective} ({policy}), no composed "
+              f"worklist (the agent discovers the primitives).")
         return
 
     layout = Layout.discover(target)
@@ -79,7 +87,7 @@ def translate_lifetime_for(target: Path, spec: str, *, dry_run: bool = False) ->
         def emit(_batch) -> None:
             TranslateAgent(
                 target_, batch_kind="syms", lifetime_for=spec,
-                objective=LIFETIME_OBJECTIVE,
+                objective=effective_objective,
                 prompt_capabilities=capabilities,
                 repo_root=layout_.repo_root,
             ).run()
@@ -87,7 +95,7 @@ def translate_lifetime_for(target: Path, spec: str, *, dry_run: bool = False) ->
 
     batch = schedule.Batch(file=f"lifetime-for-{spec}")
     stage = schedule.Stage(
-        verb=LIFETIME_OBJECTIVE, in_scope=lambda _node: True,
+        verb=effective_objective, in_scope=lambda _node: True,
         emit_fn=lambda _batch: None, max_syms=1, emit_factory=factory,
         target=target, layout=layout,
     )
