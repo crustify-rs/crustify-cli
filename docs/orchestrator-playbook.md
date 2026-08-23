@@ -281,11 +281,21 @@ their `<lib>-sys` allowlist changes and rerun the affected crate tests.
 
 A **wrap** campaign runs every wave at `--objective wrap`.
 
-A **port** campaign runs `wrap` when scheduling a type for the first time: the
-type stays layout-compatible while C still reads its fields. It runs `port` for
-an item once the C-side readers are gone. Symbols do not get a `wrap` objective in a `port` campaign - they get
-ported directly. `port` re-visits a filled anchor deliberately, so it is how an item is
+A **port** campaign distinguishes the user-selected migration set from its
+dependency closure. A selected type runs `wrap` when it is scheduled for the
+first time, so it stays layout-compatible while C still reads its fields, and
+runs `port` once those C-side readers are gone. A selected symbol runs `port`
+directly. `port` re-visits a filled anchor deliberately, so it is how an item is
 escalated rather than redone, and it is what starts the opacification burn-down.
+
+When the user chooses to migrate only a subset of the targeted closure, the
+remaining targeted dependencies may run `wrap` and form the deliberate C/Rust
+boundary. This applies to symbols as well as types: a wrapped dependency keeps
+its C implementation and exposes a safe Rust surface to the selected ported
+items. Partition these into an earlier `wrap` campaign because one
+`campaign.json` has one objective; do not mix closure-only wrappers and
+selected port items in the same campaign. If the user chooses the whole
+targeted closure instead, targeted symbols continue to run `port` directly.
 
 Do not include completed items when authoring the next oracle schedule.
 
