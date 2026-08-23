@@ -103,22 +103,6 @@ def _plan_index(doc: dict):
     return units, by_key, in_scope
 
 
-def _check_missing_homes(objective: str, missing: set[tuple[str, str]]) -> None:
-    if not missing:
-        return
-    if objective == "review":
-        print(
-            f"[crustify-cli review] {len(missing)} selected item(s) have no "
-            "home `.rs`; retaining them as review-only worklist context: "
-            + ", ".join(name for name, _home in sorted(missing)))
-        return
-    listing = "\n".join(f"  - {name}  ({home})" for name, home in sorted(missing))
-    raise SystemExit(
-        f"{objective}: {len(missing)} selected item(s) have no home `.rs` "
-        f"on disk (no crates.json home, or the orchestrator has not created "
-        f"the recorded file). Author the missing module(s) and retry:\n{listing}")
-
-
 def execute(target: Path, campaign_path: Path, *, objective: str,
             parallel_max: int, dry_run: bool = False) -> None:
     import crustify._schedule as S
@@ -160,7 +144,12 @@ def execute(target: Path, campaign_path: Path, *, objective: str,
                     linked.add(hit["crate"])
                 if S.resolve_path(member, placement, layout) is None:
                     missing.add((member.id, member.defined_in or "?"))
-    _check_missing_homes(objective, missing)
+    if missing:
+        listing = "\n".join(f"  - {name}  ({home})" for name, home in sorted(missing))
+        raise SystemExit(
+            f"{objective}: {len(missing)} selected item(s) have no home `.rs` "
+            f"on disk (no crates.json home, or the orchestrator has not created "
+            f"the recorded file). Author the missing module(s) and retry:\n{listing}")
     _check_ffi_crates(layout, linked)
     if dry_run:
         _dry_run(doc, objective)
