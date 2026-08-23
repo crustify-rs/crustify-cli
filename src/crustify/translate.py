@@ -52,12 +52,11 @@ def _translate_emit(target: Path, layout, *, max_syms: int,
 
 
 LIFETIME_TIERS = ("void", "string")
-LIFETIME_OBJECTIVE = "raw"
 
 
 def lifetime_objective(objective: str) -> str:
-    """Use discovery for normal campaigns, but preserve explicit reviews."""
-    return "review" if objective == "review" else LIFETIME_OBJECTIVE
+    """Lifetime markers wrap discovered primitives, or preserve review."""
+    return "review" if objective == "review" else "wrap"
 
 
 def translate_lifetime_for(target: Path, spec: str, *, objective: str = "wrap",
@@ -74,7 +73,7 @@ def translate_lifetime_for(target: Path, spec: str, *, objective: str = "wrap",
     effective_objective = lifetime_objective(objective)
     if dry_run:
         policy = ("explicit --objective review" if effective_objective == "review"
-                  else "set by the tier")
+                  else "raw-lifetime route normalizes to wrap")
         print(f"[translate dry-run] --lifetime-for {spec}: one agent, "
               f"objective {effective_objective} ({policy}), no composed "
               f"worklist (the agent discovers the primitives).")
@@ -88,6 +87,7 @@ def translate_lifetime_for(target: Path, spec: str, *, objective: str = "wrap",
             TranslateAgent(
                 target_, batch_kind="syms", lifetime_for=spec,
                 objective=effective_objective,
+                campaign_objective=objective,
                 prompt_capabilities=capabilities,
                 repo_root=layout_.repo_root,
             ).run()
