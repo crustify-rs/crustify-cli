@@ -142,7 +142,9 @@ def execute(target: Path, campaign_path: Path, *, objective: str,
         if len(raw_items) != 1:
             raise SystemExit("translate: raw-lifetime campaign must contain one item")
         from crustify.translate import translate_lifetime_for
-        translate_lifetime_for(target, raw_items[0]["name"], dry_run=dry_run)
+        translate_lifetime_for(
+            target, raw_items[0]["name"], objective=objective,
+            dry_run=dry_run)
         return
     waves = _decode(doc)
 
