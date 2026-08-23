@@ -113,10 +113,14 @@ share during migration, such as a C allocator or destructor still used across
 the boundary. Code and storage become fully Rust-owned only when they no longer
 cross that boundary.
 
-`raw` is reserved for a `raw-lifetime` worklist. Discover the requested
-untyped lifecycle tier codebase-wide. In a wrap campaign, retain only
-primitives published on the API. Submit findings through the enabled semantic
-capability, then emit the strategies described below.
+A `raw-lifetime` route uses `wrap` while discovering the requested untyped
+lifecycle tier codebase-wide. The route selects discovery; the task objective
+selects wrapping, and the campaign objective retains the surrounding scope. In
+a wrap campaign, retain only primitives published on the API; in a port
+campaign, include the targeted primitives needed by the selected migration.
+Submit findings through the enabled semantic capability, then emit the
+strategies described below. Under `review`, verify the existing findings and
+strategies instead of rediscovering them as new work.
 
 ### Keep the boundary safe
 

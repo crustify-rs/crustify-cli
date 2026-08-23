@@ -120,7 +120,7 @@ class PromptCapabilityTests(unittest.TestCase):
             repo_root=self.repo,
         )
         raw = TranslateAgent(
-            self.repo, batch_kind="syms", lifetime_for="void", objective="raw",
+            self.repo, batch_kind="syms", lifetime_for="void", objective="wrap",
             repo_root=self.repo,
         )
         self.assertEqual(symbol._prompt(), raw._prompt())

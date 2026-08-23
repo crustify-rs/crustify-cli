@@ -77,20 +77,22 @@ class TranslateAgent(CrustifyAgent):
         # the prompt has one input to read.
         lifetime_for: str | None = None,
         # What the agent is being asked to DO with this batch, handed straight
-        # to the prompt as `{objective}`: "wrap" | "port" | "review" | "raw".
-        # The last is the lifetime-tier discovery arm and rides with
-        # `lifetime_for`, which injects it -- no --objective selects it. The
-        # scheduler always supplies one, so the prompt never branches on an
-        # empty slot -- and the agent no longer has to INFER review mode from
-        # finding a filled anchor on disk, which was indistinguishable from
-        # being asked to nativize one.
+        # to the prompt as `{objective}`: "wrap" | "port" | "review". Lifetime
+        # discovery is identified by its `raw-lifetime` route, not by a fourth
+        # objective; normal discovery emits wrapping strategies, while an
+        # explicit review remains review.
         objective: str = "wrap",
+        # Usually the same as `objective`. A raw-lifetime marker in a port
+        # campaign deliberately has task objective `wrap` while retaining
+        # campaign objective `port`, so discovery uses the targeted scope.
+        campaign_objective: str | None = None,
         prompt_capabilities: tuple[str, ...] | None = None,
         repo_root: Path | None = None,         # worktree root in an isolated wave
     ) -> None:
         super().__init__(target, repo_root=repo_root)
         self._batch_kind = batch_kind
         self._objective = objective
+        self._campaign_objective = campaign_objective or objective
         self._prompt_capabilities = (
             tuple(prompt_capabilities) if prompt_capabilities is not None
             else self.configured_capabilities(self.layout)
@@ -184,7 +186,7 @@ class TranslateAgent(CrustifyAgent):
             # no longer a `.format` slot — they go to the backend's system slot
             # via `system_preamble()`, out of reach of context compaction.
         }
-        common["campaign_objective"] = self._objective
+        common["campaign_objective"] = self._campaign_objective
 
         if self._lifetime_for:
             route = "raw-lifetime"
