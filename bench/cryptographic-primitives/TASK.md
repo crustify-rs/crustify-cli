@@ -1,28 +1,56 @@
 ---
 
-The user has chosen the following configuration:
+# Campaign
 
-- campaign repo: `https://github.com/intel/cryptography-primitives`, commit 9d397ba62e2369b63171bc995e9c1179aaa5c0dc
-- campaign objective: wrap
-- campaign target: the whole public API, except the imported closure
+- repository: `https://github.com/intel/cryptography-primitives`
+- revision: `9d397ba62e2369b63171bc995e9c1179aaa5c0dc`
+- objective: `wrap`
+
+# Sub-campaigns
+
+## `public-api`
+
+- subsystem: whole published API
+- implementation-paths: derive during setup
+- api-headers: derive from the implementation paths
+- coverage: whole public API, excluding the imported closure
+- named-items: none
+- translator-backend: `codex`
+- translator-model: `gpt-5.6-sol`
+
+# Workload
+
+- batching: customize
+- max-types: `2`
 - max-syms: default
 - max-loc: default
-- max-types: 2
-- billing: API
-- parallel-max: you pick an optimal value
-- agent backend: codex
-- model: gpt-5.6-sol
-- review mode: run the review objective on all waves at the end of the campaign using gpt-5.6-sol as the model
+- parallel-max: orchestrator-selected
 
-## Phase 1 - Setup
+# Agentic review
 
-You have the user's approval to run Phase 1 of the crustify playbook end to end.
+- checkpoints:
+  - milestone: campaign end, covering all translated output
+    model: `gpt-5.6-sol`
 
-## Phase 2 - Translation
+# Execution
 
-You have the user's approval to run Phase 2 fully autonomously end to end.
+- mode: autonomous
 
-## Recording
+# UB audit
 
-Record and and git track results in `<repo-checkout>/crustify/wrappers-results.md`.
-Use the exact format as in the template.
+- run: no
+- model: not applicable
+
+# Benchmark metadata
+
+- orchestrator-backend: `codex`
+- orchestrator-model: `gpt-5.6-sol`
+- billing: `api`
+- setup-approval: not required; Phase 1 is pre-approved
+- results-path: `<repo-checkout>/crustify/wrappers-results.md`
+- results-template: standard
+
+# Notes
+
+Phase 1 and Phase 2 are approved to run autonomously end to end. Record and git
+track the results using the exact standard template.
