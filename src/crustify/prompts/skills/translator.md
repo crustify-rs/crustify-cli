@@ -1,7 +1,7 @@
 # crustify-translator
 
 - Skill name: crustify-translator
-- Doc path: ../../../docs/translator-playbook.md
+- Doc path: ../../../../docs/translator-playbook.md
 - Description: Translate one scheduler-owned C type or symbol worklist into
   safe Rust under a `wrap`, `port`, or `review` objective, including the
   raw-lifetime discovery route. Covers route selection, ownership and lifecycle

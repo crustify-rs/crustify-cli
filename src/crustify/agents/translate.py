@@ -24,21 +24,21 @@ from crustify.agents.base import CrustifyAgent, SkillSpec, _PKG_ROOT
 _TYPE_KINDS = ("struct", "union", "enum", "macro")
 
 _CORE_SKILLS = (
-    SkillSpec("crustify", "src/crustify/prompts/skill-translator.md"),
+    SkillSpec("crustify", "src/crustify/prompts/skills/translator.md"),
 )
 
 _CAPABILITY_SKILLS: dict[str, SkillSpec] = {
     "crustify-oracle": SkillSpec(
         "crustify-oracle", "SKILL.md", capability="crustify-oracle",
-        role_header="skill-oracle.md",
+        role_header="skills/oracle.md",
     ),
     "ffibox": SkillSpec(
         "ffibox", "SKILL.md", capability="ffibox",
-        role_header="skill-ffibox.md",
+        role_header="skills/ffibox.md",
     ),
     "crustify-audit": SkillSpec(
         "crustify-audit", "SKILL.md", capability="crustify-audit",
-        role_header="skill-audit.md",
+        role_header="skills/audit.md",
     ),
 }
 
