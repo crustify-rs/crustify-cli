@@ -52,6 +52,9 @@ import subprocess
 import sys
 import urllib.request
 from collections import defaultdict
+from pathlib import Path
+
+from crustify.layout import Layout
 
 OPENROUTER_MODELS = "https://openrouter.ai/api/v1/models"
 # OpenAI publishes pricing as a docs page, not a machine-readable endpoint
@@ -311,8 +314,8 @@ def main():
     prices = load_prices(args.price_cache, offline=args.offline)
 
     tdir = args.target if args.target else "**"
-    log_glob = os.path.join(args.repo_root, "crustify", "targets", tdir,
-                            "logs", "**", "*.usage.json")
+    campaigns = Layout(Path(args.repo_root)).campaigns
+    log_glob = os.path.join(str(campaigns), tdir, "logs", "**", "*.usage.json")
 
     kc = defaultdict(float); kr = defaultdict(int)
     kw = defaultdict(float); kn = defaultdict(int)  # kn = rows with no priceable cost
