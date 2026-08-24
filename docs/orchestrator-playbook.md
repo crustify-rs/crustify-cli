@@ -358,7 +358,10 @@ crustify-audit <repo_root> unsafe --json
 Run the `--objective review` stage if the user instructed you to do so, choosing the model
 they've selected. This agentic review is independent of the deterministic
 `crustify-audit unsafe` gate above. `crustify-audit ub` is outside the campaign
-workflow.
+workflow. Run the review pass once after the raw void stage and once after the raw string
+stage, and then after a decent amount of units has been accumulated across waves - you don't have
+to run a review pass after every wave. Prefer larger caps for the review stage, so more
+units are batched per agent; e.g. 3x the defaults.
 
 ### UB patch promotion
 

@@ -10,22 +10,7 @@
 3. **Where should this campaign start: one or two subsystems, a named subset of
    functions or types, or the whole target? Should sub-campaigns be defined now
    or brainstormed during the live session?**
-   - Answer: `<starting scope>; <define sub-campaigns now | brainstorm live>`
-
-# Sub-campaign questions
-
-Copy this block once for every answer to question 3.
-
-## `<sub-campaign name>`
-
-4. **Which implementation paths belong to this subsystem?**
-   - Answer: `<paths>`
-5. **Which headers define its public API?**
-   - Answer: `<paths | derive from implementation paths>`
-6. **Should it cover the whole subsystem or only named types and functions?**
-   - Answer: `<whole subsystem | named subset: ...>`
-7. **Which backend and model should translate this sub-campaign?**
-   - Answer: `<codex | claude>, <model>`
+   - Answer: `<starting scope>; <define sub-campaigns now | brainstorm live | orchestrator selected>`
 
 # Campaign execution questions
 
@@ -36,7 +21,7 @@ Copy this block once for every answer to question 3.
 
 9. **Do you want agentic review? If so, at which campaign milestones, and
    which model should perform each review?**
-   - Answer: `<none | milestone: model; ...>`
+   - Answer: `<none | orchestrator-selected | milestone: model; ...>`
 
 10. **Should the campaign run the optional agentic UB pass? If so, which model
     should run it?**
@@ -59,14 +44,10 @@ A6. **Should I wait for your approval before starting UB audit passes?**
 
 # Benchmark recording questions
 
-12. **Which backend and model run the orchestrator?**
-    - Answer: `<codex | claude>, <model>`
-13. **Which billing mode should agentic stages use?**
+11. **Which billing mode should agentic stages use?**
     - Answer: `<api | subscription>`
-14. **Has setup already been approved?**
-    - Answer: `<yes | no>`
-15. **Where and in what format should results be recorded?**
-    - Answer: `<path>, <template>`
+12. **Where and in what format should results be recorded?**
+    - Answer: `wrappers-results.md | <custom-template>`
 
 # Guidance
 
