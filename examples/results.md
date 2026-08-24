@@ -87,7 +87,8 @@ in Notes.
 
 ## Overview
 
-- **Rust LoC** — `<n>`
+- **Rust LoC, non-test** — `<n>`
+- **Rust LoC, tests** — `<n>`
 - **C LoC** — `<n>`
 - **ported types** — `<n>`
 - **ported symbols** — `<n>`
@@ -253,12 +254,29 @@ crustify-cli or ffibox along the way belongs in that repo's history, not here.
 > row counts; where a metric moved and what moved it; what the judge found and
 > whether it held. Everything else stays in the tables.
 
-State where the two LoC figures come from. `Rust LoC` is every authored `.rs`
-line under `crustify/rust`, excluding anything generated into `target/`; say
-how much of it is `-sys` stubs. `C LoC` is the summed body LoC the oracle
-recorded for the unique scheduled units — the C actually translated, not the
-surface it was drawn from — so give the defining files' and the whole target's
-totals beside it for scale, and say plainly that the ratio is not like-for-like
+State where the LoC figures come from, and note that all of them exclude
+comments and blank lines.
+
+`C LoC` is `crustify-oracle query dag --name <every scheduled entity> --loc`:
+the oracle's translated-LoC view, a function seed valued at its body LoC and a
+type seed at its field and op count. It reports the seeds only, with no closure
+expansion, so it is the C the campaign translated rather than the surface it
+was drawn from. Give the defining files' and the whole target's raw totals
+beside it for scale.
+
+`Rust LoC` is counted from source over the authored `.rs` files under
+`crustify/rust`, excluding anything generated into `target/`, and split by
+`#[cfg(test)]` module.
+
+Say why that non-test figure differs from the `code_lines` the Safety audit
+reports. The audit measures the union of HIR definition spans, so it counts
+only what sits inside an item — no `use`, `mod` or free-standing attribute
+lines — and by construction cannot see `cfg`-disabled code, which is why it
+yields no test figure. Its number is the right denominator for the unsafe
+ratios and the wrong one for how much Rust was written; the two must not be
+added.
+
+Say plainly that the Rust-to-C ratio is not like-for-like in any measure,
 because the Rust carries tests, `// SAFETY:` justifications, `ffi_export`
 gateways and scaffolding with no C counterpart.
 
