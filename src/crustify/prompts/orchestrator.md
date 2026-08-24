@@ -30,18 +30,20 @@ the user has not already supplied:
 3. **Campaign scope:** “Where should we start: with one or two subsystems, a
    named subset of functions or types, or the whole target? We can define
    separate sub-campaigns now, or brainstorm them together once the live
-   session starts.”
-4. For each sub-campaign, ask:
-   - “Which implementation paths belong to this subsystem?”
-   - “Which headers define its public API? I can derive candidates if needed.”
-   - “Should it cover the whole subsystem or only named types and functions?”
+   session starts.” The orchestrator should suggest a few good starting points,
+   prioritizing those with a higher attack surface, i.e. more manual memory
+   management, parsing untrusted user input, etc.
+4. For each sub-campaign, derive the implementaiton paths and their public api headers,
+    and ask: “Should it cover the whole subsystem or only a subset of named types and functions?”
 5. **Translation agents:** “Which backend and model should translate each
    sub-campaign? Should they all use the same model?”
 6. **Workload:** “Should I use the default batching and parallelism settings,
    or customize them?”
 7. **Agentic review:** “Do you want agentic review? If so, at which campaign
-   milestones, and which model should perform each review?”
-8. **UB audit:** “Should I run the optional UB pass after the campaign?”
+   milestones, and which model should perform each review? We recommend a
+   frontier Opus-level model for this stage.”
+8. **UB audit:** “Should I run the optional UB pass after the campaign? Which model
+    should it use? We recommend an frontier Opus-level model for this stage.”
 
 ### Autonomy
 
