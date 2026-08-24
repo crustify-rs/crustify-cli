@@ -1,52 +1,48 @@
 ---
 
-# Campaign
+# Campaign questions
 
-- repository: `https://github.com/openssl/openssl.git`
-- revision: `0ffaa24c6148514fa77f76a48ae48852df7be9e7`
-- objective: `port`
+1. **Which repository and revision should this campaign use?**
+   - Answer: `https://github.com/openssl/openssl.git`, `0ffaa24c6148514fa77f76a48ae48852df7be9e7`
+2. **Should this campaign port the C implementation to Rust, or create safe Rust wrappers?**
+   - Answer: port the C implementation to Rust
+3. **Which subsystems should be handled as separate sub-campaigns?**
+   - Answer: `libssl-selected-surface`
 
-# Sub-campaigns
+# Sub-campaign questions
 
 ## `libssl-selected-surface`
 
-- subsystem: `ssl`
-- implementation-paths: `ssl/` plus headers outside it that libssl implements
-- api-headers: derive from `oracle-config.json`
-- coverage: named subset
-- named-items: imported type closure, imported symbols required by target layers L0 through L2, and the three god objects below
-- translator-backend: ask the user, showing available options
-- translator-model: ask the user, showing available options
+4. **Which implementation paths belong to this subsystem?**
+   - Answer: `ssl/` plus headers outside it that libssl implements
+5. **Which headers define its public API?**
+   - Answer: derive from `oracle-config.json`
+6. **Should it cover the whole subsystem or only named types and functions?**
+   - Answer: the imported type closure, imported symbols required by target layers L0 through L2, and the three god objects listed below
+7. **Which backend and model should translate this sub-campaign?**
+   - Answer: ask the user, showing available backends and models
 
-# Workload
+# Campaign execution questions
 
-- batching: customize
-- max-types: `1`
-- max-syms: default
-- max-loc: default
-- parallel-max: orchestrator-selected
+8. **Use default workload settings, or customize them?**
+   - Answer: defaults except `max-types: 1`; parallelism is orchestrator-selected
+9. **Do you want agentic review? At which milestones and with which model?**
+   - Answer: no
+10. **Run autonomously or pause after each sub-campaign?**
+    - Answer: autonomous after the campaign parameters are approved
+11. **Run the optional agentic UB pass? If so, with which model?**
+    - Answer: no
 
-# Agentic review
+# Benchmark recording questions
 
-- checkpoints: none
-
-# Execution
-
-- mode: autonomous after the campaign parameters are approved
-
-# UB audit
-
-- run: no
-- model: not applicable
-
-# Benchmark metadata
-
-- orchestrator-backend: ask the user, showing available options
-- orchestrator-model: ask the user, showing available options
-- billing: `subscription`
-- setup-approval: not required; Phase 1 is pre-approved
-- results-path: `/work/wrappers-results.md`
-- results-template: standard
+12. **Which backend and model run the orchestrator?**
+    - Answer: ask the user, showing available backends and models
+13. **Which billing mode should agentic stages use?**
+    - Answer: `subscription`
+14. **Has setup already been approved?**
+    - Answer: yes; Phase 1 is pre-approved
+15. **Where and in what format should results be recorded?**
+    - Answer: `/work/wrappers-results.md`, standard template
 
 # Setup notes
 

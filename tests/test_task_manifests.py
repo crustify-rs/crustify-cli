@@ -12,11 +12,10 @@ class TaskManifestTests(unittest.TestCase):
         self.assertTrue(tasks)
 
         headings = (
-            "# Campaign", "# Sub-campaigns", "# Workload",
-            "# Agentic review", "# Execution", "# UB audit",
-            "# Benchmark metadata",
+            "# Campaign questions", "# Sub-campaign questions",
+            "# Campaign execution questions",
+            "# Benchmark recording questions",
         )
-        fields = ("repository", "revision", "objective")
         banned = ("wave-planning", "campaign-surface", "campaign.json")
 
         for task in tasks:
@@ -24,21 +23,26 @@ class TaskManifestTests(unittest.TestCase):
                 text = task.read_text()
                 for heading in headings:
                     self.assertIn(heading, text)
-                for field in fields:
-                    self.assertIn(f"- {field}:", text)
                 for stale in banned:
                     self.assertNotIn(stale, text)
 
                 sub_campaigns = len(re.findall(r"^## `", text, re.MULTILINE))
                 self.assertGreater(sub_campaigns, 0)
-                self.assertEqual(text.count("- translator-backend:"),
-                                 sub_campaigns)
-                self.assertEqual(text.count("- translator-model:"),
-                                 sub_campaigns)
-
-                ub = text.split("# UB audit", 1)[1].split("\n# ", 1)[0]
-                self.assertIn("- run:", ub)
-                self.assertIn("- model:", ub)
+                for number in (1, 2, 3, 8, 9, 10, 11, 12, 13, 14, 15):
+                    self.assertRegex(text, rf"(?m)^{number}\. \*\*")
+                for number in (4, 5, 6, 7):
+                    self.assertEqual(
+                        len(re.findall(rf"(?m)^{number}\. \*\*", text)),
+                        sub_campaigns,
+                    )
+                self.assertEqual(text.count("- Answer:"),
+                                 11 + 4 * sub_campaigns)
+                self.assertEqual(
+                    text.count("Which backend and model should translate"),
+                    sub_campaigns,
+                )
+                self.assertIn("agentic UB pass", text)
+                self.assertIn("which model", text.lower())
 
 
 if __name__ == "__main__":
