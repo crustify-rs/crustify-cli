@@ -90,7 +90,3 @@ Each item has this shape:
 Every reference in `deps`, `fallback`, and `back_fill` is
 `{"name": "...", "defined_in": "..."}`. `field_anchors` occurs on batched
 items and lists the field accessors assigned to that type batch.
-
-The CLI also reads version 1 documents during migration. Version 1 called the
-top-level `steps` array `waves`; it is normalized at the input boundary and does
-not affect execution semantics.

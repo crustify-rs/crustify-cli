@@ -60,7 +60,7 @@ class WaveDryRunParityTests(unittest.TestCase):
         self.assertEqual(output.getvalue(),
                          (fixtures / "scheduler-dry-run.txt").read_text())
 
-    def test_v1_campaign_document_normalizes_to_steps(self) -> None:
+    def test_v1_campaign_document_is_rejected(self) -> None:
         old = {
             "schema_version": 1,
             "oracle_target": ".",
@@ -73,8 +73,28 @@ class WaveDryRunParityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "old-campaign.json"
             path.write_text(json.dumps(old))
-            normalized = load(path)
-        self.assertEqual(normalized["steps"], old["waves"])
+            with self.assertRaisesRegex(
+                    SystemExit, "unsupported wave document schema"):
+                load(path)
+
+    def test_v2_wave_document_loads_without_rewriting(self) -> None:
+        current = {
+            "schema_version": 2,
+            "oracle_target": ".",
+            "summary": {"unit_count": 0, "layer_count": 1,
+                        "batch_count": 1},
+            "plan_items": [],
+            "dependency_nodes": [],
+            "steps": [{
+                "layers": [0], "unit_count": 0,
+                "batches": [{"kind": "symbol", "items": []}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "wave.json"
+            path.write_text(json.dumps(current))
+            loaded = load(path)
+        self.assertEqual(loaded, current)
 
 
 if __name__ == "__main__":
