@@ -36,6 +36,20 @@ class OrchestratorPromptTests(unittest.TestCase):
                 capture_output=True,
                 env={**os.environ, "PYTHONPATH": str(source / "src")},
             )
+            task = root / "TASK.md"
+            task.write_text(
+                "# Campaign questions\n\n"
+                "1. **Which repository?**\n"
+                "   - Answer: https://example.test/project.git\n"
+            )
+            with_task = subprocess.run(
+                [sys.executable, "-m", "crustify.orchestrator_prompt",
+                 oracle, audit, task],
+                check=True,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "PYTHONPATH": str(source / "src")},
+            )
 
         prompt = result.stdout
         self.assertIn("crustify-orchestrator", prompt)
@@ -59,6 +73,11 @@ class OrchestratorPromptTests(unittest.TestCase):
         self.assertNotIn("- oracle —", prompt)
         self.assertNotIn("<!-- CONVENTIONS_PATH -->", prompt)
         self.assertNotIn("<!-- SKILLS -->", prompt)
+
+        task_prompt = with_task.stdout
+        self.assertIn("## Pre-filled campaign task", task_prompt)
+        self.assertIn("Treat completed answers as campaign input", task_prompt)
+        self.assertIn("https://example.test/project.git", task_prompt)
 
 
 if __name__ == "__main__":

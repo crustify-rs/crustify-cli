@@ -1,5 +1,8 @@
 ---
 
+Fill in as many answers as you want before starting the orchestrator. It will
+ask only for campaign decisions that remain unresolved.
+
 # Campaign questions
 
 1. **Which repository and revision should this campaign use?**

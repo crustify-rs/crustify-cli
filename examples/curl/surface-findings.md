@@ -218,7 +218,7 @@ libcurl's option-surface scale.
 Type and callback units ≈ 18 structs + 35 enums + 30 callbacks + 7 handles ≈
 **90**. Symbols **92**.
 
-At the libgit2 rates in `bench/libgit2/wrappers-results-opus5.md` — `$8.16` per
+At the libgit2 rates in `examples/libgit2/wrappers-results-opus5.md` — `$8.16` per
 type, `$0.56` per symbol — that is roughly **`$750` + `$55`**. It should run
 cheaper per unit than libgit2: the wrap DAG is shallow because almost
 everything behind the API is opaque, so there are no god-object waves.

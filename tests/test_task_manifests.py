@@ -6,9 +6,9 @@ from pathlib import Path
 
 
 class TaskManifestTests(unittest.TestCase):
-    def test_benchmark_tasks_follow_campaign_intake_schema(self) -> None:
+    def test_example_tasks_follow_campaign_intake_schema(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        tasks = sorted((root / "bench").rglob("TASK.md"))
+        tasks = sorted((root / "examples").rglob("TASK.md"))
         self.assertTrue(tasks)
 
         headings = (

@@ -1,5 +1,7 @@
 # crustify — `<target repo> / <target>`
 
+Copy this template into the campaign checkout, then fill it as work lands.
+
 ## Campaign
 
 - **target repo** — `<repo>` @ `<commit>`
