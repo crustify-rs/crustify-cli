@@ -87,6 +87,13 @@ in Notes.
 
 ## Overview
 
+- **Rust LoC** — `<n>`
+- **C LoC** — `<n>`
+- **ported types** — `<n>`
+- **ported symbols** — `<n>`
+- **wrapped types** — `<n>`
+- **wrapped symbols** — `<n>`
+
 Implementation `<provider>/<model>` via `<backend>`; review
 `<provider>/<model>` via `<backend>`. Each row names the model that produced
 it.
@@ -245,6 +252,20 @@ crustify-cli or ffibox along the way belongs in that repo's history, not here.
 > was superseded and why; what each wave's diff actually contained beyond its
 > row counts; where a metric moved and what moved it; what the judge found and
 > whether it held. Everything else stays in the tables.
+
+State where the two LoC figures come from. `Rust LoC` is every authored `.rs`
+line under `crustify/rust`, excluding anything generated into `target/`; say
+how much of it is `-sys` stubs. `C LoC` is the summed body LoC the oracle
+recorded for the unique scheduled units — the C actually translated, not the
+surface it was drawn from — so give the defining files' and the whole target's
+totals beside it for scale, and say plainly that the ratio is not like-for-like
+because the Rust carries tests, `// SAFETY:` justifications, `ffi_export`
+gateways and scaffolding with no C counterpart.
+
+The four unit counts are de-duplicated over ENTITIES, not scheduled units: an
+entity appears once, under the last objective it ran, so a type wrapped and
+later ported counts as ported and never in both. Name the entities that took
+both paths. Callbacks count with symbols.
 
 Some of it is structural and belongs here every time: that a review pass is a
 sub-campaign of its own because the oracle re-batches the units it judges, so
