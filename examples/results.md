@@ -40,6 +40,33 @@ self-review, and any disagreement is what makes the pass informative.
 `rv`-prefixed columns below carry the review pass; the unprefixed ones remain
 the campaign's.
 
+## UB pass
+
+`crustify-audit ub`, an agentic hunt for undefined behaviour reachable from the
+crate's SAFE APIs. Optional, off by default, and outside the campaign's
+deterministic `crustify-audit unsafe` gate: run it only with the user's
+explicit approval. Leave this section as `not run` when it was not approved.
+
+The agent owns both the evidence and the repair. It branches in the target
+repository, implements focused regression tests, reruns the reproduction, and
+commits WITHOUT merging. The orchestrator inspects the diff, independently
+reruns the build, test and reproduction gates, and merges only when they are
+green and the change is confined to the confirmed finding.
+
+- **agent backend** — `<codex | claude>`
+- **model** — `<provider>/<model>`
+- **`--billing`** — `<api | subscription>`
+- **`--timeout`** — `<n>` min — a wall BUDGET, not a kill switch: agents are
+  spawned one after another until it is reached and each finishes on its own,
+  so the run overshoots by however long the last one takes. `0` runs exactly
+  one agent
+- **subject** — `<sub-campaign>` at `<sha>`
+- **agents** — `<n>`, `<n>h<n>m<n>s` wall, `$<n>`
+- **advisories** — `<n>` at `crustify/audit/advisories/`
+- **patch** — `<branch>` at `<sha>`; `<merged | left unpromoted — reason>`
+
+`ub`-prefixed columns carry this pass.
+
 ## Legend
 
 - `DAG layer` — the unit's own wrap DAG layer
@@ -70,6 +97,8 @@ the campaign's.
 - `↖ batched` — shares the row above's agent; one usage record covers both
 - `rv $` / `rv wall` / `rv loc` — the REVIEW agent's own cost, elapsed time, and
   net `.rs` line delta (`+ins/-del`) of its landing commit
+- `ub $` / `ub wall` — the UB pass's cost and elapsed time over that
+  sub-campaign; `—` where the optional pass did not run
 - `verdict` — what the judge concluded: `held` = analysis and code confirmed as
   emitted, `fixed` = a defect in the emitted Rust corrected, `record` = an
   ownership finding resubmitted through the oracle. Several may apply
@@ -77,6 +106,24 @@ the campaign's.
   cost with every batch spawned at once — and the parenthetical is the
   serial-sum multiple. A Σ row sums the columns it can and carries the same
   longest-agent reading for `wall`
+
+## Overview
+
+One row per sub-campaign, in the order they ran, plus a row for the
+orchestrator's own supervision cost. `ub` columns stay `—` unless the optional
+agentic UB pass ran over that sub-campaign; it is off by default and needs
+explicit approval.
+
+| sub-campaign | objective | nr types | nr symbols | session wall | total | $/type | $/sym | rv wall | rv total | rv $/type | rv $/sym | ub wall | ub $ |
+|---|---|---:|---:|---|---:|---:|---:|---|---:|---:|---:|---|---:|
+| `<waves>-<name>` | raw lifetime | `0` | `<n>` | `<n>m<n>s` | `$<n>` (`<model>`) | — | `$<n>` | `<n>m<n>s` | `$<n>` (`<model>`) | — | `$<n>` | — | — |
+| `<waves>-<name>` | wrap | `<n>` | `<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | `<n>m<n>s` | `$<n>` (`<model>`) |
+| `<waves>-<name>` | port | `<n>` | `<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | — | — |
+| orchestrator | orchestration | `<n>` | `<n>` | — | `$<n>`+ (`<model>`) | — | — | — | — | — | — | — | — |
+| **Σ recorded agents** | | **`<n>`** | **`<n>`** | | **`$<n>`** | **`$<n>`** | **`$<n>`** | | **`$<n>`** | **`$<n>`** | **`$<n>`** | | **`$<n>`** |
+
+The orchestrator row carries `+` because its own session is still running when
+the table is written; record the figure at hand-off and say so.
 
 ## Raw lifetime discovery
 

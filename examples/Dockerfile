@@ -24,13 +24,18 @@
 #   /work              Named volume, the only thing that survives `--rm`:
 #                      target clone, CodeQL database, emitted Rust tree,
 #                      session branches, per-agent logs. Drop it and the run
-#                      is throwaway. wrappers-results.md is seeded here once.
+#                      is throwaway.
 #
 # THE CAMPAIGN IS NAMED: CRUSTIFY_CAMPAIGN picks a directory under the
 # checkout's examples/, and its TASK.md arrives through the mount above. Edit
 # that file on the host and the next run picks it up. Naming a campaign that
 # does not exist exits 2 with the path it looked for. examples/ is tracked, so a
 # name resolves from the mounted crustify-cli checkout.
+#
+# The results template rides the same mount: the orchestrator reads
+# examples/results.md from the checkout and writes the filled table to the path
+# the campaign task names. Nothing is baked into the image or seeded into
+# /work, so editing the template on the host changes the next run.
 #
 # A task living outside the checkout mounts at /campaign, and wins when
 # present.
@@ -114,10 +119,6 @@ RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
 #    mount; the entrypoint uses mounted oracle/audit/ffibox trees when present
 #    and clones only the missing ones. It then installs the Python projects
 #    editable and installs the oracle's CodeQL pack before rendering the prompt.
-
-# The results table. Baked at /opt, seeded into /work by the entrypoint,
-# filled in place by the campaign.
-COPY examples/wrappers-results.md /opt/wrappers-results.md
 
 # Absolute paths for a target's cli-config.json, which is machine-local and
 # cannot come from any clone. The orchestrator playbook's "Bootstrap
@@ -203,10 +204,6 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       '    crustify-orchestrator-prompt /opt/crustify-oracle /opt/crustify-audit -o /tmp/orchestrator.md' \
       'fi' \
       'prompt=/tmp/orchestrator.md' \
-      '# Seeded, never overwritten: a resumed run keeps the table it filled.' \
-      'if [ ! -f /work/wrappers-results.md ]; then' \
-      '    cp /opt/wrappers-results.md /work/wrappers-results.md' \
-      'fi' \
       'text="$(cat "$prompt")"' \
       'skip=--dangerously-skip-permissions' \
       'bypass=--dangerously-bypass-approvals-and-sandbox' \

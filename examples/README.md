@@ -5,7 +5,7 @@ plus whatever Phase 1 artifacts are authored ahead of time.
 
 Copy [`TASK.md`](TASK.md) to start a campaign request. It is the canonical
 user-facing template; campaign directories contain filled instances. Campaign
-reports use [`wrappers-results.md`](wrappers-results.md).
+reports use [`results.md`](results.md).
 
 `Dockerfile` bootstraps the orchestrator that runs one.
 
@@ -61,7 +61,7 @@ Set with `--build-arg` on `docker build`.
 | `/work` | named volume | target clone, CodeQL database, emitted crates, session branches; survives `--rm` |
 | `/campaign` | read-only, optional | a `TASK.md` outside the checkout; wins over `CRUSTIFY_CAMPAIGN` |
 
-Results are tracked in `wrappers-results.md`. The Dockerfile header documents
+Results are tracked in `results.md`. The Dockerfile header documents
 what each flag buys. The three optional source mounts may be omitted from
 `docker run`; their `main` branches are then cloned into the ephemeral container.
 

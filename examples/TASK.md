@@ -50,7 +50,7 @@ A6. **Should I wait for your approval before starting UB audit passes?**
 11. **Which billing mode should agentic stages use?**
     - Answer: `<api | subscription>`
 12. **Where and in what format should results be recorded?**
-    - Answer: `wrappers-results.md | <custom-template>`
+    - Answer: `results.md | <custom-template>`|`results.md | <custom-template>`
 
 # Guidance
 

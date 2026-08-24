@@ -53,4 +53,4 @@ A6. **Should I wait for your approval before starting UB audit passes?**
 12. **Which billing mode should agentic stages use?**
     - Answer: `api`
 13. **Where and in what format should results be recorded?**
-    - Answer: `<repo-checkout>/crustify/wrappers-results.md`, standard template
+    - Answer: `<repo-checkout>/crustify/results.md`, standard template

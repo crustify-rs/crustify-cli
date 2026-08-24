@@ -53,7 +53,7 @@ A6. **Should I wait for your approval before starting UB audit passes?**
 12. **Which billing mode should agentic stages use?**
     - Answer: `subscription`
 13. **Where and in what format should results be recorded?**
-    - Answer: `/work/wrappers-results.md`, standard template
+    - Answer: `/work/results.md`, standard template
 
 # Setup notes
 

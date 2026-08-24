@@ -93,7 +93,7 @@ autonomy it has. It presents a consolidated campaign brief for approval before
 mutating the target repository.
 
 Campaign reports follow the
-[`examples/wrappers-results.md`](examples/wrappers-results.md) template.
+[`examples/results.md`](examples/results.md) template.
 
 For a reproducible container environment or a pre-filled campaign manifest,
 see [`examples/`](examples/README.md).
@@ -170,7 +170,7 @@ Newer per-campaign reports and reproducible inputs live under
 - [`docs/conventions.md`](docs/conventions.md): generated Rust conventions
 - [`docs/schemas/`](docs/schemas/): crate-placement and wave schemas
 - [`examples/TASK.md`](examples/TASK.md): optional pre-filled campaign questionnaire
-- [`examples/wrappers-results.md`](examples/wrappers-results.md): campaign results
+- [`examples/results.md`](examples/results.md): campaign results
   template
 
 ## Acknowledgements
