@@ -28,20 +28,31 @@
    - Answer: defaults except `max-types: 2`; parallelism is orchestrator-selected
 9. **Do you want agentic review? At which milestones and with which model?**
    - Answer: at campaign end over all translated output, using `gpt-5.6-sol`
-10. **Run autonomously or pause after each sub-campaign?**
-    - Answer: autonomous
-11. **Run the optional agentic UB pass? If so, with which model?**
+10. **Run the optional agentic UB pass? If so, with which model?**
     - Answer: no
+
+# Autonomy questions
+
+A1. **Should I run fully autonomously end to end?**
+    - Answer: yes
+A2. **If no, should I wait for your approval before starting the setup phase?**
+    - Answer: not applicable
+A3. **Should I wait for your approval before starting the translation phase?**
+    - Answer: no
+A4. **Should I wait for your approval in between sub-campaigns?**
+    - Answer: no
+A5. **Should I wait for your approval before starting review passes?**
+    - Answer: no
+A6. **Should I wait for your approval before starting UB audit passes?**
+    - Answer: not applicable
 
 # Benchmark recording questions
 
-12. **Which backend and model run the orchestrator?**
+11. **Which backend and model run the orchestrator?**
     - Answer: `codex`, `gpt-5.6-sol`
-13. **Which billing mode should agentic stages use?**
+12. **Which billing mode should agentic stages use?**
     - Answer: `api`
-14. **Has setup already been approved?**
-    - Answer: yes; Phase 1 is pre-approved
-15. **Where and in what format should results be recorded?**
+13. **Where and in what format should results be recorded?**
     - Answer: `<repo-checkout>/crustify/wrappers-results.md`, standard template, git tracked
 
 # Notes

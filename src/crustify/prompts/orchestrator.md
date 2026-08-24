@@ -41,9 +41,18 @@ the user has not already supplied:
    or customize them?”
 7. **Agentic review:** “Do you want agentic review? If so, at which campaign
    milestones, and which model should perform each review?”
-8. **Execution:** “After approval, should I run autonomously or pause after
-   each sub-campaign?”
-9. **UB audit:** “Should I run the optional UB pass after the campaign?”
+8. **UB audit:** “Should I run the optional UB pass after the campaign?”
+
+### Autonomy
+
+Ask each approval question separately:
+
+- “Should I run fully autonomously end to end?”
+- “If no, should I wait for your approval before starting the setup phase?”
+- “Should I wait for your approval before starting the translation phase?”
+- “Should I wait for your approval in between sub-campaigns?”
+- “Should I wait for your approval before starting review passes?”
+- “Should I wait for your approval before starting UB audit passes?”
 
 Do not ask the user to name, partition, or approve individual waves unless they
 explicitly request low-level scheduling control. Waves and steps are internal

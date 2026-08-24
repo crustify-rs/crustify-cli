@@ -50,20 +50,31 @@
    - Answer: defaults except `max-types: 1`; parallelism is orchestrator-selected
 9. **Do you want agentic review? At which milestones and with which model?**
    - Answer: no
-10. **Run autonomously or pause after each sub-campaign?**
-    - Answer: pause after each sub-campaign before promoting its session branch
-11. **Run the optional agentic UB pass? If so, with which model?**
+10. **Run the optional agentic UB pass? If so, with which model?**
     - Answer: no
+
+# Autonomy questions
+
+A1. **Should I run fully autonomously end to end?**
+    - Answer: no
+A2. **If no, should I wait for your approval before starting the setup phase?**
+    - Answer: no; Phase 1 is pre-approved
+A3. **Should I wait for your approval before starting the translation phase?**
+    - Answer: no
+A4. **Should I wait for your approval in between sub-campaigns?**
+    - Answer: yes, before promoting each session branch
+A5. **Should I wait for your approval before starting review passes?**
+    - Answer: not applicable
+A6. **Should I wait for your approval before starting UB audit passes?**
+    - Answer: not applicable
 
 # Benchmark recording questions
 
-12. **Which backend and model run the orchestrator?**
+11. **Which backend and model run the orchestrator?**
     - Answer: ask the user, showing available backends and models
-13. **Which billing mode should agentic stages use?**
+12. **Which billing mode should agentic stages use?**
     - Answer: `api`
-14. **Has setup already been approved?**
-    - Answer: yes; Phase 1 is pre-approved
-15. **Where and in what format should results be recorded?**
+13. **Where and in what format should results be recorded?**
     - Answer: `/work/wrappers-results.md`, standard template
 
 # Setup notes
