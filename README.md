@@ -1,6 +1,6 @@
 # Crustify
 
-Crustify is an LLM agent harness for incrementally migrating production C and C++
+Crustify is an agent harness for incrementally migrating production C and C++
 code to safe, idiomatic Rust. It can:
 
 - port an implementation to native Rust;
