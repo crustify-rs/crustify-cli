@@ -1,127 +1,144 @@
 ---
 
-The user has chosen the following configuration:
+# Campaign
 
-target repo: `https://gitlab.gnome.org/GNOME/libxml2.git`, tag v2.15.3 (commit c94eb0210183b9d7cb43f8e7fddc6be55843ef49)
-scope: WRAP campaign over the whole published API under `include/libxml/`.
-max-syms: default
-max-loc: default
-max-types: 1
-billing: API
-parallel-max: you pick an optimal value
-agent backend: ask user, showing available options
-model: ask user, showing available options
+- repository: `https://gitlab.gnome.org/GNOME/libxml2.git`
+- revision: `v2.15.3` (`c94eb0210183b9d7cb43f8e7fddc6be55843ef49`)
+- objective: `wrap`
 
-## Why this target
+# Sub-campaigns
 
-Of the four libraries measured in `safe-ffi-surface.md`, libxml2 has the widest
-gap between its C API and what the established Rust crate reaches safely:
-`libxml` 0.3.21 covers **113 of 1,649** exported functions. The uncovered part
-is not deprecated tail — it is whole subsystems with no safe path at all: the
-XML writer (`xmlwriter.h`, 81 fns), DTD validation (`valid.h`, 71), SAX2 (36),
-catalog resolution (37), and most of XPath's internals (`xpathInternals.h`, 117).
+## `public-api-types`
 
-The maintainers name the cause directly: *"providing a more or less complete
-wrapper would be too much work"*. That is the economics a closure-driven
-pipeline does not face, and it is what this campaign tests.
+- subsystem: public types and callbacks
+- implementation-paths: the libxml2 implementation selected during setup
+- api-headers: `include/libxml/`
+- coverage: whole published type and callback closure
+- named-items: derive from the API-only DAG in dependency order
+- translator-backend: ask the user, showing available options
+- translator-model: ask the user, showing available options
 
-Two corrections to `safe-ffi-surface.md`, which measured Debian's 2.9.14:
+## `xml-writer`
 
-- `xmlunicode.h` — listed there as the single largest gap (166 fns, 0% covered)
-  — is **fully deprecated and empty** at v2.15.3. It was dead weight in the
-  denominator; do not plan a wave around it.
-- The public surface is 1,416 `XMLPUBFUN` declarations at this tag, down from
-  1,669, almost entirely deprecation removal (`nanoftp` is gone). The
-  substantive gaps above are all intact and slightly larger.
+- subsystem: XML writer
+- implementation-paths: derive from the declaration inventory
+- api-headers: `include/libxml/xmlwriter.h`
+- coverage: whole subsystem
+- named-items: all API declarations from this header
+- translator-backend: ask the user, showing available options
+- translator-model: ask the user, showing available options
 
-One gap this campaign will NOT close: libxml2's global memory management is
-documented as not thread-safe. That is a property of the C library, so a
-generated wrapper inherits it. Do not claim otherwise in the results.
+## `dtd-validation`
 
-## Phase 1
+- subsystem: DTD validation
+- implementation-paths: derive from the declaration inventory
+- api-headers: `include/libxml/valid.h`
+- coverage: whole subsystem
+- named-items: all API declarations from this header
+- translator-backend: ask the user, showing available options
+- translator-model: ask the user, showing available options
 
-Run Phase 1 of the playbook end to end.
-The following artifacts are already authored, you can skip authoring them:
-    - `/campaign/{build, oracle-config}.json`
+## `xpath-internals`
 
-`/campaign/crates.json` is a **seeded shell**: crate identity, paths and link
-edges are settled, `modules` is empty. Fill it after `extract-ql`, when the
-entity inventory exists. For this API campaign the module tree mirrors
-`include/libxml/`. Its `_comment_modules`
-records a suggested grouping; verify it against the real inventory rather than
-trusting it.
+- subsystem: XPath extension and context API
+- implementation-paths: derive from the declaration inventory
+- api-headers: `include/libxml/xpathInternals.h`
+- coverage: whole subsystem
+- named-items: all API declarations from this header
+- translator-backend: ask the user, showing available options
+- translator-model: ask the user, showing available options
 
-`build.json` needs two fields filled by the run: `test_baseline` (step 4) and
-the `codeql_database` provenance block (step 5).
+## `catalog-resolution`
 
-Playbook toolchain is already installed.
+- subsystem: catalog resolution
+- implementation-paths: derive from the declaration inventory
+- api-headers: `include/libxml/catalog.h`
+- coverage: whole subsystem
+- named-items: all API declarations from this header
+- translator-backend: ask the user, showing available options
+- translator-model: ask the user, showing available options
 
-Before spending on Phase 2, report:
+## `sax2`
 
-```
-crustify-oracle /work/libxml2 . query types --api-only
-crustify-oracle /work/libxml2 . query types  --imported-only --out-of-tree
-crustify-oracle /work/libxml2 . query symbols --api-only
-crustify-oracle /work/libxml2 . query files --api-only
-```
+- subsystem: SAX2
+- implementation-paths: derive from the declaration inventory
+- api-headers: `include/libxml/SAX2.h`
+- coverage: whole subsystem
+- named-items: all API declarations from this header
+- translator-backend: ask the user, showing available options
+- translator-model: ask the user, showing available options
 
-`--out-of-tree` is the permanent FFI floor (system headers reached through the
-API); the complement is libxml2's own surface. libxml2 vendors nothing, so the
-out-of-tree share should be small — a large one means the scope is wrong.
+## `public-api-remainder`
 
-`--targeted-only` reports the library named by `impl_files` and `api_headers`;
-`--api-only` reports the published surface to schedule for wrapping.
+- subsystem: remaining published API
+- implementation-paths: the libxml2 implementation selected during setup
+- api-headers: `include/libxml/`
+- coverage: everything not completed by earlier sub-campaigns
+- named-items: derive from the remaining API-only DAG
+- translator-backend: ask the user, showing available options
+- translator-model: ask the user, showing available options
 
-## Phase 2
+# Workload
 
-Every wave is `--objective wrap`; there is no port stage. Report the plan from
-`--dry-run` and wait for approval before spending on any of them.
+- batching: customize
+- max-types: `1`
+- max-syms: default
+- max-loc: default
+- parallel-max: orchestrator-selected
 
-**1. The type closure.** Every import type and callback, bottom-up by DAG
-layer:
+# Agentic review
 
-```
-crustify-oracle /work/libxml2 . query dag --layer <L> --api-only \
-    --api-headers-only
-```
+- checkpoints: none
 
-One layer at a time, lowest first. Write each wave with `schedule --name ...
---api-headers-only`, then pass its `campaign.json` to `crustify-cli translate`.
-libxml2 defines most of its
-tree structs publicly (`xmlNode`, `xmlDoc`, `xmlAttr`), so expect a much higher
-share of full-layout value types than OpenSSL's mostly-opaque surface — a
-struct whose definition is visible in an anchor header gets its fields walked
-in full and needs real accessors, not an opaque handle.
+# Execution
 
-**2. The uncovered subsystems, largest gap first.** These are the campaign's
-actual deliverable — each is a block the hand-written crate leaves at 0%:
+- mode: pause after each sub-campaign; never promote a session branch
 
-```
-xmlwriter.h        81 fns    no safe XML writer exists today
-valid.h            71 fns    no safe DTD validation
-xpathInternals.h  117 fns    XPath extension/context API
-catalog.h          37 fns
-SAX2.h             36 fns
-```
+# UB audit
 
-Select with `schedule --file include/libxml/<header>.h --api-headers-only`, one
-subsystem per wave.
+- run: no
+- model: not applicable
 
-**3. The remainder.** Whatever the closure has not reached, by DAG layer.
+# Benchmark metadata
 
-## Recording
+- orchestrator-backend: ask the user, showing available options
+- orchestrator-model: ask the user, showing available options
+- billing: `api`
+- setup-approval: not required; Phase 1 is pre-approved
+- results-path: `/work/wrappers-results.md`
+- results-template: standard
 
-Record results in /work/wrappers-results.md.
+# Why this target
 
-After each wave: `crustify-log-cost` over the per-agent `<stage>.usage.json`
-for cost, the session branch diff for what landed, and
-`crustify-audit <repo> unsafe --name <wave names...> --json` for the unsafe and
-raw-pointer surface. Cost comes from token counts, never from
-provider-reported dollars.
+The historical safe-FFI measurement found that `libxml` 0.3.21 safely covered
+113 of 1,649 exported functions. The uncovered surface included the XML writer
+(81 functions), DTD validation (71), XPath internals (117), catalog resolution
+(37), and SAX2 (36). At v2.15.3, `xmlunicode.h` is fully deprecated and empty;
+do not treat it as a sub-campaign. The current tag has 1,416 `XMLPUBFUN`
+declarations after deprecation removal.
 
-Report coverage the same way `safe-ffi-surface.md` measured it — safe functions
-in CALL position, doc comments stripped — so the result is comparable to the
-113/1,649 baseline rather than to a differently-counted number.
+Libxml2's global memory management is documented as not thread-safe. Generated
+wrappers inherit that C-library property; do not claim otherwise.
 
-Do not promote a session branch. Landing is a deliberate act and this run
-ends with the branches left for review.
+# Setup notes
+
+Run Phase 1 end to end. The pre-authored `build.json` and `oracle-config.json`
+may be copied from `/campaign/`. Its `crates.json` is a seeded shell: fill its
+module inventory after `extract-ql`, mirroring `include/libxml/`, and verify the
+suggested grouping against the real inventory. Populate `build.json`'s
+`test_baseline` and CodeQL provenance fields during setup. The toolchain is
+already installed.
+
+Before translation, report the API-only types, symbols and files and the
+out-of-tree imported type floor. A large out-of-tree share indicates a scope
+error because libxml2 vendors no dependencies.
+
+# Selection and recording notes
+
+Execute the sub-campaigns in their listed order. The orchestrator owns internal
+wave construction and reports each dry-run plan before spending.
+
+Record coverage using safe functions in call position with documentation
+comments stripped, so it remains comparable to the 113/1,649 baseline. After
+each sub-campaign, record token-derived cost, the session-branch diff, and the
+deterministic unsafe/raw-pointer scan over the selected names.
