@@ -156,12 +156,15 @@ bottom-up by DAG layer, then the symbols over them.
 
 ### Types and callbacks
 
-| DAG layer | unit | kind | fields | target fields | target ptr | wrapped fields | newtypes | $ | wall | loc | rv $ | rv wall | rv loc | verdict |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `<N>` | `<tag>` | struct | `<n>` | `<n>` | `<n>` | `<n>` | `<n>` | `$<n>` | `<n>m<n>s` | `<n>` | `$<n>` | `<n>m<n>s` | `+<n>/-<n>` | held |
-| `<N>` | `<tag>` | enum | `<n>` | — | — | — | `<n>` | ↖ batched | ↖ batched | ↖ batched | ↖ batched | ↖ batched | ↖ batched | held · fixed |
-| `<N>` | `<tag>` | callback | — | — | — | — | `<n>` | `$<n>` | `<n>m<n>s` | `<n>` | `$<n>` | `<n>m<n>s` | `+<n>/-<n>` | record · fixed |
-| **Σ `<count>`** | | | **`<n>`** | **`<n>`** | **`<n>`** | **`<n>`** | **`<n>`** | **`$<n>`** | | **`<n>`** | **`$<n>`** | | **`+<n>/-<n>`** | **`<n>`/`<n>` reviewed** |
+The review pass has its own rows in `Batches — review types`; this table links
+to them by batch id rather than restating their cost, wall and line delta.
+
+| DAG layer | unit | kind | fields | target fields | target ptr | wrapped fields | newtypes | $ | wall | loc | rv batch | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `<N>` | `<tag>` | struct | `<n>` | `<n>` | `<n>` | `<n>` | `<n>` | `$<n>` | `<n>m<n>s` | `<n>` | `<batch>` | held |
+| `<N>` | `<tag>` | enum | `<n>` | — | — | — | `<n>` | ↖ batched | ↖ batched | ↖ batched | `<batch>` | held · fixed |
+| `<N>` | `<tag>` | callback | — | — | — | — | `<n>` | `$<n>` | `<n>m<n>s` | `<n>` | `<batch>` | record · fixed |
+| **Σ `<count>`** | | | **`<n>`** | **`<n>`** | **`<n>`** | **`<n>`** | **`<n>`** | **`$<n>`** | | **`<n>`** | **`<n>` batches** | **`<n>`/`<n>` reviewed** |
 
 ### Batches — types
 
@@ -175,6 +178,20 @@ review batches and one review batch can span several wrap layers.
 | `<N>` | `<n>` | `<n>` | `$<n>` | `<n>m<n>s` | **`<n>m<n>s`** | `<n>h<n>m` (`<n>`x) | `$<n>` | `$<n>` | `<batch>` |
 | `<N>` | `<n>` | `<n>` | `$<n>` | `<n>m<n>s` | **`<n>m<n>s`** | `<n>h<n>m` (`<n>`x) | `$<n>` | `$<n>` | `<batch>`, `<batch>` |
 | **Σ** | **`<n>`** | **`<n>`** | **`$<n>`** | — | **`<n>h<n>m<n>s`** | **`<n>h<n>m`** (`<n>`x) | **`$<n>`** | **`$<n>`** | **`<n>` batches** |
+
+### Batches — review types
+
+One agent per judged batch. The review pass is scheduled and batched on its
+own, so these layers and batches do not line up with `Batches — types` above;
+read the two side by side rather than row for row. `rv loc` is the net `.rs`
+delta of the landing commit, and a review that confirms without changing code
+reads `+0/-0`.
+
+| session | batch | units | rv loc | rv $ | rv wall | rv $/unit | judged |
+|---|---|---|---|---|---|---|---|
+| `<session>` | `<batch>` | `<n>` types | `+<n>/-<n>` | `$<n>` | `<n>m<n>s` | `$<n>` | `<n>` held · `<n>` fixed |
+| **Σ** | **`<n>` agents** | **`<n>` types** | **`+<n>/-<n>`** | **`$<n>`** | **`<n>m<n>s`** (longest; `<n>h<n>m<n>s` serial, `<n>`x) | **`$<n>`** | **`<n>` held · `<n>` fixed** |
+
 
 ### Symbols
 
@@ -192,19 +209,6 @@ review batches and one review batch can span several wrap layers.
 | `<N>` | `<n>` | `<n>` | `$<n>` | `<n>m<n>s` (`<n>`x) | `$<n>` | `$<n>` | `<batch>` |
 | `<N>` | `<n>` | `<n>` | `$<n>` | `<n>m<n>s` (`<n>`x) | `$<n>` | `$<n>` | `<batch>`, `<batch>` |
 | **Σ** | **`<n>`** | **`<n>`** | **`$<n>`** | **`<n>h<n>m<n>s`** (`<n>`x, session wall) | **`$<n>`** | **`$<n>`** | **`<n>` batches** |
-
-### Batches — review types
-
-One agent per judged batch. The review pass is scheduled and batched on its
-own, so these layers and batches do not line up with `Batches — types` above;
-read the two side by side rather than row for row. `rv loc` is the net `.rs`
-delta of the landing commit, and a review that confirms without changing code
-reads `+0/-0`.
-
-| session | batch | units | rv loc | rv $ | rv wall | rv $/unit | judged |
-|---|---|---|---|---|---|---|---|
-| `<session>` | `<batch>` | `<n>` types | `+<n>/-<n>` | `$<n>` | `<n>m<n>s` | `$<n>` | `<n>` held · `<n>` fixed |
-| **Σ** | **`<n>` agents** | **`<n>` types** | **`+<n>/-<n>`** | **`$<n>`** | **`<n>m<n>s`** (longest; `<n>h<n>m<n>s` serial, `<n>`x) | **`$<n>`** | **`<n>` held · `<n>` fixed** |
 
 ### Batches — review symbols
 
