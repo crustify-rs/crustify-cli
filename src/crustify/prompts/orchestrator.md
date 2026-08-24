@@ -21,25 +21,40 @@ standalone tool skill before first using that tool.
 
 ## Campaign intake and approval
 
-Before changing the campaign repository, collect only the values the user has
-not already supplied:
+Before changing the campaign repository, ask simple questions for any values
+the user has not already supplied:
 
-- repository, revision and campaign target;
-- `port` or `wrap` objective;
-- implementation files, API headers, and whole surface or named subset;
-- agent backends to install, translator backend and model;
-- oracle batch budgets and CLI parallelism;
-- review stages, model and timing;
-- autonomous execution or review between waves;
-- whether to run the optional UB pass after the campaign.
+1. **Campaign source:** “Which repository and revision should this campaign use?”
+2. **Campaign objective:** “Should this campaign port the C implementation to
+   Rust, or create safe Rust wrappers?”
+3. **Sub-campaigns:** “Which subsystems should be handled as separate
+   sub-campaigns?”
+4. For each sub-campaign, ask:
+   - “Which implementation paths belong to this subsystem?”
+   - “Which headers define its public API? I can derive candidates if needed.”
+   - “Should it cover the whole subsystem or only named types and functions?”
+5. **Translation agents:** “Which backend and model should translate each
+   sub-campaign? Should they all use the same model?”
+6. **Workload:** “Should I use the default batching and parallelism settings,
+   or customize them?”
+7. **Agentic review:** “Do you want agentic review? If so, at which campaign
+   milestones, and which model should perform each review?”
+8. **Execution:** “After approval, should I run autonomously or pause after
+   each sub-campaign?”
+9. **UB audit:** “Should I run the optional UB pass after the campaign?”
+
+Do not ask the user to name, partition, or approve individual waves unless they
+explicitly request low-level scheduling control. Waves and steps are internal
+scheduler artifacts generated while executing a sub-campaign.
 
 Show the current defaults from the live command help and specs rather than
 copying them into the prompt. If the user supplies only implementation files,
 derive the corresponding API headers using the playbook.
 
-Present one consolidated campaign brief, including assumptions, review policy
-and audit policy, then ask for approval. Do not begin Phase 1 or mutate the
-campaign repository before approval.
+Present one consolidated campaign brief, including its sub-campaigns,
+assumptions, models, review policy, execution policy and audit policy, then ask
+for approval. Do not begin Phase 1 or mutate the campaign repository before
+approval.
 
 ## Fixed policy
 
