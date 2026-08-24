@@ -1,6 +1,6 @@
 """TranslateAgent — the merged wrap-stage codegen agent (agent half).
 
-One agent for every batch recorded in ``campaign.json``:
+One agent for every batch recorded in a wave document:
 
   * a **type** batch (a struct / union / enum + a budget slice of its field
     accessors) — the type route in ``translator.md``, and
@@ -71,7 +71,7 @@ class TranslateAgent(CrustifyAgent):
         # syms batch:
         rs_out: str | None = None,
         syms: list[dict] | None = None,
-        # Lifetime-discovery mode, reached through a campaign the oracle wrote
+        # Lifetime-discovery mode, reached through a wave the oracle wrote
         # with `schedule --lifetime-for`: instead of a resolved worklist, the
         # agent is handed a SPEC and finds the lifecycle primitives itself.
         # Rides in `syms` as a mode marker so the prompt has one input to read.
@@ -152,9 +152,9 @@ class TranslateAgent(CrustifyAgent):
         """The per-agent log stem: ``<objective>-<kind>_<key>``, e.g.
         ``port-type_git_delta_index`` / ``wrap-symbol_access``.
 
-        Both halves are known HERE and only here: the objective is the wave's,
+        Both halves are known HERE and only here: the objective is the campaign's,
         but the kind is this batch's, and one invocation can carry both (a
-        campaign's wave batches types and symbols alike). So the wave-level
+        wave's steps can batch types and symbols alike). So the wave-level
         identity (`Stage.verb` -> session branch, worktree dirs) tags with the
         objective alone, and the full pair lands on the agent's own files —
         which is where it pays, since `crustify-log-cost` buckets by this

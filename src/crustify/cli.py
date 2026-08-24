@@ -33,7 +33,7 @@ def main() -> None:
     )
     parser.add_argument(
         "target",
-        help="Repo-relative oracle target id recorded in campaign.json "
+        help="Repo-relative oracle target id recorded in the wave document "
              "(e.g. ssl/statem). Use . for the repo root.",
     )
     parser.add_argument(
@@ -46,7 +46,7 @@ def main() -> None:
         "--no-file-log",
         action="store_true",
         default=False,
-        help="Disable per-agent log files under campaigns/<campaign>/logs/<session>/.",
+        help="Disable per-agent log files under campaigns/logs/<session>/.",
     )
     parser.add_argument(
         "--model",
@@ -81,8 +81,8 @@ def main() -> None:
         default=8,
         metavar="N",
         help="Maximum concurrent agents. 1 runs every batch serially; N>1 "
-             "runs up to N batches within a wave, with a full barrier between "
-             "waves. Default: 8.",
+             "runs up to N batches within a step, with a full barrier between "
+             "steps. Default: 8.",
     )
 
     sub = parser.add_subparsers(dest="command", required=True)
@@ -140,24 +140,24 @@ def main() -> None:
 
     # -- translate ---------------------------------------------------------
     _translate_blurb = (
-        "Execute an objective-neutral campaign.json in topological wave order. "
+        "Execute an objective-neutral wave document in topological step order. "
         "The oracle has already selected and batched every item; this command "
         "routes batches to translator agents, inserts scheduler-local TODOs, "
-        "and enforces the wave barriers. --parallel-max 1 is serial. --dry-run "
+        "and enforces the step barriers. --parallel-max 1 is serial. --dry-run "
         "prints the recorded plan.")
     wrap_p = sub.add_parser(
         "translate", help=_translate_blurb, description=_translate_blurb,
     )
     wrap_p.add_argument(
-        "campaign", type=Path,
-        help="Path to objective-neutral campaign.json produced by "
+        "wave", type=Path,
+        help="Path to an objective-neutral wave document produced by "
              "crustify-oracle schedule.")
     wrap_p.add_argument(
         "--objective", choices=("wrap", "port", "review"), default="wrap",
-        help="Objective handed unchanged to every agent in this campaign.")
+        help="Objective handed unchanged to every agent in this wave.")
     wrap_p.add_argument(
         "--dry-run", action="store_true",
-        help="Render the campaign's waves and batches without spawning agents.")
+        help="Render the wave's steps and batches without spawning agents.")
 
     args = parser.parse_args()
 
@@ -198,7 +198,7 @@ def main() -> None:
         _handle_crates(args, target)
 
     elif args.command == "translate":
-        _handle_wrap(args, target)
+        _handle_translate(args, target)
 
 
 
@@ -216,8 +216,8 @@ def _handle_crates(args: argparse.Namespace, target: Path) -> None:
         crates.validate_command(target)
 
 
-def _handle_wrap(args: argparse.Namespace, target: Path) -> None:
-    """Execute a precomputed campaign; no semantic scheduling occurs here."""
-    from crustify.campaign import execute
-    execute(target, args.campaign, objective=args.objective,
+def _handle_translate(args: argparse.Namespace, target: Path) -> None:
+    """Execute a precomputed wave; no semantic scheduling occurs here."""
+    from crustify.wave import execute
+    execute(target, args.wave, objective=args.objective,
             parallel_max=args.parallel_max, dry_run=args.dry_run)

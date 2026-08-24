@@ -19,10 +19,11 @@ Three artifact tiers decide where a file goes.
 |---|---|---|---|
 | repo | `<repo>/crustify/` | `build.json`, `crates.json`, `cli-config.json` | `rust/` |
 | oracle | `<repo>/crustify/oracle/` | `targets/<target>/oracle-config.json`, `ownership-store.json` | `codeql/{db,t1,t2}/`, `.cache/` |
-| campaign | `<repo>/crustify/campaigns/<campaign>/` | `campaign.json` | `logs/<session>/` |
+| campaign | `<repo>/crustify/campaigns/` | `<wave-name>.json` | `logs/<session>/` |
 
 Repo-tier describes the whole repository. Oracle targets describe C inventory;
-campaigns record schedulable waves. A repo can carry several of each.
+campaigns contain tracked wave plans and the shared execution log namespace. A
+repo can carry several oracle targets and many named waves.
 
 Every authored file has a commented example under `specs/` — except
 `oracle-config.json`, whose example lives in the standalone oracle checkout's
@@ -184,8 +185,8 @@ re-export set. Layout still follows the definition site:
 
 So `--transitive` over an opaque-exported type pulls the type and nothing else.
 
-`translate --objective` is the **verb** handed to one agent over one campaign,
-chosen per wave by the orchestrator. A target type in a port campaign might first
+`translate --objective` is the **verb** handed to every agent in the submitted
+wave, chosen per wave by the orchestrator. A target type in a port campaign might first
 be wrapped and then ported, which is what the flag exists for. 
 
 `out_of_scope.paths` refines what a directory entry expands to;
@@ -200,11 +201,11 @@ crustify-oracle <repo_root> <target> query files --imported-only
 ```
 
 After the user picked a target, create the campaign's base branch and
-logs dir:
+logs directory:
 
 ```bash
 git -C <repo> checkout -b crustify/<target>-<model>
-mkdir -p <repo>/crustify/campaigns/<campaign>/logs
+mkdir -p <repo>/crustify/campaigns/logs
 ```
 
 ### 7. Seed crate shells
@@ -254,28 +255,30 @@ branch from this baseline.
 
 ## Phase 2 — Translation
 
-A wave is one `campaign.json`. The oracle selects and batches it; the CLI only
-routes its batches to agents. Waves repeat bottom-up until the target is closed.
+A wave is one scheduler-produced JSON document. The oracle selects its workset
+and divides it into sequential steps; the CLI enforces each step barrier and
+routes that step's batches to agents. Waves repeat until the target is closed.
+See `docs/schemas/wave.md` for the producer/consumer contract.
 
 ### Prepare each wave
 
 Before `translate`, the orchestrator:
 
 1. runs `crustify-oracle schedule` with the selection and batch budgets, writing
-   `crustify/campaigns/<campaign>/campaign.json`;
+   `crustify/campaigns/<wave-name>.json`;
 2. runs imported campaigns for any unsatisfied dependencies;
-3. homes each campaign item in `crates.json`;
+3. homes each wave item in `crates.json`;
 4. creates its `.rs` files and connects them to the crate root;
 5. runs `crates validate` and compiles the affected crates;
-6. runs `translate <campaign.json> --dry-run`, then executes it.
+6. runs `translate <wave.json> --dry-run`, then executes it.
 
 ```bash
 crustify-oracle <repo_root> <target> schedule \
-  --output <repo>/crustify/campaigns/<campaign>/campaign.json \
+  --output <repo>/crustify/campaigns/<wave-name>.json \
   --name <items...> [--transitive] [--api-headers-only] \
   [--max-syms N] [--max-loc N] [--max-types N] [--min-fields N]
 crustify-cli --parallel-max N <repo_root> <target> translate \
-  <repo>/crustify/campaigns/<campaign>/campaign.json \
+  <repo>/crustify/campaigns/<wave-name>.json \
   --objective wrap --dry-run
 ```
 
@@ -303,9 +306,9 @@ When the user chooses to migrate only a subset of the targeted closure, the
 remaining targeted dependencies may run `wrap` and form the deliberate C/Rust
 boundary. This applies to symbols as well as types: a wrapped dependency keeps
 its C implementation and exposes a safe Rust surface to the selected ported
-items. Partition these into an earlier `wrap` campaign because one
-`campaign.json` has one objective; do not mix closure-only wrappers and
-selected port items in the same campaign. If the user chooses the whole
+items. Partition these into an earlier `wrap` wave because one submitted wave
+has one objective; do not mix closure-only wrappers and selected port items in
+the same wave. If the user chooses the whole
 targeted closure instead, targeted symbols continue to run `port` directly.
 
 Do not include completed items when authoring the next oracle schedule.
@@ -314,7 +317,7 @@ Do not include completed items when authoring the next oracle schedule.
 
 Regardless of the target set, the first translation waves have to be the raw lifetime
 discovery set, which will produce release/clone strategies for owned pointers that host
-type-erased and NUL-terminated objects. Generate campaigns with
+type-erased and NUL-terminated objects. Generate waves with
 `schedule --lifetime-for void` and then `schedule --lifetime-for string`. When resuming
 an interrupted campaign, skip if this stage has already been carried.
 

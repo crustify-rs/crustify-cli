@@ -1,4 +1,4 @@
-"""Translation-agent execution seams over a precomputed campaign."""
+"""Translation-agent execution seams over a precomputed wave."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -24,7 +24,7 @@ def batch_objective(_batch, objective: str, _scope_of=None) -> str:
 def _translate_emit(target: Path, layout, *, max_syms: int,
                     objective: str = "wrap", scope_of=None,
                     prompt_capabilities: tuple[str, ...] | None = None):
-    """Build the agent invocation for one campaign batch."""
+    """Build the agent invocation for one wave batch."""
     from crustify.agents.translate import TranslateAgent
     if prompt_capabilities is None:
         prompt_capabilities = TranslateAgent.configured_capabilities(layout)
@@ -61,7 +61,7 @@ def lifetime_objective(objective: str) -> str:
 
 def translate_lifetime_for(target: Path, spec: str, *, objective: str = "wrap",
                            dry_run: bool = False) -> None:
-    """Execute the single raw-lifetime item represented by a campaign."""
+    """Execute the single raw-lifetime item represented by a wave."""
     if spec not in LIFETIME_TIERS:
         raise SystemExit(
             f"translate raw-lifetime: expected {' or '.join(LIFETIME_TIERS)}, "
@@ -99,7 +99,7 @@ def translate_lifetime_for(target: Path, spec: str, *, objective: str = "wrap",
         emit_fn=lambda _batch: None, max_syms=1, emit_factory=factory,
         target=target, layout=layout,
     )
-    failures = schedule._isolated_wave([batch], stage, 1)
+    failures = schedule._isolated_step([batch], stage, 1)
     if failures:
         raise SystemExit(
             f"translate raw-lifetime {spec}: agent failed: {failures[0][1]}")

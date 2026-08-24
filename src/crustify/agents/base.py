@@ -129,8 +129,8 @@ class CrustifyAgent:
       - ``tier = "repo_root"`` — `<repo_root>/.crustify/<output>`. Used
         by agents whose artifact is project-wide and target-independent.
 
-    Agent logs always go to the *target* tier
-    (`<target>/.crustify/logs/<session>/`), regardless of ``tier``,
+    Agent logs always go to the campaign tier
+    (`crustify/campaigns/logs/<session>/`), regardless of ``tier``,
     because they're scoped to the invocation, not the repository.
     """
 
@@ -167,12 +167,12 @@ class CrustifyAgent:
         # Repo-relative target id (e.g. "ssl/statem", or "." for the repo
         # root) — the value the prompt passes as crustify's second positional.
         self.target_rel = self.layout.rel_target(self.target)
-        # Active campaign store (logs and invocation-local artifacts).
-        self.target_store = ArtifactStore(self.layout.target_dir(self.target))
+        # Campaign store (tracked wave plans, logs and invocation-local artifacts).
+        self.campaign_store = ArtifactStore(self.layout.campaigns)
         # Repo-root-tier store: crustify/ (analysis, build.json).
         self.root_store = ArtifactStore(self.layout.root)
         # Convenience alias for the tier this agent's output belongs to.
-        self.store = self.root_store if self.tier == "repo_root" else self.target_store
+        self.store = self.root_store if self.tier == "repo_root" else self.campaign_store
 
     def run(self) -> None:
         if self._is_done():
@@ -229,13 +229,13 @@ class CrustifyAgent:
     def _make_log(self) -> AgentLog:
         """Open this agent's output sinks (see :mod:`crustify.agentlog`).
 
-        Logs are always written under the *target* tier so they stay
-        co-located with the invocation that produced them.
+        Logs are always written under the campaign tier so every wave in the
+        orchestrator campaign shares one session namespace.
         """
         from crustify import config as crustify_config
 
         return open_agent_log(
-            self.target_store.root / "logs" / crustify_config.SESSION_ID,
+            self.campaign_store.root / "logs" / crustify_config.SESSION_ID,
             self._log_stem(),
         )
 

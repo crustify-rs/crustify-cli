@@ -165,7 +165,7 @@ def add_worktree(repo: Path, base_ref: str, slug: str) -> Path:
     return wt
 
 
-#: Gitignored, read-only-across-a-wave artifacts symlinked into each worktree.
+#: Derived, read-only-across-a-wave artifacts symlinked into each worktree.
 #: A TRACKED artifact must not be here: git checks it out from HEAD, so the
 #: worktree already holds its own copy, and sharing a written one would send
 #: every agent's writes into the same file. `ownership-store.json` is tracked
@@ -185,9 +185,9 @@ def link_shared(wt: Path, repo: Path) -> None:
     """Symlink the gitignored, read-only-across-a-wave crustify artifacts from
     the main checkout into the worktree, so the worktree is a *complete*
     functional crustify tree. Oracle extraction/cache data and campaign logs
-    resolve to the shared copy without being duplicated. Tracked
-    `oracle-config.json`, `campaign.json`, and ownership-store entries already
-    present in the worktree win over the recursive links.
+    resolve to the shared copy without being duplicated. Tracked oracle configs,
+    wave documents, and ownership-store entries already present in the worktree
+    win over the recursive links.
 
     `build.json` and `crates.json` are deliberately NOT here. Both are tracked
     (see `specs/gitignore`), so `git worktree add` checks each one out from HEAD
@@ -242,7 +242,7 @@ def _link_into(src: Path, dst: Path) -> None:
 
     The plain case is a whole shared dir that the worktree does not have. The
     recursive case exists because a shared dir may be PARTIALLY materialized by
-    the checkout: tracked oracle configs, ownership findings, and campaign plans
+    the checkout: tracked oracle configs, ownership findings, and wave plans
     coexist with gitignored extraction caches and logs. Existing tracked files
     win while missing derived children are linked.
 
