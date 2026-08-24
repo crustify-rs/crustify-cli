@@ -189,10 +189,14 @@ def link_shared(wt: Path, repo: Path) -> None:
     `oracle-config.json`, `campaign.json`, and ownership-store entries already
     present in the worktree win over the recursive links.
 
-    `build.json` is gitignored, so it reaches a worktree by NO other route. The
-    wrap/port agents only READ it (the build descriptor's `build_commands` +
-    feature wiring); it is written before any wave — so it satisfies the same
-    read-only-across-a-wave contract as `crates.json` below.
+    `build.json` and `crates.json` are deliberately NOT here. Both are tracked
+    (see `specs/gitignore`), so `git worktree add` checks each one out from HEAD
+    and the worktree already holds its own copy — which is the rule stated on
+    `_SHARED` above. They are still read-only across a wave: `build.json` is
+    written before any wave, and the orchestrator fully populates `crates.json`
+    for a wave's units before it starts, so agents only ever READ either one. A
+    genuine miss-fill therefore surfaces as a per-worktree edit that its landing
+    commit carries, not as a write racing into the shared main copy.
 
     ``.providers`` must be here for a subtle reason: the agent backends resolve
     the provider CLI's config home as ``Layout(repo_root).providers(cli)``, and an
@@ -202,21 +206,14 @@ def link_shared(wt: Path, repo: Path) -> None:
     against it with no error: a silent loss of provider settings, which is the
     worst available failure mode.
 
-    ``cli-config.json`` is here for the same reason as ``build.json``: it is
-    hand-authored, machine-local (absolute paths to the crustify and
-    ffibox / audit checkouts, and to their binaries), and therefore not committed
-    — so HEAD cannot carry it into a worktree. Without the symlink an agent's
-    ``Layout.repo_config`` resolves to a file that is not there, every skill
-    path fails to resolve, and the whole set silently disappears from its system
-    prompt as the literal "(no skills configured)" beside conventions.md.
-
-    ``crates.json`` joins the shared set on the **eager pre-seed** contract:
-    the orchestrator must fully populate the placement oracle for the wave's
-    units BEFORE the wave starts, so agents only ever READ it — no
-    mid-wave miss-fill, no per-worktree `cp`, no merge-back. A genuine miss
-    would write THROUGH the symlink into the shared main copy (a race); that is
-    the signal the pre-seed was incomplete, to be hardened with a `chmod 444`
-    fail-fast guard if it ever bites."""
+    ``cli-config.json`` is the one shared FILE, and it is here because it is the
+    inverse of the two above: hand-authored, machine-local (absolute paths to the
+    crustify, oracle, ffibox and audit checkouts, and to their binaries), and
+    therefore gitignored — so HEAD cannot carry it into a worktree. Without the
+    symlink an agent's ``Layout.repo_config`` resolves to a file that is not
+    there, every skill path fails to resolve, and the whole set silently
+    disappears from its system prompt as the literal "(no skills configured)"
+    beside conventions.md."""
     for d in _SHARED:
         src = repo / "crustify" / d
         dst = wt / "crustify" / d
@@ -229,9 +226,9 @@ def link_shared(wt: Path, repo: Path) -> None:
         # exactly the silent failure this docstring warns about, plus a worse
         # one: codex's session rollout lands in CODEX_HOME, so the run's cost
         # accounting is destroyed with the worktree ("no session rollout found;
-        # this run is unaccounted"). Only dirs are seeded — the shared FILES
-        # (crates.json / build.json / cli-config.json) must stay skipped when
-        # absent, since an empty stand-in for one of those is worse than none.
+        # this run is unaccounted"). Only dirs are seeded — the one shared FILE
+        # (cli-config.json) must stay skipped when absent, since an empty
+        # stand-in for it is worse than none.
         if not src.exists() and d in _SHARED_LAZY_DIRS:
             src.mkdir(parents=True, exist_ok=True)
         if src.exists():

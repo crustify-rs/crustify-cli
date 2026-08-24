@@ -71,10 +71,10 @@ class TranslateAgent(CrustifyAgent):
         # syms batch:
         rs_out: str | None = None,
         syms: list[dict] | None = None,
-        # Lifetime-discovery mode (`translate --lifetime-for`):
-        # instead of a resolved worklist, the agent is handed a SPEC and finds
-        # the lifecycle primitives itself. Rides in `syms` as a mode marker so
-        # the prompt has one input to read.
+        # Lifetime-discovery mode, reached through a campaign the oracle wrote
+        # with `schedule --lifetime-for`: instead of a resolved worklist, the
+        # agent is handed a SPEC and finds the lifecycle primitives itself.
+        # Rides in `syms` as a mode marker so the prompt has one input to read.
         lifetime_for: str | None = None,
         # What the agent is being asked to DO with this batch, handed straight
         # to the prompt as `{objective}`: "wrap" | "port" | "review". Lifetime
@@ -154,7 +154,7 @@ class TranslateAgent(CrustifyAgent):
 
         Both halves are known HERE and only here: the objective is the wave's,
         but the kind is this batch's, and one invocation can carry both (a
-        `--dag-layer` selects types and symbols alike). So the wave-level
+        campaign's wave batches types and symbols alike). So the wave-level
         identity (`Stage.verb` -> session branch, worktree dirs) tags with the
         objective alone, and the full pair lands on the agent's own files —
         which is where it pays, since `crustify-log-cost` buckets by this
