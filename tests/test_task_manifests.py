@@ -13,7 +13,7 @@ class TaskManifestTests(unittest.TestCase):
 
         headings = (
             "# Campaign questions", "# Campaign execution questions",
-            "# Benchmark recording questions",
+            "# Autonomy questions", "# Benchmark recording questions",
         )
         banned = ("wave-planning", "campaign-surface", "campaign.json")
 
@@ -28,7 +28,7 @@ class TaskManifestTests(unittest.TestCase):
                 sub_campaigns = len(re.findall(r"^## `", text, re.MULTILINE))
                 if sub_campaigns:
                     self.assertIn("# Sub-campaign questions", text)
-                for number in (1, 2, 3, 8, 9, 10, 11, 12, 13, 14, 15):
+                for number in (1, 2, 3, 8, 9, 10):
                     self.assertRegex(text, rf"(?m)^{number}\. \*\*")
                 question_three = re.search(
                     r"(?ms)^3\. \*\*(.*?)\*\*\n\s+- Answer:", text
@@ -44,8 +44,20 @@ class TaskManifestTests(unittest.TestCase):
                         len(re.findall(rf"(?m)^{number}\. \*\*", text)),
                         sub_campaigns,
                     )
-                self.assertEqual(text.count("- Answer:"),
-                                 11 + 4 * sub_campaigns)
+                autonomy_questions = (
+                    "Should I run fully autonomously end to end?",
+                    "If no, should I wait for your approval before starting the setup phase?",
+                    "Should I wait for your approval before starting the translation phase?",
+                    "Should I wait for your approval in between sub-campaigns?",
+                    "Should I wait for your approval before starting review passes?",
+                    "Should I wait for your approval before starting UB audit passes?",
+                )
+                for number, question in enumerate(autonomy_questions, 1):
+                    self.assertIn(f"A{number}. **{question}**", text)
+                question_count = len(re.findall(
+                    r"(?m)^(?:\d+|A\d+)\. \*\*", text
+                ))
+                self.assertEqual(text.count("- Answer:"), question_count)
                 self.assertEqual(
                     text.count("Which backend and model should translate"),
                     sub_campaigns,

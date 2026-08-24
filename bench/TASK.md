@@ -38,13 +38,24 @@ Copy this block once for every answer to question 3.
    which model should perform each review?**
    - Answer: `<none | milestone: model; ...>`
 
-10. **After approval, should the orchestrator run autonomously or pause after
-    each sub-campaign?**
-    - Answer: `<autonomous | pause after each sub-campaign>`
-
-11. **Should the campaign run the optional agentic UB pass? If so, which model
+10. **Should the campaign run the optional agentic UB pass? If so, which model
     should run it?**
     - Answer: `<no | yes with explicit approval, model>`
+
+# Autonomy questions
+
+A1. **Should I run fully autonomously end to end?**
+    - Answer: `<yes | no>`
+A2. **If no, should I wait for your approval before starting the setup phase?**
+    - Answer: `<yes | no | not applicable>`
+A3. **Should I wait for your approval before starting the translation phase?**
+    - Answer: `<yes | no>`
+A4. **Should I wait for your approval in between sub-campaigns?**
+    - Answer: `<yes | no | not applicable>`
+A5. **Should I wait for your approval before starting review passes?**
+    - Answer: `<yes | no | not applicable>`
+A6. **Should I wait for your approval before starting UB audit passes?**
+    - Answer: `<yes | no | not applicable>`
 
 # Benchmark recording questions
 
