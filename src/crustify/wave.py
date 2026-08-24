@@ -15,13 +15,8 @@ def load(path: Path) -> dict:
 
     if not isinstance(doc, dict):
         raise SystemExit("translate: wave document must be a JSON object")
-    version = doc.get("schema_version")
-    if version == 1 and isinstance(doc.get("waves"), list):
-        # Compatibility for plans produced before campaign/wave terminology was
-        # separated. Normalize once at the boundary; the executor only speaks
-        # in steps below this point.
-        doc = {**doc, "steps": doc["waves"]}
-    elif version != 2 or not isinstance(doc.get("steps"), list):
+    if (doc.get("schema_version") != 2
+            or not isinstance(doc.get("steps"), list)):
         raise SystemExit("translate: unsupported wave document schema")
 
     required = {
