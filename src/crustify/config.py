@@ -12,7 +12,7 @@ SESSION_ID: str = f"{_time.strftime('%Y-%m-%d_%H-%M-%S')}_{_secrets.token_hex(2)
 """Timestamp label shared by all agents in a single ``crustify`` run.
 
 Used to group per-session log files under
-``campaigns/logs/<SESSION_ID>/`` -- see :mod:`crustify.agentlog` for
+``campaigns/<target>/logs/<SESSION_ID>/`` -- see :mod:`crustify.agentlog` for
 what each agent writes there.
 
 The timestamp keeps sessions chronologically sortable; the trailing 4-hex
@@ -60,7 +60,7 @@ LOG_TO_CONSOLE: bool = True
 
 LOG_TO_FILE: bool = True
 """When ``False``, disable per-agent log files under
-``campaigns/logs/<SESSION_ID>/``."""
+``campaigns/<target>/logs/<SESSION_ID>/``."""
 
 
 SESSION_BASE: str = ""

@@ -46,7 +46,8 @@ def main() -> None:
         "--no-file-log",
         action="store_true",
         default=False,
-        help="Disable per-agent log files under campaigns/logs/<session>/.",
+        help="Disable per-agent log files under "
+             "campaigns/<target>/logs/<session>/.",
     )
     parser.add_argument(
         "--model",

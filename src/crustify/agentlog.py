@@ -27,8 +27,8 @@ every other artifact crustify writes - and everything worth keeping from
 them is already in one of the two files above.
 
 The console receives the same text as ``<stage>.log``. Both files live under
-``campaigns/logs/<session>/`` so all waves in one orchestrator campaign share
-a session namespace.
+``campaigns/<target>/logs/<session>/`` so all waves for one target share a
+session namespace without mixing logs from other targets.
 
 ``LOG_TO_FILE`` gates the files and ``LOG_TO_CONSOLE`` the console; with
 both off the loop still runs (the subprocess still has to be drained) and
@@ -83,7 +83,7 @@ class AgentLog:
 
         if log_dir is not None:
             # RESOLVED, and that is load-bearing. An isolated agent's log dir is
-            # `Layout(<worktree>).logs`, which only reaches the real
+            # `Layout(<worktree>).logs(target)`, which only reaches the real
             # directory through the `crustify/campaigns` symlink `link_shared`
             # plants in the worktree. The agent PURGES its worktree as the last
             # step of landing, taking that symlink with it — and `usage()`
