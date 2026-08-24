@@ -63,3 +63,6 @@ Set with `--build-arg` on `docker build`.
 Results are tracked in `wrappers-results.md`. The Dockerfile header documents
 what each flag buys. The three optional source mounts may be omitted from
 `docker run`; their `main` branches are then cloned into the ephemeral container.
+
+Historical aggregate measurements for the libgit2 and OpenSSL campaigns are
+preserved in [`libgit2-openssl-results.md`](libgit2-openssl-results.md).
