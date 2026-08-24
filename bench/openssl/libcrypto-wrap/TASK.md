@@ -1,56 +1,50 @@
 ---
 
-# Campaign
+# Campaign questions
 
-- repository: `https://github.com/openssl/openssl`
-- revision: `2924476b5591e691e904c4baf57894c526c4b8de`
-- objective: `wrap`
+1. **Which repository and revision should this campaign use?**
+   - Answer: `https://github.com/openssl/openssl`, `2924476b5591e691e904c4baf57894c526c4b8de`
+2. **Should this campaign port the C implementation to Rust, or create safe Rust wrappers?**
+   - Answer: create safe Rust wrappers
+3. **Which subsystems should be handled as separate sub-campaigns?**
+   - Answer: `libcrypto-public-api`
 
-# Sub-campaigns
+# Sub-campaign questions
 
 ## `libcrypto-public-api`
 
-- subsystem: libcrypto public API
-- implementation-paths: derive from the libcrypto build definition
-- api-headers: derive from the libcrypto public headers
-- coverage: user-selected subset
-- named-items: decide with the user
-- translator-backend: `codex`
-- translator-model: `gpt-5.6-sol`
+4. **Which implementation paths belong to this subsystem?**
+   - Answer: derive from the libcrypto build definition
+5. **Which headers define its public API?**
+   - Answer: derive from the libcrypto public headers
+6. **Should it cover the whole subsystem or only named types and functions?**
+   - Answer: a user-selected subset; exclude libssl
+7. **Which backend and model should translate this sub-campaign?**
+   - Answer: `codex`, `gpt-5.6-sol`
 
-# Workload
+# Campaign execution questions
 
-- batching: customize
-- max-types: `2`
-- max-syms: default
-- max-loc: default
-- parallel-max: orchestrator-selected
+8. **Use default workload settings, or customize them?**
+   - Answer: defaults except `max-types: 2`; parallelism is orchestrator-selected
+9. **Do you want agentic review? At which milestones and with which model?**
+   - Answer: ask the user for both milestones and model
+10. **Run autonomously or pause after each sub-campaign?**
+    - Answer: ask the user
+11. **Run the optional agentic UB pass? If so, with which model?**
+    - Answer: only with explicit user approval; ask for the model if enabled
 
-# Agentic review
+# Benchmark recording questions
 
-- checkpoints:
-  - milestone: decide with the user
-    model: ask the user
-
-# Execution
-
-- mode: ask whether to run autonomously or pause after the sub-campaign
-
-# UB audit
-
-- run: only with explicit user approval
-- model: ask the user if enabled
-
-# Benchmark metadata
-
-- orchestrator-backend: `codex`
-- orchestrator-model: `gpt-5.6-sol`
-- billing: `api`
-- setup-approval: required
-- results-path: `<repo-checkout>/crustify/wrappers-results.md`
-- results-template: standard
+12. **Which backend and model run the orchestrator?**
+    - Answer: `codex`, `gpt-5.6-sol`
+13. **Which billing mode should agentic stages use?**
+    - Answer: `api`
+14. **Has setup already been approved?**
+    - Answer: no
+15. **Where and in what format should results be recorded?**
+    - Answer: `<repo-checkout>/crustify/wrappers-results.md`, standard template
 
 # Notes
 
-Exclude libssl from this campaign. The normal deterministic
-`crustify-audit unsafe` checks remain enabled independently of agentic review.
+The normal deterministic `crustify-audit unsafe` checks remain enabled
+independently of agentic review.

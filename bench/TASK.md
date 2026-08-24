@@ -1,66 +1,63 @@
 ---
 
-# Campaign
+# Campaign questions
 
-- repository: `<repository URL>`
-- revision: `<commit or tag>`
-- objective: `<port | wrap>`
+1. **Which repository and revision should this campaign use?**
+   - Answer: `<repository URL>, <commit or tag>`
+2. **Should this campaign port the C implementation to Rust, or create safe
+   Rust wrappers?**
+   - Answer: `<port | wrap>`
+3. **Which subsystems should be handled as separate sub-campaigns?**
+   - Answer: `<sub-campaign names>`
 
-# Sub-campaigns
+# Sub-campaign questions
 
-## `<subsystem name>`
+Copy this block once for every answer to question 3.
 
-- subsystem: `<directory, library, or named component>`
-- implementation-paths: `<paths>`
-- api-headers: `<paths | derive from implementation paths>`
-- coverage: `<whole subsystem | named subset>`
-- named-items: `<none | types and functions>`
-- translator-backend: `<codex | claude>`
-- translator-model: `<model>`
+## `<sub-campaign name>`
 
-# Workload
+4. **Which implementation paths belong to this subsystem?**
+   - Answer: `<paths>`
+5. **Which headers define its public API?**
+   - Answer: `<paths | derive from implementation paths>`
+6. **Should it cover the whole subsystem or only named types and functions?**
+   - Answer: `<whole subsystem | named subset: ...>`
+7. **Which backend and model should translate this sub-campaign?**
+   - Answer: `<codex | claude>, <model>`
 
-- batching: `<defaults | customize>`
-- max-types: `<default | number>`
-- max-syms: `<default | number>`
-- max-loc: `<default | number>`
-- parallel-max: `<orchestrator-selected | number>`
+# Campaign execution questions
 
-# Agentic review
+8. **Should the campaign use the default batching and parallelism settings, or
+   customize them?**
+   - Answer: `<defaults | max-types: N, max-syms: N, max-loc: N,
+     parallel-max: N | orchestrator-selected>`
 
-- checkpoints:
-  - milestone: `<none | campaign milestone>`
-    model: `<model>`
+9. **Do you want agentic review? If so, at which campaign milestones, and
+   which model should perform each review?**
+   - Answer: `<none | milestone: model; ...>`
 
-# Execution
+10. **After approval, should the orchestrator run autonomously or pause after
+    each sub-campaign?**
+    - Answer: `<autonomous | pause after each sub-campaign>`
 
-- mode: `<autonomous | pause after each sub-campaign>`
+11. **Should the campaign run the optional agentic UB pass? If so, which model
+    should run it?**
+    - Answer: `<no | yes with explicit approval, model>`
 
-# UB audit
+# Benchmark recording questions
 
-- run: `<no | yes, with explicit user approval>`
-- model: `<not applicable | model>`
+12. **Which backend and model run the orchestrator?**
+    - Answer: `<codex | claude>, <model>`
+13. **Which billing mode should agentic stages use?**
+    - Answer: `<api | subscription>`
+14. **Has setup already been approved?**
+    - Answer: `<yes | no>`
+15. **Where and in what format should results be recorded?**
+    - Answer: `<path>, <template>`
 
-# Benchmark metadata
+# Guidance
 
-- orchestrator-backend: `<codex | claude>`
-- orchestrator-model: `<model>`
-- billing: `<api | subscription>`
-- setup-approval: `<required | not required>`
-- results-path: `<repo-checkout>/crustify/wrappers-results.md`
-- results-template: `standard`
-
-# Legend
-
-- `Campaign` answers which repository and revision the campaign uses and
-  whether its top-level objective is `port` or `wrap`.
-- Each `Sub-campaign` answers which subsystem is targeted, what constitutes its
-  implementation and public API, whether coverage is whole or selected, and
-  which translator backend and model execute it.
-- `Workload` records whether live defaults or explicit scheduler limits apply.
-- Every agentic review checkpoint names its own model. Deterministic
-  `crustify-audit unsafe` checks do not need one.
-- `Execution` controls whether the orchestrator pauses between sub-campaigns.
-- `UB audit` remains off unless the user explicitly approves it.
-- Waves and steps are internal scheduler artifacts and never user-facing
-  manifest settings.
+- Answer only questions whose values are not already fixed by the task.
+- Every agentic stage names its model. Deterministic `crustify-audit unsafe`
+  checks do not need one.
+- Waves and steps are internal scheduler artifacts, not user-facing questions.

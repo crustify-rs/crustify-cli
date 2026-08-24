@@ -1,112 +1,114 @@
 ---
 
-# Campaign
+# Campaign questions
 
-- repository: `https://gitlab.gnome.org/GNOME/libxml2.git`
-- revision: `v2.15.3` (`c94eb0210183b9d7cb43f8e7fddc6be55843ef49`)
-- objective: `wrap`
+1. **Which repository and revision should this campaign use?**
+   - Answer: `https://gitlab.gnome.org/GNOME/libxml2.git`, `v2.15.3` (`c94eb0210183b9d7cb43f8e7fddc6be55843ef49`)
+2. **Should this campaign port the C implementation to Rust, or create safe Rust wrappers?**
+   - Answer: create safe Rust wrappers
+3. **Which subsystems should be handled as separate sub-campaigns?**
+   - Answer: `public-api-types`, `xml-writer`, `dtd-validation`, `xpath-internals`, `catalog-resolution`, `sax2`, `public-api-remainder`
 
-# Sub-campaigns
+# Sub-campaign questions
 
 ## `public-api-types`
 
-- subsystem: public types and callbacks
-- implementation-paths: the libxml2 implementation selected during setup
-- api-headers: `include/libxml/`
-- coverage: whole published type and callback closure
-- named-items: derive from the API-only DAG in dependency order
-- translator-backend: ask the user, showing available options
-- translator-model: ask the user, showing available options
+4. **Which implementation paths belong to this subsystem?**
+   - Answer: the libxml2 implementation selected during setup
+5. **Which headers define its public API?**
+   - Answer: `include/libxml/`
+6. **Should it cover the whole subsystem or only named types and functions?**
+   - Answer: the whole published type and callback closure, in dependency order
+7. **Which backend and model should translate this sub-campaign?**
+   - Answer: ask the user, showing available backends and models
 
 ## `xml-writer`
 
-- subsystem: XML writer
-- implementation-paths: derive from the declaration inventory
-- api-headers: `include/libxml/xmlwriter.h`
-- coverage: whole subsystem
-- named-items: all API declarations from this header
-- translator-backend: ask the user, showing available options
-- translator-model: ask the user, showing available options
+4. **Which implementation paths belong to this subsystem?**
+   - Answer: derive from the declaration inventory
+5. **Which headers define its public API?**
+   - Answer: `include/libxml/xmlwriter.h`
+6. **Should it cover the whole subsystem or only named types and functions?**
+   - Answer: the whole subsystem
+7. **Which backend and model should translate this sub-campaign?**
+   - Answer: ask the user, showing available backends and models
 
 ## `dtd-validation`
 
-- subsystem: DTD validation
-- implementation-paths: derive from the declaration inventory
-- api-headers: `include/libxml/valid.h`
-- coverage: whole subsystem
-- named-items: all API declarations from this header
-- translator-backend: ask the user, showing available options
-- translator-model: ask the user, showing available options
+4. **Which implementation paths belong to this subsystem?**
+   - Answer: derive from the declaration inventory
+5. **Which headers define its public API?**
+   - Answer: `include/libxml/valid.h`
+6. **Should it cover the whole subsystem or only named types and functions?**
+   - Answer: the whole subsystem
+7. **Which backend and model should translate this sub-campaign?**
+   - Answer: ask the user, showing available backends and models
 
 ## `xpath-internals`
 
-- subsystem: XPath extension and context API
-- implementation-paths: derive from the declaration inventory
-- api-headers: `include/libxml/xpathInternals.h`
-- coverage: whole subsystem
-- named-items: all API declarations from this header
-- translator-backend: ask the user, showing available options
-- translator-model: ask the user, showing available options
+4. **Which implementation paths belong to this subsystem?**
+   - Answer: derive from the declaration inventory
+5. **Which headers define its public API?**
+   - Answer: `include/libxml/xpathInternals.h`
+6. **Should it cover the whole subsystem or only named types and functions?**
+   - Answer: the whole subsystem
+7. **Which backend and model should translate this sub-campaign?**
+   - Answer: ask the user, showing available backends and models
 
 ## `catalog-resolution`
 
-- subsystem: catalog resolution
-- implementation-paths: derive from the declaration inventory
-- api-headers: `include/libxml/catalog.h`
-- coverage: whole subsystem
-- named-items: all API declarations from this header
-- translator-backend: ask the user, showing available options
-- translator-model: ask the user, showing available options
+4. **Which implementation paths belong to this subsystem?**
+   - Answer: derive from the declaration inventory
+5. **Which headers define its public API?**
+   - Answer: `include/libxml/catalog.h`
+6. **Should it cover the whole subsystem or only named types and functions?**
+   - Answer: the whole subsystem
+7. **Which backend and model should translate this sub-campaign?**
+   - Answer: ask the user, showing available backends and models
 
 ## `sax2`
 
-- subsystem: SAX2
-- implementation-paths: derive from the declaration inventory
-- api-headers: `include/libxml/SAX2.h`
-- coverage: whole subsystem
-- named-items: all API declarations from this header
-- translator-backend: ask the user, showing available options
-- translator-model: ask the user, showing available options
+4. **Which implementation paths belong to this subsystem?**
+   - Answer: derive from the declaration inventory
+5. **Which headers define its public API?**
+   - Answer: `include/libxml/SAX2.h`
+6. **Should it cover the whole subsystem or only named types and functions?**
+   - Answer: the whole subsystem
+7. **Which backend and model should translate this sub-campaign?**
+   - Answer: ask the user, showing available backends and models
 
 ## `public-api-remainder`
 
-- subsystem: remaining published API
-- implementation-paths: the libxml2 implementation selected during setup
-- api-headers: `include/libxml/`
-- coverage: everything not completed by earlier sub-campaigns
-- named-items: derive from the remaining API-only DAG
-- translator-backend: ask the user, showing available options
-- translator-model: ask the user, showing available options
+4. **Which implementation paths belong to this subsystem?**
+   - Answer: the libxml2 implementation selected during setup
+5. **Which headers define its public API?**
+   - Answer: `include/libxml/`
+6. **Should it cover the whole subsystem or only named types and functions?**
+   - Answer: everything not completed by earlier sub-campaigns
+7. **Which backend and model should translate this sub-campaign?**
+   - Answer: ask the user, showing available backends and models
 
-# Workload
+# Campaign execution questions
 
-- batching: customize
-- max-types: `1`
-- max-syms: default
-- max-loc: default
-- parallel-max: orchestrator-selected
+8. **Use default workload settings, or customize them?**
+   - Answer: defaults except `max-types: 1`; parallelism is orchestrator-selected
+9. **Do you want agentic review? At which milestones and with which model?**
+   - Answer: no
+10. **Run autonomously or pause after each sub-campaign?**
+    - Answer: pause after each sub-campaign and never promote a session branch
+11. **Run the optional agentic UB pass? If so, with which model?**
+    - Answer: no
 
-# Agentic review
+# Benchmark recording questions
 
-- checkpoints: none
-
-# Execution
-
-- mode: pause after each sub-campaign; never promote a session branch
-
-# UB audit
-
-- run: no
-- model: not applicable
-
-# Benchmark metadata
-
-- orchestrator-backend: ask the user, showing available options
-- orchestrator-model: ask the user, showing available options
-- billing: `api`
-- setup-approval: not required; Phase 1 is pre-approved
-- results-path: `/work/wrappers-results.md`
-- results-template: standard
+12. **Which backend and model run the orchestrator?**
+    - Answer: ask the user, showing available backends and models
+13. **Which billing mode should agentic stages use?**
+    - Answer: `api`
+14. **Has setup already been approved?**
+    - Answer: yes; Phase 1 is pre-approved
+15. **Where and in what format should results be recorded?**
+    - Answer: `/work/wrappers-results.md`, standard template
 
 # Why this target
 

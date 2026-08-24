@@ -1,72 +1,70 @@
 ---
 
-# Campaign
+# Campaign questions
 
-- repository: `https://github.com/libgit2/libgit2.git`
-- revision: `ddf3b5c85d86a389330b1d1dd90f08f60ae05fe4`
-- objective: `wrap`
+1. **Which repository and revision should this campaign use?**
+   - Answer: `https://github.com/libgit2/libgit2.git`, `ddf3b5c85d86a389330b1d1dd90f08f60ae05fe4`
+2. **Should this campaign port the C implementation to Rust, or create safe Rust wrappers?**
+   - Answer: create safe Rust wrappers
+3. **Which subsystems should be handled as separate sub-campaigns?**
+   - Answer: `import-type-closure`, `import-symbols-l0-l2`, `god-objects`
 
-# Sub-campaigns
+# Sub-campaign questions
 
 ## `import-type-closure`
 
-- subsystem: imported types and callbacks needed by `src/`
-- implementation-paths: derive from the oracle's imported section
-- api-headers: derive from the imported declarations
-- coverage: whole imported type and callback closure
-- named-items: all imported types and callbacks, dependency order preserved
-- translator-backend: ask the user, showing available options
-- translator-model: ask the user, showing available options
+4. **Which implementation paths belong to this subsystem?**
+   - Answer: derive from the oracle's imported section for `src/`
+5. **Which headers define its public API?**
+   - Answer: derive from the imported declarations
+6. **Should it cover the whole subsystem or only named types and functions?**
+   - Answer: the whole imported type and callback closure, in dependency order
+7. **Which backend and model should translate this sub-campaign?**
+   - Answer: ask the user, showing available backends and models
 
 ## `import-symbols-l0-l2`
 
-- subsystem: imported functions and globals needed by target layers L0 through L2
-- implementation-paths: derive from the oracle's imported section
-- api-headers: derive from the imported declarations
-- coverage: named subset reached by target code at layers L0 through L2
-- named-items: compute from the target closure and its imported symbol dependencies
-- translator-backend: ask the user, showing available options
-- translator-model: ask the user, showing available options
+4. **Which implementation paths belong to this subsystem?**
+   - Answer: derive from the oracle's imported section for `src/`
+5. **Which headers define its public API?**
+   - Answer: derive from the imported declarations
+6. **Should it cover the whole subsystem or only named types and functions?**
+   - Answer: the imported functions and globals reached by target layers L0 through L2
+7. **Which backend and model should translate this sub-campaign?**
+   - Answer: ask the user, showing available backends and models
 
 ## `god-objects`
 
-- subsystem: large target types in `src/`
-- implementation-paths: `src/`
-- api-headers: derive from the selected declarations
-- coverage: named subset with transitive closure
-- named-items: `git_indexer`, `git_packbuilder`, `git_repository`
-- translator-backend: ask the user, showing available options
-- translator-model: ask the user, showing available options
+4. **Which implementation paths belong to this subsystem?**
+   - Answer: `src/`
+5. **Which headers define its public API?**
+   - Answer: derive from the selected declarations
+6. **Should it cover the whole subsystem or only named types and functions?**
+   - Answer: `git_indexer`, `git_packbuilder`, and `git_repository`, including their transitive closure
+7. **Which backend and model should translate this sub-campaign?**
+   - Answer: ask the user, showing available backends and models
 
-# Workload
+# Campaign execution questions
 
-- batching: customize
-- max-types: `1`
-- max-syms: default
-- max-loc: default
-- parallel-max: orchestrator-selected
+8. **Use default workload settings, or customize them?**
+   - Answer: defaults except `max-types: 1`; parallelism is orchestrator-selected
+9. **Do you want agentic review? At which milestones and with which model?**
+   - Answer: no
+10. **Run autonomously or pause after each sub-campaign?**
+    - Answer: pause after each sub-campaign before promoting its session branch
+11. **Run the optional agentic UB pass? If so, with which model?**
+    - Answer: no
 
-# Agentic review
+# Benchmark recording questions
 
-- checkpoints: none
-
-# Execution
-
-- mode: pause after each sub-campaign before promoting its session branch
-
-# UB audit
-
-- run: no
-- model: not applicable
-
-# Benchmark metadata
-
-- orchestrator-backend: ask the user, showing available options
-- orchestrator-model: ask the user, showing available options
-- billing: `api`
-- setup-approval: not required; Phase 1 is pre-approved
-- results-path: `/work/wrappers-results.md`
-- results-template: standard
+12. **Which backend and model run the orchestrator?**
+    - Answer: ask the user, showing available backends and models
+13. **Which billing mode should agentic stages use?**
+    - Answer: `api`
+14. **Has setup already been approved?**
+    - Answer: yes; Phase 1 is pre-approved
+15. **Where and in what format should results be recorded?**
+    - Answer: `/work/wrappers-results.md`, standard template
 
 # Setup notes
 
