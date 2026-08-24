@@ -22,9 +22,7 @@ Copy this template into the campaign checkout, then fill it as work lands.
 
 ## Review pass
 
-`--objective review`, LLM-as-a-Judge over the landed waves. Run it under a
-DIFFERENT model from the one being judged — a review by the author is
-self-review, and any disagreement is what makes the pass informative.
+`--objective review`, LLM-as-a-Judge over the landed waves.
 
 - **agent backend** — `<codex | claude>`
 - **model** — `<provider>/<model>`
@@ -43,15 +41,7 @@ the campaign's.
 ## UB pass
 
 `crustify-audit ub`, an agentic hunt for undefined behaviour reachable from the
-crate's SAFE APIs. Optional, off by default, and outside the campaign's
-deterministic `crustify-audit unsafe` gate: run it only with the user's
-explicit approval. Leave this section as `not run` when it was not approved.
-
-The agent owns both the evidence and the repair. It branches in the target
-repository, implements focused regression tests, reruns the reproduction, and
-commits WITHOUT merging. The orchestrator inspects the diff, independently
-reruns the build, test and reproduction gates, and merges only when they are
-green and the change is confined to the confirmed finding.
+crate's SAFE APIs.
 
 - **agent backend** — `<codex | claude>`
 - **model** — `<provider>/<model>`
@@ -93,10 +83,16 @@ green and the change is confined to the confirmed finding.
 - `$/unit` / `$/loc` / `$/field` — that row's `$` over its units, its `loc`, or
   its declared fields
 - `$/symbol` / `$/type` — a batch holds one kind or the other, so one of the
-  two reads `—`; on a Σ row each divides that kind's own cost by its own count
+  two reads `—`; on a Σ row each divides that kind's own cost by its own count.
+  The review batch tables are split by kind instead, so each carries a single
+  `rv $/unit`
 - `↖ batched` — shares the row above's agent; one usage record covers both
 - `rv $` / `rv wall` / `rv loc` — the REVIEW agent's own cost, elapsed time, and
   net `.rs` line delta (`+ins/-del`) of its landing commit
+- `rv batch` — the review batch that judged this unit or layer. The review pass
+  is scheduled separately and packs under its own budgets, so the mapping to
+  emitting batches is many-to-many; list every review batch that touched the
+  row, or `<n> batches` on a Σ row
 - `ub $` / `ub wall` — the UB pass's cost and elapsed time over that
   sub-campaign; `—` where the optional pass did not run
 - `verdict` — what the judge concluded: `held` = analysis and code confirmed as
@@ -110,17 +106,30 @@ green and the change is confined to the confirmed finding.
 ## Overview
 
 One row per sub-campaign, in the order they ran, plus a row for the
-orchestrator's own supervision cost. `ub` columns stay `—` unless the optional
-agentic UB pass ran over that sub-campaign; it is off by default and needs
-explicit approval.
+orchestrator's own supervision cost. A review pass is a sub-campaign in its own
+right, not a column on the wave it judges: the oracle re-batches the reviewed
+units, so its layer and batch distribution rarely matches the wrap or port wave
+underneath it, and averaging the two would hide exactly that.
 
-| sub-campaign | objective | nr types | nr symbols | session wall | total | $/type | $/sym | rv wall | rv total | rv $/type | rv $/sym | ub wall | ub $ |
-|---|---|---:|---:|---|---:|---:|---:|---|---:|---:|---:|---|---:|
-| `<waves>-<name>` | raw lifetime | `0` | `<n>` | `<n>m<n>s` | `$<n>` (`<model>`) | — | `$<n>` | `<n>m<n>s` | `$<n>` (`<model>`) | — | `$<n>` | — | — |
-| `<waves>-<name>` | wrap | `<n>` | `<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | `<n>m<n>s` | `$<n>` (`<model>`) |
-| `<waves>-<name>` | port | `<n>` | `<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | — | — |
-| orchestrator | orchestration | `<n>` | `<n>` | — | `$<n>`+ (`<model>`) | — | — | — | — | — | — | — | — |
-| **Σ recorded agents** | | **`<n>`** | **`<n>`** | | **`$<n>`** | **`$<n>`** | **`$<n>`** | | **`$<n>`** | **`$<n>`** | **`$<n>`** | | **`$<n>`** |
+`ub` columns stay `—` unless the optional agentic UB pass ran over that
+sub-campaign; it is off by default and needs explicit approval. It gets columns
+rather than a row because it is not oracle-batched at all — one budgeted agent
+chain over a whole tree, with no units of its own to divide by.
+
+| sub-campaign | objective | nr types | nr symbols | session wall | total | $/type | $/sym | ub wall | ub $ |
+|---|---|---:|---:|---|---:|---:|---:|---|---:|
+| `<waves>-<name>` | raw lifetime | `0` | `<n>` | `<n>m<n>s` | `$<n>` (`<model>`) | — | `$<n>` | — | — |
+| `<waves>-<name>` | wrap | `<n>` | `<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | `<n>m<n>s` | `$<n>` (`<model>`) |
+| `<waves>-<name>` | review | `<n>` | `<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | — | — |
+| `<waves>-<name>` | port | `<n>` | `<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | — | — |
+| `<waves>-<name>` | review | `<n>` | `<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | — | — |
+| orchestrator | orchestration | `<n>` | `<n>` | — | `$<n>`+ (`<model>`) | — | — | — | — |
+| **Σ recorded agents** | | **`<n>`** | **`<n>`** | | **`$<n>`** | **`$<n>`** | **`$<n>`** | | **`$<n>`** |
+
+A review row's `nr types` / `nr symbols` count what that pass actually judged,
+which may be fewer than the wave emitted — the oracle drops lifecycle
+primitives it reviews with their owning type. Say so in a footnote when the
+counts differ.
 
 The orchestrator row carries `+` because its own session is still running when
 the table is written; record the figure at hand-off and say so.
@@ -156,10 +165,16 @@ bottom-up by DAG layer, then the symbols over them.
 
 ### Batches — types
 
-| DAG layer | units | loc | $ | wall (longest) | wall (actual) | serial Σ | $/unit | $/loc |
-|---|---|---|---|---|---|---|---|---|
-| `<N>` | `<n>` | `<n>` | `$<n>` | `<n>m<n>s` | **`<n>m<n>s`** | `<n>h<n>m` (`<n>`x) | `$<n>` | `$<n>` |
-| **Σ** | **`<n>`** | **`<n>`** | **`$<n>`** | — | **`<n>h<n>m<n>s`** | **`<n>h<n>m`** (`<n>`x) | **`$<n>`** | **`$<n>`** |
+`rv batch` names the review batch or batches that later judged this layer's
+units. It is frequently many-to-one in both directions: the review pass
+re-batches under its own budgets, so one wrap batch can be split across several
+review batches and one review batch can span several wrap layers.
+
+| DAG layer | units | loc | $ | wall (longest) | wall (actual) | serial Σ | $/unit | $/loc | rv batch |
+|---|---|---|---|---|---|---|---|---|---|
+| `<N>` | `<n>` | `<n>` | `$<n>` | `<n>m<n>s` | **`<n>m<n>s`** | `<n>h<n>m` (`<n>`x) | `$<n>` | `$<n>` | `<batch>` |
+| `<N>` | `<n>` | `<n>` | `$<n>` | `<n>m<n>s` | **`<n>m<n>s`** | `<n>h<n>m` (`<n>`x) | `$<n>` | `$<n>` | `<batch>`, `<batch>` |
+| **Σ** | **`<n>`** | **`<n>`** | **`$<n>`** | — | **`<n>h<n>m<n>s`** | **`<n>h<n>m`** (`<n>`x) | **`$<n>`** | **`$<n>`** | **`<n>` batches** |
 
 ### Symbols
 
@@ -172,22 +187,34 @@ bottom-up by DAG layer, then the symbols over them.
 
 ### Batches — symbols
 
-| DAG layer | units | loc | $ | wall | $/unit | $/loc |
-|---|---|---|---|---|---|---|
-| `<N>` | `<n>` | `<n>` | `$<n>` | `<n>m<n>s` (`<n>`x) | `$<n>` | `$<n>` |
-| **Σ** | **`<n>`** | **`<n>`** | **`$<n>`** | **`<n>h<n>m<n>s`** (`<n>`x, session wall) | **`$<n>`** | **`$<n>`** |
-
-### Batches — review
-
-One agent per judged batch, same split as the wave it judges. `rv loc` is the
-net `.rs` delta of the landing commit; a review that confirms without changing
-code reads `+0/-0`.
-
-| session | batch | units | rv loc | rv $ | rv wall | $/symbol | $/type |
+| DAG layer | units | loc | $ | wall | $/unit | $/loc | rv batch |
 |---|---|---|---|---|---|---|---|
-| `<session>` | `<batch>` | `<n>` types | `+<n>/-<n>` | `$<n>` | `<n>m<n>s` | — | `$<n>` |
-| `<session>` | `<batch>` | `<n>` symbols | `+<n>/-<n>` | `$<n>` | `<n>m<n>s` | `$<n>` | — |
-| **Σ** | **`<n>` agents** | **`<n>` types · `<n>` symbols** | **`+<n>/-<n>`** | **`$<n>`** | **`<n>m<n>s`** (longest; `<n>h<n>m<n>s` serial, `<n>`x) | **`$<n>`** | **`$<n>`** |
+| `<N>` | `<n>` | `<n>` | `$<n>` | `<n>m<n>s` (`<n>`x) | `$<n>` | `$<n>` | `<batch>` |
+| `<N>` | `<n>` | `<n>` | `$<n>` | `<n>m<n>s` (`<n>`x) | `$<n>` | `$<n>` | `<batch>`, `<batch>` |
+| **Σ** | **`<n>`** | **`<n>`** | **`$<n>`** | **`<n>h<n>m<n>s`** (`<n>`x, session wall) | **`$<n>`** | **`$<n>`** | **`<n>` batches** |
+
+### Batches — review types
+
+One agent per judged batch. The review pass is scheduled and batched on its
+own, so these layers and batches do not line up with `Batches — types` above;
+read the two side by side rather than row for row. `rv loc` is the net `.rs`
+delta of the landing commit, and a review that confirms without changing code
+reads `+0/-0`.
+
+| session | batch | units | rv loc | rv $ | rv wall | rv $/unit | judged |
+|---|---|---|---|---|---|---|---|
+| `<session>` | `<batch>` | `<n>` types | `+<n>/-<n>` | `$<n>` | `<n>m<n>s` | `$<n>` | `<n>` held · `<n>` fixed |
+| **Σ** | **`<n>` agents** | **`<n>` types** | **`+<n>/-<n>`** | **`$<n>`** | **`<n>m<n>s`** (longest; `<n>h<n>m<n>s` serial, `<n>`x) | **`$<n>`** | **`<n>` held · `<n>` fixed** |
+
+### Batches — review symbols
+
+| session | batch | units | rv loc | rv $ | rv wall | rv $/unit | judged |
+|---|---|---|---|---|---|---|---|
+| `<session>` | `<batch>` | `<n>` symbols | `+<n>/-<n>` | `$<n>` | `<n>m<n>s` | `$<n>` | `<n>` held · `<n>` fixed |
+| **Σ** | **`<n>` agents** | **`<n>` symbols** | **`+<n>/-<n>`** | **`$<n>`** | **`<n>m<n>s`** (longest; `<n>h<n>m<n>s` serial, `<n>`x) | **`$<n>`** | **`<n>` held · `<n>` fixed** |
+
+A batch holding both kinds is rare but legal; list it in the table matching its
+`kind` and say so in a footnote.
 
 ## Safety audit
 
