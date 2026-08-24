@@ -92,7 +92,7 @@ class PromptCapabilityTests(unittest.TestCase):
         self.assertIn("# Crustify coding conventions", system)
         self.assertIn("crustify-translator", system)
         self.assertNotIn("Generic semantic oracle", system)
-        self.assertNotIn("campaign worklist as fixed", system)
+        self.assertNotIn("wave worklist as fixed", system)
         self.assertNotIn("ffibox", system)
         self.assertNotIn("crustify-audit", system)
 

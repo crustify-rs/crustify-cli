@@ -1,4 +1,4 @@
-"""Batch execution for objective-neutral oracle campaigns.
+"""Batch execution for objective-neutral oracle wave documents.
 
 Selection, dependency ordering and packing live in crustify-oracle. This module
 owns only the stateful half: placement checks, TODO insertion, isolated
@@ -159,7 +159,7 @@ def _place_batch_anchors(batch: Batch, layout, target, stage: Stage) -> None:
 
 def run(batches: list[Batch], stage: Stage, *, parallel_max: int) \
         -> list[tuple[Batch, BaseException]]:
-    """Run at most ``parallel_max`` isolated agents for one topological wave."""
+    """Run at most ``parallel_max`` isolated agents for one topological step."""
     if parallel_max < 1:
         raise ValueError("parallel_max must be >= 1")
     if (stage.emit_factory is None or stage.target is None
@@ -171,10 +171,10 @@ def run(batches: list[Batch], stage: Stage, *, parallel_max: int) \
             except BaseException as exc:  # noqa: BLE001
                 failures.append((batch, exc))
         return failures
-    return _isolated_wave(batches, stage, parallel_max)
+    return _isolated_step(batches, stage, parallel_max)
 
 
-def _isolated_wave(batches: list[Batch], stage: Stage,
+def _isolated_step(batches: list[Batch], stage: Stage,
                    parallel_max: int) -> list[tuple[Batch, BaseException]]:
     from crustify import config
     from crustify import worktree

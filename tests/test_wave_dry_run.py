@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import io
 import json
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from crustify.campaign import _dry_run
+from crustify.wave import _dry_run, load
 
 
-class CampaignDryRunParityTests(unittest.TestCase):
+class WaveDryRunParityTests(unittest.TestCase):
     def test_render_is_byte_equivalent_after_policy_line_retirement(self) -> None:
         fixtures = Path(__file__).parent / "fixtures"
         dag = json.loads((fixtures / "scheduler-dag.json").read_text())
@@ -31,13 +32,14 @@ class CampaignDryRunParityTests(unittest.TestCase):
                     "field_anchors": [],
                 })
         by_name = {item["name"]: item for item in items}
-        campaign = {
-            "schema_version": 1,
+        wave = {
+            "schema_version": 2,
+            "oracle_target": ".",
             "summary": {"unit_count": 5, "layer_count": 2,
                         "batch_count": 4, "file_count": 2},
             "plan_items": items,
             "dependency_nodes": [],
-            "waves": [
+            "steps": [
                 {"layers": [0], "unit_count": 2, "batches": [
                     {"kind": "type", "source_file": "include/alpha.h",
                      "items": [by_name["alpha_st"]]},
@@ -54,9 +56,25 @@ class CampaignDryRunParityTests(unittest.TestCase):
         }
         output = io.StringIO()
         with redirect_stdout(output):
-            _dry_run(campaign, "wrap")
+            _dry_run(wave, "wrap")
         self.assertEqual(output.getvalue(),
                          (fixtures / "scheduler-dry-run.txt").read_text())
+
+    def test_v1_campaign_document_normalizes_to_steps(self) -> None:
+        old = {
+            "schema_version": 1,
+            "oracle_target": ".",
+            "summary": {"unit_count": 0, "layer_count": 1,
+                        "batch_count": 0},
+            "plan_items": [],
+            "dependency_nodes": [],
+            "waves": [{"layers": [0], "unit_count": 0, "batches": []}],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "old-campaign.json"
+            path.write_text(json.dumps(old))
+            normalized = load(path)
+        self.assertEqual(normalized["steps"], old["waves"])
 
 
 if __name__ == "__main__":

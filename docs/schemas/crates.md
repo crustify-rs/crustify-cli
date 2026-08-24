@@ -5,7 +5,7 @@ crate/module decomposition and the placement oracle. Layout example:
 [`specs/crates.json`](../../specs/crates.json).
 
 Target-agnostic and cumulative: "which unique Rust `.rs` homes this C entity",
-independent of porting progress. Oracle inventory and campaign plans live
+independent of porting progress. Oracle inventory and wave plans live
 outside this manifest.
 
 ## crates.\<name\>

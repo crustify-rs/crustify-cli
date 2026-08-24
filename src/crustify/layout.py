@@ -7,7 +7,6 @@ from pathlib import Path
 CRUSTIFY = "crustify"
 
 _REPO_ROOT: Path | None = None  # pinned once by the CLI; never marker-walked
-_CAMPAIGN_DIR: Path | None = None
 
 
 def set_repo_root(repo_root: Path) -> None:
@@ -16,12 +15,6 @@ def set_repo_root(repo_root: Path) -> None:
     filesystem looking for a ``crustify/`` marker."""
     global _REPO_ROOT
     _REPO_ROOT = Path(repo_root).resolve()
-
-
-def set_campaign_dir(path: Path) -> None:
-    """Pin the active ``crustify/campaigns/<campaign>`` directory."""
-    global _CAMPAIGN_DIR
-    _CAMPAIGN_DIR = Path(path).resolve()
 
 
 def find_repo_root(start: Path) -> Path:
@@ -81,17 +74,18 @@ class Layout:
         Oracle target configuration lives in the standalone oracle tree."""
         return self.root / "cli-config.json"
 
-    # ------------------------------------------------- target-tier (per-target)
+    # ------------------------------------------------- target identity
     def rel_target(self, target: Path) -> str:
         t = Path(target).resolve()
         if t == self.repo_root:
             return "."
         return t.relative_to(self.repo_root).as_posix()
 
-    def target_dir(self, target: Path) -> Path:
-        if _CAMPAIGN_DIR is not None:
-            return _CAMPAIGN_DIR
-        return self.root / "campaigns" / self.rel_target(target)
+    @property
+    def campaigns(self) -> Path:
+        """Tracked wave plans and invocation-local campaign artifacts."""
+        return self.root / "campaigns"
 
-    def logs(self, target: Path) -> Path:
-        return self.target_dir(target) / "logs"
+    @property
+    def logs(self) -> Path:
+        return self.campaigns / "logs"
