@@ -9,7 +9,7 @@ code to safe, idiomatic Rust. It can:
   interoperability with the code left behind.
 
 Reliable translation takes more than a capable model, so Crustify equips its
-agents with the tools the job actually requires: a CodeQL-backed dependency
+agents with the tools and skills the job actually requires: a CodeQL-backed dependency
 oracle that resolves the semantic order of a closure, a crate of smart pointers
 and lifetime traits for safe interop across the FFI boundary, and a compiled
 Rust safety auditor with an optional undefined-behavior pass. Agents write and
@@ -34,8 +34,8 @@ The harness supports two complementary reliability mechanisms:
   code, challenge unsafe assumptions and behavioral equivalence, and repair
   confirmed defects.
 
-The oracle, ffibox, and the auditor serve both roles as tools; they are not
-additional agents.
+The oracle, ffibox, and the auditor serve both the orchestrator and translators
+as skills.
 
 ## Components
 
