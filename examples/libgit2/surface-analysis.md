@@ -5,7 +5,7 @@ exists, for deciding whether a public-API `wrap` campaign is worth running and
 what its `api_headers` boundary should be.
 
 **This is not the campaign already recorded in this directory.**
-`bench/libgit2/TASK.md` targets the whole `src/` dir — a port objective, whose
+`examples/libgit2/TASK.md` targets the whole `src/` dir — a port objective, whose
 wrap waves cover the *import closure* the port needs. libgit2's own public API
 has not been wrap-campaigned here.
 
@@ -66,7 +66,7 @@ correspondingly harsher invariants.
 
 libgit2 is a wide, honest C API: ~1,000 typed functions over 73 opaque handles,
 all of it visible to a symbol query. Contrast libcurl, whose real surface hides
-behind four variadic entry points — see `bench/curl/surface-findings.md`.
+behind four variadic entry points — see `examples/curl/surface-findings.md`.
 
 | | libgit2 1.9.0 | libcurl 8.22.0-DEV |
 |---|---|---|
@@ -170,6 +170,6 @@ against the 627 that `git2` currently reaches.
 - <https://github.com/rust-lang/git2-rs>
 - <https://crates.io/crates/git2>
 - <https://crates.io/crates/gix>
-- `bench/curl/surface-findings.md` — the same survey for libcurl
-- `bench/libgit2/wrappers-results-opus5.md` — the `src/` port campaign whose
+- `examples/curl/surface-findings.md` — the same survey for libcurl
+- `examples/libgit2/wrappers-results-opus5.md` — the `src/` port campaign whose
   per-unit rates the sizing above borrows

@@ -20,7 +20,7 @@ def _skill_block(skill: Path) -> tuple[str, str]:
     return name, block
 
 
-def render(oracle: Path, audit: Path) -> str:
+def render(oracle: Path, audit: Path, task: Path | None = None) -> str:
     """Render from the three source-owned skill definitions."""
     root = Path(__file__).resolve().parents[2]
     prompts = root / "src" / "crustify" / "prompts"
@@ -58,7 +58,22 @@ def render(oracle: Path, audit: Path) -> str:
         if marker not in template:
             raise SystemExit(f"orchestrator.md no longer carries {marker}")
         template = template.replace(marker, value)
-    return template.rstrip() + "\n"
+    template = template.rstrip()
+    if task is not None:
+        if not task.is_file():
+            raise SystemExit(f"no campaign task at {task}")
+        task_text = task.read_text().strip()
+        if not task_text:
+            raise SystemExit(f"campaign task is empty: {task}")
+        template += (
+            "\n\n## Pre-filled campaign task\n\n"
+            "The user supplied the task below before starting the session. "
+            "Treat completed answers as campaign input and ask only about "
+            "answers that are missing, unresolved, or still contain template "
+            "placeholders.\n\n"
+            + task_text
+        )
+    return template + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -68,10 +83,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("oracle_checkout", type=Path)
     parser.add_argument("audit_checkout", type=Path)
+    parser.add_argument(
+        "task",
+        nargs="?",
+        type=Path,
+        help="optional pre-filled campaign TASK.md to append to the prompt",
+    )
     parser.add_argument("-o", "--output", type=Path)
     args = parser.parse_args(argv)
 
-    text = render(args.oracle_checkout, args.audit_checkout)
+    text = render(args.oracle_checkout, args.audit_checkout, args.task)
     if args.output:
         args.output.write_text(text)
         print(

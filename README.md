@@ -1,6 +1,6 @@
 # Crustify
 
-Crustify is an agent harness for incrementally migrating production C and C++
+Crustify is an LLM agent harness for incrementally migrating production C and C++
 code to safe, idiomatic Rust. It can:
 
 - port an implementation to native Rust;
@@ -8,20 +8,22 @@ code to safe, idiomatic Rust. It can:
 - migrate selected subsystems, types, or functions while preserving FFI
   interoperability with the code left behind.
 
-Crustify combines agentic implementation and review with deterministic
-semantic planning, isolated worktrees, build and test gates, and compiled Rust
-safety analysis.
+Reliable translation takes more than a capable model, so Crustify equips its
+agents with the tools the job actually requires: a CodeQL-backed dependency
+oracle that resolves the semantic order of a closure, a crate of smart pointers
+and lifetime traits for safe interop across the FFI boundary, and a compiled
+Rust safety auditor with an optional undefined-behavior pass. Agents write and
+review code inside isolated worktrees, behind build, test, and safety gates.
 
 ## Agent harness
 
-Crustify uses a **two-agent architecture**. A campaign may run many isolated
-translator instances, but every agent acts in one of these two roles:
+Crustify uses a **two-agent architecture**:
 
 - The **orchestrator** configures campaigns, scaffolds repositories, schedules
   sub-campaigns, manages worktrees, lands changes, and runs regression gates.
-- A **translator** ports or wraps scheduled types and symbols, writes tests,
+- The **translator** agent ports or wraps scheduled types and symbols, writes tests,
   validates its work, and commits the result. Translator instances can also be
-  dispatched in review mode.
+  dispatched in review mode. Several translator instances can run concurrently.
 
 The harness supports two complementary reliability mechanisms:
 
@@ -32,7 +34,8 @@ The harness supports two complementary reliability mechanisms:
   code, challenge unsafe assumptions and behavioral equivalence, and repair
   confirmed defects.
 
-Deterministic tools support both roles; they are not additional agents.
+The oracle, ffibox, and the auditor serve both roles as tools; they are not
+additional agents.
 
 ## Components
 
@@ -45,12 +48,15 @@ Deterministic tools support both roles; they are not additional agents.
 
 Claude Code and OpenAI Codex are supported as agent backends. Campaigns can
 use API or subscription billing and can select a model independently for each
-agentic stage.
+agentic stage. The recommended baseline is `claude-opus-5` for the
+orchestrator, `gpt-5.6-sol` for translators, and `claude-opus-5` again for the
+review and UB passes.
 
 ## Quick start
 
 Crustify requires Python 3.13. Clone the four components side by side and
-install the three Python packages:
+install the three Python packages; `ffibox` is a Rust crate that generated
+wrappers depend on, so it is cloned but not installed:
 
 ```bash
 git clone https://github.com/crustify-rs/crustify-cli.git
@@ -63,21 +69,34 @@ python -m pip install -e crustify-oracle
 python -m pip install -e crustify-audit
 ```
 
-Render the orchestrator prompt and give it to a supported coding agent:
+Optionally copy and pre-fill the campaign questionnaire before starting the
+orchestrator:
+
+```bash
+cp crustify-cli/examples/TASK.md campaign-TASK.md
+# Edit campaign-TASK.md and answer as many questions as you want.
+```
+
+Render the orchestrator prompt—with or without that task—and give it to a
+supported coding agent:
 
 ```bash
 crustify-orchestrator-prompt \
-  ./crustify-oracle ./crustify-audit \
+  ./crustify-oracle ./crustify-audit ./campaign-TASK.md \
   -o orchestrator.md
 ```
 
+Omit `./campaign-TASK.md` to answer every unresolved question live.
 The orchestrator asks which repository and revision to use, whether to port or
 wrap it, where the campaign should start, which models to use, and how much
 autonomy it has. It presents a consolidated campaign brief for approval before
 mutating the target repository.
 
+Campaign reports follow the
+[`examples/wrappers-results.md`](examples/wrappers-results.md) template.
+
 For a reproducible container environment or a pre-filled campaign manifest,
-see [`bench/`](bench/README.md).
+see [`examples/`](examples/README.md).
 
 ## Campaign lifecycle
 
@@ -85,8 +104,12 @@ see [`bench/`](bench/README.md).
    brainstorm them with the orchestrator.
 2. **Setup:** establish the build and test baseline, extract CodeQL data,
    configure the oracle target, and scaffold compiling Rust crates.
-3. **Plan:** the oracle converts the selected dependency closure into ordered,
-   deterministic batches. Waves are internal scheduling artifacts.
+3. **Plan:** the oracle resolves the selected dependency closure into a
+   deterministic order and divides it into batches. Scheduling stays
+   orchestrator-driven — it chooses the objective, budgets, and parallelism per
+   wave — but that order is what makes those choices sound, since it guarantees
+   every consumer is presented with already-safe producers. Waves are internal
+   scheduling artifacts.
 4. **Translate:** isolated translator agents port, wrap, or review one batch at
    a time and verify both Rust and original project tests.
 5. **Land and audit:** the orchestrator reconciles parallel work, runs
@@ -121,9 +144,22 @@ new OpenSSL units across closures up to 12 layers deep. Generated wrappers
 priced consistently at roughly $0.008–$0.010 per line across the two unrelated
 codebases.
 
+Correctness is gated rather than assumed. Every unit landed only after
+`cargo check`, `cargo clippy`, and `cargo test --workspace` passed over the
+whole tree. Translators emit unit tests beside the code they write — 1,917 and
+1,368 `#[test]` functions across the two campaigns — and exercise both the C
+and Rust sides under the configured sanitizers wherever a test crosses the FFI
+boundary. `crustify-audit unsafe` then measured the landed surface at 5.6% of
+48,309 libgit2 lines and 7.4% of 34,235 OpenSSL lines, with 77.5% and 93.5% of
+unsafe blocks confined inside an `impl T`, reachable only through a wrapped
+type's accessors. An independent agentic review pass and the optional
+`crustify-audit ub` undefined-behavior pass run on request, outside the
+per-wave gates.
+
 Detailed cost, wall-time, unsafe-surface, and test measurements are preserved
-in [`bench/libgit2-openssl-results.md`](bench/libgit2-openssl-results.md).
-Newer per-campaign reports and reproducible inputs live under [`bench/`](bench/).
+in [`examples/libgit2-openssl-results.md`](examples/libgit2-openssl-results.md).
+Newer per-campaign reports and reproducible inputs live under
+[`examples/`](examples/).
 
 ## Documentation
 
@@ -133,7 +169,9 @@ Newer per-campaign reports and reproducible inputs live under [`bench/`](bench/)
   procedures for types, symbols, lifetimes, tests, and completion
 - [`docs/conventions.md`](docs/conventions.md): generated Rust conventions
 - [`docs/schemas/`](docs/schemas/): crate-placement and wave schemas
-- [`bench/TASK.md`](bench/TASK.md): campaign intake questionnaire
+- [`examples/TASK.md`](examples/TASK.md): optional pre-filled campaign questionnaire
+- [`examples/wrappers-results.md`](examples/wrappers-results.md): campaign results
+  template
 
 ## Acknowledgements
 

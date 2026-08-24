@@ -2,7 +2,7 @@
 #
 # Both commands run from the repo root:
 #
-#   docker build -t crustify bench/
+#   docker build -f examples/Dockerfile -t crustify .
 #
 #   docker run --rm -it --name crustify-libgit2 \
 #       -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
@@ -27,9 +27,9 @@
 #                      is throwaway. wrappers-results.md is seeded here once.
 #
 # THE CAMPAIGN IS NAMED: CRUSTIFY_CAMPAIGN picks a directory under the
-# checkout's bench/, and its TASK.md arrives through the mount above. Edit
+# checkout's examples/, and its TASK.md arrives through the mount above. Edit
 # that file on the host and the next run picks it up. Naming a campaign that
-# does not exist exits 2 with the path it looked for. bench/ is tracked, so a
+# does not exist exits 2 with the path it looked for. examples/ is tracked, so a
 # name resolves from the mounted crustify-cli checkout.
 #
 # A task living outside the checkout mounts at /campaign, and wins when
@@ -117,7 +117,7 @@ RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
 
 # The results table. Baked at /opt, seeded into /work by the entrypoint,
 # filled in place by the campaign.
-COPY wrappers-results.md /opt/wrappers-results.md
+COPY examples/wrappers-results.md /opt/wrappers-results.md
 
 # Absolute paths for a target's cli-config.json, which is machine-local and
 # cannot come from any clone. The orchestrator playbook's "Bootstrap
@@ -141,7 +141,7 @@ ENV CRUSTIFY_BACKEND=claude
 # neither, so set 1 only when the task description pre-answers both.
 ENV CRUSTIFY_HEADLESS=0
 
-# Which campaign under the checkout's bench/ to run. Empty means none: the
+# Which campaign under the checkout's examples/ to run. Empty means none: the
 # orchestrator starts on the prompt alone and asks what to port.
 ENV CRUSTIFY_CAMPAIGN=
 
@@ -184,12 +184,6 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       'uv pip install --python /opt/venv -e /opt/crustify-oracle' \
       'uv pip install --python /opt/venv -e /opt/crustify-audit' \
       '(cd /opt/crustify-oracle && codeql pack install)' \
-      '# /opt/crustify-cli is a mount point, so only a prompt generated now' \
-      '# matches the checkout driving this run: the render inlines the skill' \
-      '# index and resolves paths into that tree. Output goes to /tmp, outside' \
-      '# every checkout.' \
-      'crustify-orchestrator-prompt /opt/crustify-oracle /opt/crustify-audit -o /tmp/orchestrator.md' \
-      'prompt=/tmp/orchestrator.md' \
       '# A mounted /campaign wins; otherwise CRUSTIFY_CAMPAIGN names one' \
       '# under the checkout. A named campaign that is absent is fatal, so a' \
       '# typo costs one exit rather than a whole run on a task-less prompt.' \
@@ -197,13 +191,18 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       'if [ -f /campaign/TASK.md ]; then' \
       '    task=/campaign/TASK.md' \
       'elif [ -n "${CRUSTIFY_CAMPAIGN:-}" ]; then' \
-      '    task=/opt/crustify-cli/bench/${CRUSTIFY_CAMPAIGN}/TASK.md' \
+      '    task=/opt/crustify-cli/examples/${CRUSTIFY_CAMPAIGN}/TASK.md' \
       '    [ -f "$task" ] || { echo "no campaign at $task" >&2; exit 2; }' \
       'fi' \
+      '# /opt/crustify-cli is a mount point, so only a prompt generated now' \
+      '# matches the checkout driving this run. Passing the optional task to' \
+      '# the renderer keeps container and direct CLI usage identical.' \
       'if [ -n "$task" ]; then' \
-      '    cat /tmp/orchestrator.md "$task" > /tmp/prompt.md' \
-      '    prompt=/tmp/prompt.md' \
+      '    crustify-orchestrator-prompt /opt/crustify-oracle /opt/crustify-audit "$task" -o /tmp/orchestrator.md' \
+      'else' \
+      '    crustify-orchestrator-prompt /opt/crustify-oracle /opt/crustify-audit -o /tmp/orchestrator.md' \
       'fi' \
+      'prompt=/tmp/orchestrator.md' \
       '# Seeded, never overwritten: a resumed run keeps the table it filled.' \
       'if [ ! -f /work/wrappers-results.md ]; then' \
       '    cp /opt/wrappers-results.md /work/wrappers-results.md' \
