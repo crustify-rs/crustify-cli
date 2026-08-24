@@ -6,8 +6,8 @@
    - Answer: `https://gitlab.gnome.org/GNOME/libxml2.git`, `v2.15.3` (`c94eb0210183b9d7cb43f8e7fddc6be55843ef49`)
 2. **Should this campaign port the C implementation to Rust, or create safe Rust wrappers?**
    - Answer: create safe Rust wrappers
-3. **Which subsystems should be handled as separate sub-campaigns?**
-   - Answer: `public-api-types`, `xml-writer`, `dtd-validation`, `xpath-internals`, `catalog-resolution`, `sax2`, `public-api-remainder`
+3. **Where should this campaign start: one or two subsystems, a named subset of functions or types, or the whole target? Should sub-campaigns be defined now or brainstormed during the live session?**
+   - Answer: the whole target; define the `public-api-types`, `xml-writer`, `dtd-validation`, `xpath-internals`, `catalog-resolution`, `sax2`, and `public-api-remainder` sub-campaigns now
 
 # Sub-campaign questions
 

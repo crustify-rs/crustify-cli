@@ -27,8 +27,10 @@ the user has not already supplied:
 1. **Campaign source:** “Which repository and revision should this campaign use?”
 2. **Campaign objective:** “Should this campaign port the C implementation to
    Rust, or create safe Rust wrappers?”
-3. **Sub-campaigns:** “Which subsystems should be handled as separate
-   sub-campaigns?”
+3. **Campaign scope:** “Where should we start: with one or two subsystems, a
+   named subset of functions or types, or the whole target? We can define
+   separate sub-campaigns now, or brainstorm them together once the live
+   session starts.”
 4. For each sub-campaign, ask:
    - “Which implementation paths belong to this subsystem?”
    - “Which headers define its public API? I can derive candidates if needed.”

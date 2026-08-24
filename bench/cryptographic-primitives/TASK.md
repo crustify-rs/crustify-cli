@@ -6,8 +6,8 @@
    - Answer: `https://github.com/intel/cryptography-primitives`, `9d397ba62e2369b63171bc995e9c1179aaa5c0dc`
 2. **Should this campaign port the C implementation to Rust, or create safe Rust wrappers?**
    - Answer: create safe Rust wrappers
-3. **Which subsystems should be handled as separate sub-campaigns?**
-   - Answer: `public-api`
+3. **Where should this campaign start: one or two subsystems, a named subset of functions or types, or the whole target? Should sub-campaigns be defined now or brainstormed during the live session?**
+   - Answer: the whole public API; define the `public-api` sub-campaign now
 
 # Sub-campaign questions
 

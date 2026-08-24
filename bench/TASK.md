@@ -7,8 +7,10 @@
 2. **Should this campaign port the C implementation to Rust, or create safe
    Rust wrappers?**
    - Answer: `<port | wrap>`
-3. **Which subsystems should be handled as separate sub-campaigns?**
-   - Answer: `<sub-campaign names>`
+3. **Where should this campaign start: one or two subsystems, a named subset of
+   functions or types, or the whole target? Should sub-campaigns be defined now
+   or brainstormed during the live session?**
+   - Answer: `<starting scope>; <define sub-campaigns now | brainstorm live>`
 
 # Sub-campaign questions
 

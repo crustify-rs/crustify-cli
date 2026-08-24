@@ -6,8 +6,8 @@
    - Answer: `https://github.com/openssl/openssl.git`, `0ffaa24c6148514fa77f76a48ae48852df7be9e7`
 2. **Should this campaign port the C implementation to Rust, or create safe Rust wrappers?**
    - Answer: port the C implementation to Rust
-3. **Which subsystems should be handled as separate sub-campaigns?**
-   - Answer: `libssl-selected-surface`
+3. **Where should this campaign start: one or two subsystems, a named subset of functions or types, or the whole target? Should sub-campaigns be defined now or brainstormed during the live session?**
+   - Answer: a named subset of libssl types and functions; define the `libssl-selected-surface` sub-campaign now
 
 # Sub-campaign questions
 
