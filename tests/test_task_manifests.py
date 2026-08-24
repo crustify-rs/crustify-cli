@@ -12,8 +12,7 @@ class TaskManifestTests(unittest.TestCase):
         self.assertTrue(tasks)
 
         headings = (
-            "# Campaign questions", "# Sub-campaign questions",
-            "# Campaign execution questions",
+            "# Campaign questions", "# Campaign execution questions",
             "# Benchmark recording questions",
         )
         banned = ("wave-planning", "campaign-surface", "campaign.json")
@@ -27,9 +26,19 @@ class TaskManifestTests(unittest.TestCase):
                     self.assertNotIn(stale, text)
 
                 sub_campaigns = len(re.findall(r"^## `", text, re.MULTILINE))
-                self.assertGreater(sub_campaigns, 0)
+                if sub_campaigns:
+                    self.assertIn("# Sub-campaign questions", text)
                 for number in (1, 2, 3, 8, 9, 10, 11, 12, 13, 14, 15):
                     self.assertRegex(text, rf"(?m)^{number}\. \*\*")
+                question_three = re.search(
+                    r"(?ms)^3\. \*\*(.*?)\*\*\n\s+- Answer:", text
+                )
+                self.assertIsNotNone(question_three)
+                scope_question = question_three.group(1).lower()
+                self.assertIn("one or two subsystems", scope_question)
+                self.assertIn("functions or types", scope_question)
+                self.assertIn("whole target", scope_question)
+                self.assertIn("brainstormed", scope_question)
                 for number in (4, 5, 6, 7):
                     self.assertEqual(
                         len(re.findall(rf"(?m)^{number}\. \*\*", text)),

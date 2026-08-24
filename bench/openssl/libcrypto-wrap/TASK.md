@@ -6,8 +6,8 @@
    - Answer: `https://github.com/openssl/openssl`, `2924476b5591e691e904c4baf57894c526c4b8de`
 2. **Should this campaign port the C implementation to Rust, or create safe Rust wrappers?**
    - Answer: create safe Rust wrappers
-3. **Which subsystems should be handled as separate sub-campaigns?**
-   - Answer: `libcrypto-public-api`
+3. **Where should this campaign start: one or two subsystems, a named subset of functions or types, or the whole target? Should sub-campaigns be defined now or brainstormed during the live session?**
+   - Answer: a named subset of the libcrypto public API; define the `libcrypto-public-api` sub-campaign now
 
 # Sub-campaign questions
 
