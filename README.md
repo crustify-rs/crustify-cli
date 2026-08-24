@@ -34,12 +34,14 @@ git clone https://github.com/crustify-rs/ffibox.git
 
 ```bash
 git clone https://github.com/crustify-rs/crustify-oracle.git
+python -m pip install -e crustify-oracle
 ```
 
 **4. Clone [`crustify-audit`](https://github.com/crustify-rs/crustify-audit).**
 
 ```bash
 git clone https://github.com/crustify-rs/crustify-audit.git
+python -m pip install -e crustify-audit
 ```
 
 **5. Install an AI assistant** *(optional — skip if you already have one).*
@@ -260,7 +262,7 @@ Selection is section-blind, and every batch of a run carries the run's `--object
 **Workload Tuning.** Crustify also supports workload tuning: a symbol-route batch is
 capped by a configurable max number of symbols and `LoC` (currently `50` and `1000`), while
 a type-route batch is capped by a max number of types and a min number of fields
-(currently `5` and `10`). These are oracle scheduling parameters. Agents with separate batches
+(currently `5` and `20`). These are oracle scheduling parameters. Agents with separate batches
 run concurrently in **isolated worktrees** via a configurable concurrency threshold, i.e. max nr of
 parallel agents. The orchestrator agent chooses how to best use the scheduler for driving
 translation campaigns.

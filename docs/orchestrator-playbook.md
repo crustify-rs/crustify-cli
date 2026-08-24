@@ -24,9 +24,10 @@ Three artifact tiers decide where a file goes.
 Repo-tier describes the whole repository. Oracle targets describe C inventory;
 campaigns record schedulable waves. A repo can carry several of each.
 
-Every authored file has a commented example under `specs/`. Read the
-template before authoring — the `_comment_*` keys carry the field semantics and
-are the only complete spec.
+Every authored file has a commented example under `specs/` — except
+`oracle-config.json`, whose example lives in the standalone oracle checkout's
+own `specs/`. Read the template before authoring — the `_comment_*` keys carry
+the field semantics and are the only complete spec.
 
 ## Phase 1 — Setup
 
@@ -48,6 +49,13 @@ From an untouched checkout to the first commit of the initial Rust tree.
 
 On macOS arm64 the CodeQL bundle needs Rosetta.
 
+**A provisioned environment has already done all of this.** When
+`CRUSTIFY_DEP_CRUSTIFY` is set, the toolchains are installed, the four
+checkouts are in place and the Python projects are installed editable — the
+table above is already satisfied. Do not clone or reinstall any of it: a second
+copy is not the one on `PATH`, and the paths the agents are handed below must
+be the provisioned ones. Skip to step 2.
+
 ### 2. Bootstrap `crustify/`
 
 ```bash
@@ -66,6 +74,9 @@ Author `<repo>/crustify/cli-config.json` from `specs/cli-config.json`:
 **Absolute paths only.** An agent runs inside a git worktree, so nothing
 relative to a cwd resolves the same way twice. The file is machine-local and
 gitignored — it reaches a worktree through `worktree.link_shared`, not git.
+
+**Take the paths from the environment when it offers them.** A provisioned
+environment may export exactly these values.
 
 For translators, list any of `crustify-oracle`, `ffibox` and
 `crustify-audit` under `prompt_capabilities.translator`. A missing capability
@@ -304,7 +315,8 @@ Do not include completed items when authoring the next oracle schedule.
 Regardless of the target set, the first translation waves have to be the raw lifetime
 discovery set, which will produce release/clone strategies for owned pointers that host
 type-erased and NUL-terminated objects. Generate campaigns with
-`schedule --lifetime-for void` and then `schedule --lifetime-for string`.
+`schedule --lifetime-for void` and then `schedule --lifetime-for string`. When resuming
+an interrupted campaign, skip if this stage has already been carried.
 
 ### Land and promote
 
@@ -367,6 +379,6 @@ Fill whatever evaluation table the user provides.
 ## Self-repair
 
 If throughout driving campaigns you discover any bugs or flaws in `crustify-cli`,
-`crustify-oracle`, or `ffibox`, including new generic primitives that can be used
-for C/Rust interop in `ffibox`, then create a new branch on the respective repository,
+`crustify-oracle`, `crustify-audit`, or `ffibox`, including new generic primitives that can be used
+for C/Rust interop in `ffibox`, then create a new branch and worktree on the respective repository,
 naming it accordingly, and develop a patch for the fix / enhancement.

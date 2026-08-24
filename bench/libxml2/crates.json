@@ -26,11 +26,11 @@
         "libc"
       ],
       "_comment_modules": [
-        "Fill during Phase 1, after `extract-ql`.",
+        "Filled per wave in Phase 2, after `extract-ql`.",
         "",
         "A wrap-only target homes its entities by IMPORT HEADER, not by",
-        "translation unit: the orchestrator routes a wrap item through its",
-        "the oracle API declaration inventory, so the module tree should mirror",
+        "translation unit: the orchestrator routes a wrap item through the",
+        "oracle's API declaration inventory, so the module tree should mirror",
         "include/libxml/ rather than the 55 flat .c files. Expect roughly one",
         "module per public header, with `tu: null` on every `.rs` - nothing",
         "here is ported, so no module mirrors a C translation unit.",

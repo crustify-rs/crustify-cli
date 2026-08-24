@@ -70,6 +70,11 @@ The translator replaces it with exactly one filled doc-comment anchor:
 |---|---|
 | `/// Wraps: <name>{.<field>}` | safe view over the FFI seam |
 | `/// Replaces: <name>{.<field>}` | native Rust translation |
+| `/// Field: <name>.<field>` | field accessor over a wrapped type |
+
+`Field:` applies to a field only. It is what a field accessor emitted on a
+wrapped type carries, and campaign coverage counts distinct `type.field` paths
+that reached one.
 
 The TODO does not survive beside the filled anchor. A surviving TODO is open
 work. Duplicate a filled anchor only when several wrappers intentionally
