@@ -27,7 +27,7 @@ def render(oracle: Path, audit: Path) -> str:
     template = (prompts / "orchestrator.md").read_text()
 
     sources = (
-        prompts / "skill-orchestrator.md",
+        prompts / "skills" / "orchestrator.md",
         oracle.resolve() / "SKILL.md",
         audit.resolve() / "SKILL.md",
     )

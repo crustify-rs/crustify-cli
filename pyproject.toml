@@ -19,4 +19,4 @@ where = ["src"]
 include = ["crustify*"]
 
 [tool.setuptools.package-data]
-crustify = ["prompts/*.md"]
+crustify = ["prompts/*.md", "prompts/skills/*.md"]

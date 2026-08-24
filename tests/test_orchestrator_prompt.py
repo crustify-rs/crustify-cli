@@ -43,7 +43,7 @@ class OrchestratorPromptTests(unittest.TestCase):
         self.assertIn("crustify-audit — Standalone Rust safety review.", prompt)
         self.assertIn(str(source / "docs" / "conventions.md"), prompt)
         self.assertNotIn("ffibox —", prompt)
-        self.assertNotIn("skill-oracle —", prompt)
+        self.assertNotIn("- oracle —", prompt)
         self.assertNotIn("<!-- CONVENTIONS_PATH -->", prompt)
         self.assertNotIn("<!-- SKILLS -->", prompt)
 

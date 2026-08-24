@@ -1,7 +1,7 @@
 # crustify-orchestrator
 
 - Skill name: crustify-orchestrator
-- Doc path: ../../../docs/orchestrator-playbook.md
+- Doc path: ../../../../docs/orchestrator-playbook.md
 - Description: How to drive crustify end to end, in two phases. Setup: toolchain
   install through the first commit of the initial Rust tree — authoring
   `build.json`, `cli-config.json`, `crates.json` and a target's `oracle-config.json`, building
