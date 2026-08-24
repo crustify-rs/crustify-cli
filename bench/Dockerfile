@@ -95,7 +95,8 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     && rustup toolchain install nightly --component rustc-dev --component llvm-tools \
     && cargo install bindgen-cli --locked
 
-# 4. CodeQL CLI. The cpp pack is installed from crustify's qlpack below.
+# 4. CodeQL CLI. The cpp pack is installed from crustify-oracle's qlpack
+#    by the entrypoint, once that checkout is resolved.
 RUN curl -fsSL -o /tmp/codeql.zip \
       "https://github.com/github/codeql-cli-binaries/releases/download/${CODEQL_VERSION}/codeql-linux64.zip" \
     && unzip -q /tmp/codeql.zip -d /opt && rm /tmp/codeql.zip \
@@ -119,7 +120,10 @@ RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
 COPY wrappers-results.md /opt/wrappers-results.md
 
 # Absolute paths for a target's cli-config.json, which is machine-local and
-# cannot come from any clone.
+# cannot come from any clone. The orchestrator playbook's "Bootstrap
+# crustify/" reads these by name: set here, copied verbatim into `deps` and
+# `bins`. CRUSTIFY_DEP_CRUSTIFY doubles as the "this environment is already
+# provisioned" flag that tells it not to re-clone the checkouts above.
 ENV CRUSTIFY_DEP_CRUSTIFY=/opt/crustify-cli \
     CRUSTIFY_DEP_FFIBOX=/opt/ffibox \
     CRUSTIFY_DEP_ORACLE=/opt/crustify-oracle \
@@ -180,10 +184,10 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       'uv pip install --python /opt/venv -e /opt/crustify-oracle' \
       'uv pip install --python /opt/venv -e /opt/crustify-audit' \
       '(cd /opt/crustify-oracle && codeql pack install)' \
-      '# Quick Setup step 4. /opt/crustify-cli is a mount point, so only a' \
-      '# prompt generated now matches the checkout driving this run: the' \
-      '# render inlines the skill index and resolves paths into that tree.' \
-      '# Output goes to /tmp, outside both checkouts.' \
+      '# /opt/crustify-cli is a mount point, so only a prompt generated now' \
+      '# matches the checkout driving this run: the render inlines the skill' \
+      '# index and resolves paths into that tree. Output goes to /tmp, outside' \
+      '# every checkout.' \
       'crustify-orchestrator-prompt /opt/crustify-oracle /opt/crustify-audit -o /tmp/orchestrator.md' \
       'prompt=/tmp/orchestrator.md' \
       '# A mounted /campaign wins; otherwise CRUSTIFY_CAMPAIGN names one' \

@@ -87,7 +87,8 @@ no `.rs` anchor is ever laid for them.
 struct/union/enum with one synthetic placeholder (`(unnamed enum)`,
 `(unnamed class/struct/union)`), so dozens of distinct definitions collide on a
 single string that nothing can reference. They are filtered by the oracle,
-so they never reach here. Their contents are not lost: `entities/fields.ql`
+so they never reach here. Their contents are not lost: the oracle's
+`entities/fields.ql`
 flattens an anonymous member into its named parent under a qualified field name
 (`asn1_type_st` gets `value.asn1_string`), and that parent is a member as usual.
 
