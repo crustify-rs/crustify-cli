@@ -130,7 +130,7 @@ class CrustifyAgent:
         by agents whose artifact is project-wide and target-independent.
 
     Agent logs always go to the campaign tier
-    (`crustify/campaigns/logs/<session>/`), regardless of ``tier``,
+    (`crustify/campaigns/<target>/logs/<session>/`), regardless of ``tier``,
     because they're scoped to the invocation, not the repository.
     """
 
@@ -167,8 +167,9 @@ class CrustifyAgent:
         # Repo-relative target id (e.g. "ssl/statem", or "." for the repo
         # root) — the value the prompt passes as crustify's second positional.
         self.target_rel = self.layout.rel_target(self.target)
-        # Campaign store (tracked wave plans, logs and invocation-local artifacts).
-        self.campaign_store = ArtifactStore(self.layout.campaigns)
+        # Target-scoped campaign store (tracked wave plans and logs).
+        self.campaign_store = ArtifactStore(
+            self.layout.campaign_dir(self.target))
         # Repo-root-tier store: crustify/ (analysis, build.json).
         self.root_store = ArtifactStore(self.layout.root)
         # Convenience alias for the tier this agent's output belongs to.

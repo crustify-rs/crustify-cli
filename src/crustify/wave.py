@@ -159,7 +159,7 @@ def execute(target: Path, wave_path: Path, *, objective: str,
             f"translate: wave targets {doc.get('oracle_target')!r}, not {expected!r}")
     from crustify import config
     from crustify.agentlog import open_session_log
-    log_root = layout.logs / config.SESSION_ID
+    log_root = layout.logs(target) / config.SESSION_ID
     resolved_wave = Path(wave_path).resolve()
     raw_items = [item for step in doc["steps"]
                  for batch in step.get("batches") or []

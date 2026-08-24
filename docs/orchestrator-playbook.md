@@ -19,7 +19,7 @@ Three artifact tiers decide where a file goes.
 |---|---|---|---|
 | repo | `<repo>/crustify/` | `build.json`, `crates.json`, `cli-config.json` | `rust/` |
 | oracle | `<repo>/crustify/oracle/` | `targets/<target>/oracle-config.json`, `ownership-store.json` | `codeql/{db,t1,t2}/`, `.cache/` |
-| campaign | `<repo>/crustify/campaigns/` | `<wave-name>.json` | `logs/<session>/` |
+| campaign | `<repo>/crustify/campaigns/<target>/` | `<wave-name>.json` | `logs/<session>/` |
 
 Repo-tier describes the whole repository. Oracle targets describe C inventory;
 campaigns contain tracked wave plans and the shared execution log namespace. A
@@ -205,8 +205,12 @@ logs directory:
 
 ```bash
 git -C <repo> checkout -b crustify/<target>-<model>
-mkdir -p <repo>/crustify/campaigns/logs
+mkdir -p <repo>/crustify/campaigns/<target>/logs
 ```
+
+This scaffolding is orchestrator-owned. `crustify-oracle schedule --output`
+writes the requested wave file but fails if its parent directory does not
+already exist.
 
 ### 7. Seed crate shells
 
@@ -265,7 +269,7 @@ See `docs/schemas/wave.md` for the producer/consumer contract.
 Before `translate`, the orchestrator:
 
 1. runs `crustify-oracle schedule` with the selection and batch budgets, writing
-   `crustify/campaigns/<wave-name>.json`;
+   `crustify/campaigns/<target>/<wave-name>.json`;
 2. runs imported campaigns for any unsatisfied dependencies;
 3. homes each wave item in `crates.json`;
 4. creates its `.rs` files and connects them to the crate root;
@@ -274,11 +278,11 @@ Before `translate`, the orchestrator:
 
 ```bash
 crustify-oracle <repo_root> <target> schedule \
-  --output <repo>/crustify/campaigns/<wave-name>.json \
+  --output <repo>/crustify/campaigns/<target>/<wave-name>.json \
   --name <items...> [--transitive] [--api-headers-only] \
   [--max-syms N] [--max-loc N] [--max-types N] [--min-fields N]
 crustify-cli --parallel-max N <repo_root> <target> translate \
-  <repo>/crustify/campaigns/<wave-name>.json \
+  <repo>/crustify/campaigns/<target>/<wave-name>.json \
   --objective wrap --dry-run
 ```
 

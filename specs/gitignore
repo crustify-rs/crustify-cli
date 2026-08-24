@@ -12,7 +12,7 @@ oracle/codeql
 oracle/.cache
 
 # Campaign plans are tracked; execution logs are not.
-campaigns/logs
+campaigns/**/logs
 
 # Deterministic safety scan output.
 audit/unsafe.json

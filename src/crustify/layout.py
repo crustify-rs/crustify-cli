@@ -83,9 +83,12 @@ class Layout:
 
     @property
     def campaigns(self) -> Path:
-        """Tracked wave plans and invocation-local campaign artifacts."""
+        """Root of all target-scoped campaign artifacts."""
         return self.root / "campaigns"
 
-    @property
-    def logs(self) -> Path:
-        return self.campaigns / "logs"
+    def campaign_dir(self, target: Path) -> Path:
+        """Tracked wave plans and logs for one explicit oracle target."""
+        return self.campaigns / self.rel_target(target)
+
+    def logs(self, target: Path) -> Path:
+        return self.campaign_dir(target) / "logs"
