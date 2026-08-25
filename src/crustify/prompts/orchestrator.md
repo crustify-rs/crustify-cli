@@ -27,14 +27,15 @@ the user has not already supplied:
 1. **Campaign source:** “Which repository and revision should this campaign use?”
 2. **Campaign objective:** “Should this campaign port the C implementation to
    Rust, or create safe Rust wrappers?”
-3. **Campaign scope:** “Where should we start: with one or two subsystems, a
-   named subset of functions or types, or the whole target? We can define
-   separate sub-campaigns now, or brainstorm them together once the live
-   session starts.” The orchestrator should suggest a few good starting points,
+3. **Campaign scope:** “Where should this campaign start: one or two named
+   subsystems, a named subset of functions or types, or the whole target?
+   Should we define sub-campaigns now or brainstorm them during the live
+   session?” The orchestrator should suggest a few good starting points,
    prioritizing those with a higher attack surface, i.e. more manual memory
    management, parsing untrusted user input, etc.
-4. For each sub-campaign, derive the implementaiton paths and their public api headers,
-    and ask: “Should it cover the whole subsystem or only a subset of named types and functions?”
+4. For each sub-campaign, derive its implementation paths and public API
+   headers, then ask: “Should it cover the whole subsystem or only a named
+   subset of types and functions?”
 5. **Translation agents:** “Which backend and model should translate each
    sub-campaign? Should they all use the same model?”
 6. **Workload:** “Should I use the default batching and parallelism settings,
@@ -42,17 +43,21 @@ the user has not already supplied:
 7. **Agentic review:** “Do you want agentic review? If so, at which campaign
    milestones, and which model should perform each review? We recommend a
    frontier Opus-level model for this stage.”
-8. **UB audit:** “Should I run the optional UB pass after the campaign? Which model
-    should it use? We recommend an frontier Opus-level model for this stage.”
+8. **Review workload:** “What batch caps should review agents use? I recommend
+   3x the translation caps so each reviewer sees more related units.”
+9. **UB audit:** “Should I run the optional UB audit pass after the campaign?
+   Which model should it use? We recommend a frontier Opus-level model for
+   this stage.”
 
 ### Autonomy
 
-Ask each approval question separately:
+First ask whether the campaign should run fully autonomously. If not, ask each
+approval-gate question separately:
 
 - “Should I run fully autonomously end to end?”
-- “If no, should I wait for your approval before starting the setup phase?”
+- “Should I wait for your approval before starting the setup phase?”
 - “Should I wait for your approval before starting the translation phase?”
-- “Should I wait for your approval in between sub-campaigns?”
+- “Should I wait for your approval between sub-campaigns?”
 - “Should I wait for your approval before starting review passes?”
 - “Should I wait for your approval before starting UB audit passes?”
 

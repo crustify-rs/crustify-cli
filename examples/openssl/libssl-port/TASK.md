@@ -28,7 +28,9 @@
    - Answer: defaults except `max-types: 1`; parallelism is orchestrator-selected
 9. **Do you want agentic review? At which milestones and with which model?**
    - Answer: no
-10. **Run the optional agentic UB pass? If so, with which model?**
+10. **What batch caps should review agents use? We recommend 3x the translation caps.**
+    - Answer: not applicable
+11. **Run the optional agentic UB pass? If so, with which model?**
     - Answer: no
 
 # Autonomy questions
@@ -48,8 +50,6 @@ A6. **Should I wait for your approval before starting UB audit passes?**
 
 # Benchmark recording questions
 
-11. **Which backend and model run the orchestrator?**
-    - Answer: ask the user, showing available backends and models
 12. **Which billing mode should agentic stages use?**
     - Answer: `subscription`
 13. **Where and in what format should results be recorded?**

@@ -28,7 +28,9 @@
    - Answer: defaults except `max-types: 2`; parallelism is orchestrator-selected
 9. **Do you want agentic review? At which milestones and with which model?**
    - Answer: at campaign end over all translated output, using `gpt-5.6-sol`
-10. **Run the optional agentic UB pass? If so, with which model?**
+10. **What batch caps should review agents use? We recommend 3x the translation caps.**
+    - Answer: recommended 3x
+11. **Run the optional agentic UB pass? If so, with which model?**
     - Answer: no
 
 # Autonomy questions
@@ -48,8 +50,6 @@ A6. **Should I wait for your approval before starting UB audit passes?**
 
 # Benchmark recording questions
 
-11. **Which backend and model run the orchestrator?**
-    - Answer: `codex`, `gpt-5.6-sol`
 12. **Which billing mode should agentic stages use?**
     - Answer: `api`
 13. **Where and in what format should results be recorded?**

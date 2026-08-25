@@ -7,7 +7,7 @@
 2. **Should this campaign port the C implementation to Rust, or create safe Rust wrappers?**
    - Answer: port the C implementation to Rust
 3. **Where should this campaign start: one or two subsystems, a named subset of functions or types, or the whole target? Should sub-campaigns be defined now or brainstormed during the live session?**
-   - Answer: the whole `src` target; define the `src` sub-campaign now
+   - Answer: until we reach 10K LoC of C ported to native Rust
 
 # Sub-campaign questions
 
@@ -18,23 +18,25 @@
 5. **Which headers define its public API?**
    - Answer: derive from `src/`
 6. **Should it cover the whole subsystem or only named types and functions?**
-   - Answer: a user-selected subset
+   - Answer: until we reach 10K LoC of C ported to native Rust, you propose sub-campaigns, then wait for my approval to go
 7. **Which backend and model should translate this sub-campaign?**
    - Answer: `codex`, `gpt-5.6-sol`
 
 # Campaign execution questions
 
 8. **Use default workload settings, or customize them?**
-   - Answer: defaults except `max-types: 2`; parallelism is orchestrator-selected
+   - Answer: parallelism is orchestrator-selected
 9. **Do you want agentic review? At which milestones and with which model?**
-   - Answer: after raw lifetime discovery and at campaign end, using `gpt-5.6-sol`
-10. **Run the optional agentic UB pass? If so, with which model?**
-    - Answer: only with explicit approval, using `gpt-5.6-sol`
+   - Answer: after raw lifetime discovery and at each sub-campaign end, using `claude-opus-5`
+10. **What batch caps should review agents use? We recommend 3x the translation caps.**
+    - Answer: recommended 3x
+11. **Run the optional agentic UB pass? If so, with which model?**
+    - Answer: only with explicit approval, using `claude-opus-5`, at campaign end
 
 # Autonomy questions
 
 A1. **Should I run fully autonomously end to end?**
-    - Answer: no
+    - Answer: yes
 A2. **If no, should I wait for your approval before starting the setup phase?**
     - Answer: no
 A3. **Should I wait for your approval before starting the translation phase?**
@@ -48,9 +50,9 @@ A6. **Should I wait for your approval before starting UB audit passes?**
 
 # Benchmark recording questions
 
-11. **Which backend and model run the orchestrator?**
-    - Answer: `codex`, `gpt-5.6-sol`
 12. **Which billing mode should agentic stages use?**
-    - Answer: `api`
+    - Answer: `api` for codex, `subscription` for claude
 13. **Where and in what format should results be recorded?**
     - Answer: `<repo-checkout>/crustify/results.md`, standard template
+
+The campaign is in flight, but has been interrupted. Assess the current state and proceed with the instructions.
