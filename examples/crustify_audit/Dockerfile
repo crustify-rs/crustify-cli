@@ -192,12 +192,16 @@ RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
         curl -fsSL https://chatgpt.com/codex/install.sh | sh; \
     fi
 
-# Bake in a runnable harness. A bind mount at this path replaces these sources,
+# Bake in a runnable harness -- the WHOLE repository, not just `src`. The
+# audit package imports `crustify.core`, and the orchestrator is told to read
+# templates out of `examples/`, so a partial copy works only until something
+# reaches past it. Nothing expensive follows this layer (the sanitizer
+# self-tests are far above), so a cache miss here costs seconds.
+# A bind mount at this path replaces these sources,
 # and PYTHONPATH intentionally makes that mounted checkout win over the wheel
 # installed in the virtual environment. The metrics driver remains a run-time
 # build because it must match the nightly compiler driving that run.
-COPY pyproject.toml /opt/crustify-audit/pyproject.toml
-COPY src /opt/crustify-audit/src
+COPY . /opt/crustify-audit
 RUN uv pip install --python /opt/venv/bin/python --no-deps /opt/crustify-audit
 ENV PYTHONPATH=/opt/crustify-audit/src
 

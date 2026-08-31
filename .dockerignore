@@ -1,5 +1,6 @@
-# Applies to BOTH images: they build with the repository root as context.
-# Only what is useless to every build belongs here.
+# Both images build with the repository root as context and copy it whole.
+# Only what no build can use belongs here; source layout is not filtered,
+# because each tool now reaches into the other's package (`crustify.core`).
 **/__pycache__/
 **/*.pyc
 .git/
