@@ -76,7 +76,16 @@ def price_agent(path: str | Path, prices: dict,
         return None, 0, ""
     if not isinstance(d, dict):
         return None, 0, ""
-    reqs = [normalize(r) for r in (d.get("records") or [])]
+    # Two shapes, and both must stay priceable. `requests` is the current
+    # one: already per-request and in crustify's exclusive buckets. `records`
+    # is what the audit tool wrote before the harness was shared -- raw
+    # provider objects, one aggregate per run -- and every usage file already
+    # committed to the tracker is in it. Dropping that reader would make the
+    # published cost column unreproducible.
+    if "requests" in d:
+        reqs = list(d.get("requests") or [])
+    else:
+        reqs = [normalize(r) for r in (d.get("records") or [])]
     tokens = sum(sum(r.values()) for r in reqs)
     model = d.get("model") or model
     provider = d.get("provider") or provider

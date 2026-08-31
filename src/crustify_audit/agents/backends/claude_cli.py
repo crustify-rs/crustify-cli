@@ -5,6 +5,9 @@ import json
 import shutil
 import os
 import subprocess
+from pathlib import Path
+
+from crustify.core.usage import _read_usage, _transcript_path
 
 from crustify_audit.agentlog import AgentLog
 
@@ -53,16 +56,25 @@ class ClaudeCliBackend:
         proc = subprocess.Popen(
             cmd, cwd=work_dir, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1)
-        usage: list[dict] = []
         session = ""
         for line in proc.stdout or ():
-            log.write(line)
+            log.line(line.rstrip("\n"))
             try:
                 evt = json.loads(line)
             except ValueError:
                 continue
             session = evt.get("session_id") or session
-            if evt.get("type") == "result" and "usage" in evt:
-                usage.append(evt["usage"])
         proc.wait()
-        log.record_usage(usage, session, provider, model)
+        # Usage comes from the CLI's own transcript, not from the stream: the
+        # stream's `result` events are one AGGREGATE per run, and rates are
+        # tiered, so pricing an aggregate charges a session of many modest
+        # requests at a tier none of them reached. The transcript also repeats
+        # records, which the reader dedupes by message id.
+        requests: list[dict] = []
+        seen_model = ""
+        if session:
+            transcript = _transcript_path(session, Path(work_dir))
+            if transcript is not None:
+                requests, seen_model = _read_usage(transcript)
+        log.usage({"provider": provider, "model": seen_model or model,
+                   "session_id": session, "requests": requests})

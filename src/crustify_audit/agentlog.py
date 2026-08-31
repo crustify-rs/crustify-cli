@@ -1,68 +1,27 @@
-"""agentlog.py — per-agent transcript + usage.
+"""Per-agent log files for an audit run.
 
-Minimal by comparison with crustify-cli's, which has to reconcile usage across
-a wave of concurrent agents. One agent means one file and one usage record, so
-this is a context manager over two paths and nothing more.
-
-Cost is computed from token counts by a rate table, never from
-provider-reported dollars -- the same rule crustify-cli's log_cost.py follows,
-for the same reason: providers report post-discount figures that are not
-comparable across runs.
+The writer itself is :class:`crustify.core.agentlog.AgentLog`; only the
+naming convention is audit's. Timestamps are second-resolution, so `tag`
+distinguishes AGENTS RUNNING CONCURRENTLY -- two spawned in the same second
+would otherwise share a stem and one would lose its transcript entirely.
 """
 from __future__ import annotations
 
 import contextlib
-import json
 import time
 from pathlib import Path
 
+from crustify.core.agentlog import AgentLog
 
-class AgentLog:
-    def __init__(self, stem: Path) -> None:
-        self.stem = stem
-        self.transcript = stem.with_suffix(".log")
-        self.usage = stem.with_suffix(".usage.json")
-        self._fh = None
-        self._started = time.time()
-
-    def write(self, text: str) -> None:
-        if self._fh is not None:
-            self._fh.write(text)
-            self._fh.flush()
-
-    def record_usage(self, rows: list[dict], session_id: str = "",
-                     provider: str = "", model: str = "") -> None:
-        """Write the token record, NAMING what it should be priced against.
-
-        A rate is only meaningful together with the service and model that
-        billed it, and a file that does not say which is a file someone later
-        has to guess about. That guess is what priced a $78 run at $235.
-        """
-        self.usage.write_text(json.dumps({
-            "session_id": session_id,
-            "provider": provider,
-            "model": model,
-            "started_at": self._started,
-            "ended_at": time.time(),
-            "records": rows,
-        }, indent=2) + "\n")
+__all__ = ["AgentLog", "open_agent_log"]
 
 
 @contextlib.contextmanager
 def open_agent_log(logs_dir: Path, stage: str, tag: str | None = None):
-    """Open a transcript. `tag` distinguishes AGENTS RUNNING CONCURRENTLY.
-
-    The stamp is second-resolution, so two agents spawned in the same second
-    would otherwise write the same file and one would lose its transcript
-    entirely.
-    """
-    logs_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    name = f"{stage}-{stamp}" + (f"-{tag}" if tag else "")
-    log = AgentLog(logs_dir / name)
-    log._fh = log.transcript.open("w")
+    stem = f"{stage}-{stamp}" + (f"-{tag}" if tag else "")
+    log = AgentLog(Path(logs_dir), stem, console=False)
     try:
         yield log
     finally:
-        if log._fh:
-            log._fh.close()
+        log.close()

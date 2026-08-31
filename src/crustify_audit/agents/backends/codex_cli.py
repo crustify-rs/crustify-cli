@@ -91,6 +91,8 @@ class CodexCliBackend:
             cmd, cwd=work_dir, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1)
         for line in proc.stdout or ():
-            log.write(line)
+            log.line(line.rstrip("\n"))
         proc.wait()
-        log.record_usage([], "", provider, model)
+        # No codex transcript reader yet, so this run is UNPRICED rather than
+        # wrongly priced: `requests: []` makes that explicit downstream.
+        log.usage({"provider": provider, "model": model, "requests": []})

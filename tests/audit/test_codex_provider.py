@@ -8,7 +8,15 @@ from crustify_audit.models import resolve
 
 
 class _Log:
-    def write(self, _line):
+    """Stands in for crustify.core.agentlog.AgentLog."""
+
+    def line(self, _text):
+        pass
+
+    def write(self, _text):
+        pass
+
+    def usage(self, _record):
         pass
 
     def record_usage(self, rows, session_id="", provider="", model=""):
