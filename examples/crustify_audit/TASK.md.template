@@ -1,4 +1,3 @@
----
 
 Fill in every mandatory answer before a headless run.
 Optional answers may be left unresolved for the orchestrator to decide.
@@ -53,3 +52,7 @@ Unanswered optional questions are decided by the orchestrator.
 ## Additional instructions
 
 Unless otherwise stated, match the structure of the given results table exactly.
+
+If the user provided a centralized audit tracker at `/opt/crustify-audit-tracker/targets/<target>/`,
+then copy into it all the artifacts that are not gitignored from `<target repo>/crustify/audit/*`
+and record the results in the tracker's aggregate `README.md`.
