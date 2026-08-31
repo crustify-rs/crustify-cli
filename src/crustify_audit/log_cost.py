@@ -37,28 +37,6 @@ from crustify.core.pricing import (  # noqa: F401 - re-exported
 )
 
 
-def normalize(record: dict) -> dict:
-    """One Anthropic-shaped usage record -> the fields pricing needs.
-
-    The 5m/1h split matters and is not cosmetic: a 1-hour cache write bills at
-    roughly twice a 5-minute one. Records predating the `cache_creation`
-    breakdown carry only the flat total, which is charged at the 5m rate --
-    the same assumption the provider made when it wrote them.
-    """
-    cc = record.get("cache_creation") or {}
-    w5 = cc.get("ephemeral_5m_input_tokens", 0)
-    w1h = cc.get("ephemeral_1h_input_tokens", 0)
-    if not (w5 or w1h):
-        w5 = record.get("cache_creation_input_tokens", 0)
-    return {
-        "input_tokens": record.get("input_tokens", 0),
-        "output_tokens": record.get("output_tokens", 0),
-        "cache_read_tokens": record.get("cache_read_input_tokens", 0),
-        "cache_write_tokens": w5,
-        "cache_write_1h_tokens": w1h,
-    }
-
-
 def price_agent(path: str | Path, prices: dict,
                 provider: str = "", model: str = "") -> tuple[float | None, int, str]:
     """(cost_usd, tokens, model) for one `*.usage.json`.
@@ -76,16 +54,7 @@ def price_agent(path: str | Path, prices: dict,
         return None, 0, ""
     if not isinstance(d, dict):
         return None, 0, ""
-    # Two shapes, and both must stay priceable. `requests` is the current
-    # one: already per-request and in crustify's exclusive buckets. `records`
-    # is what the audit tool wrote before the harness was shared -- raw
-    # provider objects, one aggregate per run -- and every usage file already
-    # committed to the tracker is in it. Dropping that reader would make the
-    # published cost column unreproducible.
-    if "requests" in d:
-        reqs = list(d.get("requests") or [])
-    else:
-        reqs = [normalize(r) for r in (d.get("records") or [])]
+    reqs = list(d.get("requests") or [])
     tokens = sum(sum(r.values()) for r in reqs)
     model = d.get("model") or model
     provider = d.get("provider") or provider
