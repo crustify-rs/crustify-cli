@@ -15,7 +15,7 @@
     "  * `crustify`      - the crustify checkout. Supplies",
     "                      core translator/orchestrator skills; falls back to",
     "                      the installed package's own tree when absent.",
-    "  * `crustify-oracle` - standalone semantic oracle. Its generic SKILL.md",
+    "  * `wavefront` - standalone semantic oracle. Its generic SKILL.md",
     "                      can join a translator's prompt.",
     "  * `ffibox`         - the wrap-primitive crate. Its generic `SKILL.md`",
     "                      can join a translator's prompt, and the orchestrator writes this path into",
@@ -26,7 +26,7 @@
   ],
   "deps": {
     "crustify": "/absolute/path/to/crustify",
-    "crustify-oracle": "/absolute/path/to/crustify-oracle",
+    "wavefront": "/absolute/path/to/wavefront",
     "ffibox": "/absolute/path/to/ffibox",
     "crustify-audit": "/absolute/path/to/crustify-audit"
   },
@@ -39,7 +39,7 @@
   ],
   "bins": {
     "crustify": "/absolute/path/to/venv/bin/crustify",
-    "crustify-oracle": "/absolute/path/to/venv/bin/crustify-oracle",
+    "wavefront": "/absolute/path/to/venv/bin/wavefront",
     "crustify-audit": "/absolute/path/to/venv/bin/crustify-audit"
   },
 
@@ -48,11 +48,11 @@
     "its generic skill metadata and any Crustify role guidance to that agent's",
     "system prompt. Omitting one does NOT hide its binary, dependency, path or",
     "source from the agent's shell. An absent role list enables none.",
-    "Known translator capabilities: crustify-oracle, ffibox, crustify-audit."
+    "Known translator capabilities: wavefront, ffibox, crustify-audit."
   ],
   "prompt_capabilities": {
     "translator": [
-      "crustify-oracle",
+      "wavefront",
       "ffibox",
       "crustify-audit"
     ]

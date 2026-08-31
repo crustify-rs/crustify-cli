@@ -260,7 +260,7 @@ crustify or ffibox along the way belongs in that repo's history, not here.
 State where the LoC figures come from, and note that all of them exclude
 comments and blank lines.
 
-`C LoC` is `crustify-oracle query dag --name <every scheduled entity> --loc`:
+`C LoC` is `wavefront query dag --name <every scheduled entity> --loc`:
 the oracle's translated-LoC view, a function seed valued at its body LoC and a
 type seed at its field and op count. It reports the seeds only, with no closure
 expansion, so it is the C the campaign translated rather than the surface it

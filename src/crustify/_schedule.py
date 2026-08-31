@@ -1,6 +1,6 @@
 """Batch execution for objective-neutral oracle wave documents.
 
-Selection, dependency ordering and packing live in crustify-oracle. This module
+Selection, dependency ordering and packing live in wavefront. This module
 owns only the stateful half: placement checks, TODO insertion, isolated
 worktrees, bounded concurrency, and agent invocation.
 """

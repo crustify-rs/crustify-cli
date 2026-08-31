@@ -8,7 +8,7 @@
 #       -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
 #       -e CRUSTIFY_CAMPAIGN=libgit2/src-port \
 #       -v "$(dirname "$PWD")/crustify:/opt/crustify" \
-#       -v "$(dirname "$PWD")/crustify-oracle:/opt/crustify-oracle" \
+#       -v "$(dirname "$PWD")/wavefront:/opt/wavefront" \
 #       -v "$(dirname "$PWD")/crustify-audit:/opt/crustify-audit" \
 #       -v "$(dirname "$PWD")/ffibox:/opt/ffibox" \
 #       -v /absolute/path/to/your/target-fork:/target \
@@ -17,7 +17,7 @@
 # Source mounts and the target checkout:
 #
 #   /opt/crustify  Required read-write host checkout.
-#   /opt/{crustify-oracle,crustify-audit,ffibox}
+#   /opt/{wavefront,crustify-audit,ffibox}
 #                      Optional read-write host checkouts. When one is absent,
 #                      the entrypoint clones its main branch into the container.
 #                      Mounted trees always win.
@@ -102,7 +102,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     && rustup toolchain install nightly --component rustc-dev --component llvm-tools \
     && cargo install bindgen-cli --locked
 
-# 4. CodeQL CLI. The cpp pack is installed from crustify-oracle's qlpack
+# 4. CodeQL CLI. The cpp pack is installed from wavefront's qlpack
 #    by the entrypoint, once that checkout is resolved.
 RUN curl -fsSL -o /tmp/codeql.zip \
       "https://github.com/github/codeql-cli-binaries/releases/download/${CODEQL_VERSION}/codeql-linux64.zip" \
@@ -129,10 +129,10 @@ RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
 # provisioned" flag that tells it not to re-clone the checkouts above.
 ENV CRUSTIFY_DEP_CRUSTIFY=/opt/crustify \
     CRUSTIFY_DEP_FFIBOX=/opt/ffibox \
-    CRUSTIFY_DEP_ORACLE=/opt/crustify-oracle \
+    CRUSTIFY_DEP_ORACLE=/opt/wavefront \
     CRUSTIFY_DEP_AUDIT=/opt/crustify-audit \
     CRUSTIFY_BIN_CLI=/opt/venv/bin/crustify \
-    CRUSTIFY_BIN_ORACLE=/opt/venv/bin/crustify-oracle \
+    CRUSTIFY_BIN_ORACLE=/opt/venv/bin/wavefront \
     CRUSTIFY_BIN_AUDIT=/opt/venv/bin/crustify-audit
 
 # Drives the ORCHESTRATOR only; a wave's translate agents come from
@@ -183,13 +183,13 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       '    [ -f "$path/$marker" ] || {' \
       '        echo "invalid checkout at $path: missing $marker" >&2; exit 2; }' \
       '}' \
-      'ensure_checkout /opt/crustify-oracle pyproject.toml https://github.com/crustify-rs/crustify-oracle.git' \
+      'ensure_checkout /opt/wavefront pyproject.toml https://github.com/crustify-rs/wavefront.git' \
       'ensure_checkout /opt/crustify-audit pyproject.toml https://github.com/crustify-rs/crustify-audit.git' \
       'ensure_checkout /opt/ffibox Cargo.toml https://github.com/crustify-rs/ffibox.git' \
       'uv pip install --python /opt/venv -e /opt/crustify' \
-      'uv pip install --python /opt/venv -e /opt/crustify-oracle' \
+      'uv pip install --python /opt/venv -e /opt/wavefront' \
       'uv pip install --python /opt/venv -e /opt/crustify-audit' \
-      '(cd /opt/crustify-oracle && codeql pack install)' \
+      '(cd /opt/wavefront && codeql pack install)' \
       '# A mounted /campaign wins; otherwise CRUSTIFY_CAMPAIGN names one' \
       '# under the checkout. A named campaign that is absent is fatal, so a' \
       '# typo costs one exit rather than a whole run on a task-less prompt.' \
@@ -204,9 +204,9 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       '# matches the checkout driving this run. Passing the optional task to' \
       '# the renderer keeps container and direct CLI usage identical.' \
       'if [ -n "$task" ]; then' \
-      '    crustify-orchestrator-prompt /opt/crustify-oracle /opt/crustify-audit "$task" -o /tmp/orchestrator.md' \
+      '    crustify-orchestrator-prompt /opt/wavefront /opt/crustify-audit "$task" -o /tmp/orchestrator.md' \
       'else' \
-      '    crustify-orchestrator-prompt /opt/crustify-oracle /opt/crustify-audit -o /tmp/orchestrator.md' \
+      '    crustify-orchestrator-prompt /opt/wavefront /opt/crustify-audit -o /tmp/orchestrator.md' \
       'fi' \
       'prompt=/tmp/orchestrator.md' \
       'text="$(cat "$prompt")"' \

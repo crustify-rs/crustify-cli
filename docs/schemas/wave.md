@@ -1,7 +1,7 @@
 # Wave document schema
 
 A campaign is the orchestrator's end-to-end translation session. Each scheduler
-selection within that campaign is a **wave**. `crustify-oracle schedule` writes
+selection within that campaign is a **wave**. `wavefront schedule` writes
 one objective-neutral wave document and `crustify translate` executes it.
 
 The filename is not identity. `schedule --output` accepts any path whose parent

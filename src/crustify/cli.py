@@ -152,7 +152,7 @@ def main() -> None:
     wrap_p.add_argument(
         "wave", type=Path,
         help="Path to an objective-neutral wave document produced by "
-             "crustify-oracle schedule.")
+             "wavefront schedule.")
     wrap_p.add_argument(
         "--objective", choices=("wrap", "port", "review"), default="wrap",
         help="Objective handed unchanged to every agent in this wave.")

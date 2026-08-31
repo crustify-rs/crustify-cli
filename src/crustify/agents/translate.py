@@ -28,9 +28,9 @@ _CORE_SKILLS = (
 )
 
 _CAPABILITY_SKILLS: dict[str, SkillSpec] = {
-    "crustify-oracle": SkillSpec(
-        "crustify-oracle", "SKILL.md", capability="crustify-oracle",
-        role_header="skills/oracle.md",
+    "wavefront": SkillSpec(
+        "wavefront", "SKILL.md", capability="wavefront",
+        role_header="skills/wavefront.md",
     ),
     "ffibox": SkillSpec(
         "ffibox", "SKILL.md", capability="ffibox",

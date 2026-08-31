@@ -19,7 +19,7 @@ docker run -it --name crustify-libgit2 \
     -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
     -e CRUSTIFY_CAMPAIGN=libgit2/src-port \
     -v "$(dirname "$PWD")/crustify:/opt/crustify" \
-    -v "$(dirname "$PWD")/crustify-oracle:/opt/crustify-oracle" \
+    -v "$(dirname "$PWD")/wavefront:/opt/wavefront" \
     -v "$(dirname "$PWD")/crustify-audit:/opt/crustify-audit" \
     -v "$(dirname "$PWD")/ffibox:/opt/ffibox" \
     -v /absolute/path/to/your/target-fork:/target \
@@ -67,7 +67,7 @@ Set with `--build-arg` on `docker build`.
 | path | mode | lifetime |
 |---|---|---|
 | `/opt/crustify` | read-write | host checkout; agents commit to it, so give them a reviewable branch |
-| `/opt/crustify-oracle` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub, then installed editable |
+| `/opt/wavefront` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub, then installed editable |
 | `/opt/crustify-audit` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub, then installed editable |
 | `/opt/ffibox` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub and used by generated Cargo manifests |
 | `/target` | read-write, required | existing target checkout; its partial translation, CodeQL data, branches, and logs remain on the host |

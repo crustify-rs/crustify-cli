@@ -31,7 +31,7 @@ def render(oracle: Path, audit: Path, task: Path | None = None) -> str:
         oracle.resolve() / "SKILL.md",
         audit.resolve() / "SKILL.md",
     )
-    for skill, owner in ((sources[1], "crustify-oracle"),
+    for skill, owner in ((sources[1], "wavefront"),
                          (sources[2], "crustify-audit")):
         if not skill.is_file():
             raise SystemExit(f"no {skill} — expected a {owner} checkout")

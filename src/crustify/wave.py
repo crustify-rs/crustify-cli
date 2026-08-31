@@ -1,4 +1,4 @@
-"""Execute an objective-neutral wave document produced by crustify-oracle."""
+"""Execute an objective-neutral wave document produced by wavefront."""
 from __future__ import annotations
 
 import json

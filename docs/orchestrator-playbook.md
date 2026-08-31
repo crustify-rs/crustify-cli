@@ -103,7 +103,7 @@ Author `<repo>/crustify/cli-config.json` from `specs/cli-config.json`:
 
 | block | holds |
 |---|---|
-| `deps` | absolute paths to the crustify, crustify-oracle, ffibox and crustify-audit checkouts |
+| `deps` | absolute paths to the crustify, wavefront, ffibox and crustify-audit checkouts |
 | `bins` | absolute paths to `crustify`, `wavefront` and `crustify-audit` |
 | `prompt_capabilities` | optional skill instructions injected per agent role |
 
@@ -143,7 +143,7 @@ that a translation preserved behaviour, and it cannot be reconstructed later.
 
 ### 5. CodeQL database and the T1/T2 tables
 
-Build the CodeQL database manually, and run `crustify-oracle extract-ql`
+Build the CodeQL database manually, and run `wavefront extract-ql`
 to emit the T1 (entities) and T2 (edges) against that database.
 
 It writes one CSV per query under `crustify/oracle/codeql/{t1,t2}/` — T1 entities, T2
@@ -225,8 +225,8 @@ be wrapped and then ported, which is what the flag exists for.
 Verify the result before proceeding:
 
 ```bash
-crustify-oracle <repo_root> <target> query files --targeted-only
-crustify-oracle <repo_root> <target> query files --imported-only
+wavefront <repo_root> <target> query files --targeted-only
+wavefront <repo_root> <target> query files --imported-only
 ```
 
 After the user picked a target, create the campaign's base branch and
@@ -237,7 +237,7 @@ git -C <repo> checkout -b crustify/<target>-<model>
 mkdir -p <repo>/crustify/campaigns/<target>/logs
 ```
 
-This scaffolding is orchestrator-owned. `crustify-oracle schedule --output`
+This scaffolding is orchestrator-owned. `wavefront schedule --output`
 writes the requested wave file but fails if its parent directory does not
 already exist.
 
@@ -347,7 +347,7 @@ directory names or from `subsystems.json` statistics.
 
 Before `translate`, the orchestrator:
 
-1. runs `crustify-oracle schedule` with the selection and batch budgets, writing
+1. runs `wavefront schedule` with the selection and batch budgets, writing
    `crustify/campaigns/<target>/<sub-campaign>/<wave-name>.json` from that
    sub-campaign's `scope-config.json`;
 2. runs imported campaigns for any unsatisfied dependencies;
@@ -357,7 +357,7 @@ Before `translate`, the orchestrator:
 6. runs `translate <wave.json> --dry-run`, then executes it.
 
 ```bash
-crustify-oracle <repo_root> <target> schedule \
+wavefront <repo_root> <target> schedule \
   --output <repo>/crustify/campaigns/<target>/<sub-campaign>/<wave-name>.json \
   --name <items...> [--transitive] [--api-headers-only] \
   [--max-syms N] [--max-loc N] [--max-types N] [--min-fields N]
