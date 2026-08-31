@@ -1,4 +1,3 @@
-# Crustify
 
 Crustify is an agent harness for incrementally migrating production C and C++
 code to safe, idiomatic Rust. It can:
