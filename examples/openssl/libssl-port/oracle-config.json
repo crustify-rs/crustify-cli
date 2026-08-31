@@ -119,9 +119,9 @@
   ],
   "_comment_out_of_scope": [
     "`paths` - nothing under the target set is excluded: every ssl/ source file",
-    "compiles into libssl in this configuration. `features` - the disabled",
-    "feature set of THIS build (no-deprecated) is recorded in build.json's",
-    "`features.all[].enabled`; nothing target-local to add on top."
+    "compiles into libssl in this configuration. `features` - build.json's",
+    "configure command selects no-deprecated; nothing target-local to add",
+    "on top."
   ],
   "out_of_scope": {
     "paths": [],

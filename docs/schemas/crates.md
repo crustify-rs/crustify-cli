@@ -11,8 +11,8 @@ outside this manifest.
 ## crates.\<name\>
 
 One entry per link unit, keyed by crate name. Crate names ARE the link-unit
-keys — they match `build.json`'s `libraries` or `executables` and identify the
-wrapper and FFI crates that own its entities.
+identifiers — they match `subsystems.json`'s `link_units[*].name` and identify
+the wrapper and FFI crates that own its entities.
 
 | field | meaning |
 |---|---|
@@ -20,7 +20,7 @@ wrapper and FFI crates that own its entities.
 | `in_tree` | is the library's SOURCE in this repo? Provenance only — gates nothing. |
 | `crate_path` | repo-relative path of the wrapper crate |
 | `sys_crate` | repo-relative path of the FFI companion. Present for every library with bound entities |
-| `depends_on` | inter-crate edges, from `build.json` `link_dependencies`. A DAG — a cycle between two crates is an error |
+| `depends_on` | inter-crate edges aggregated from `subsystems.json` subsystem dependencies. A DAG — a cycle between two crates is an error |
 | `modules` | `{}` in a freshly seeded shell |
 
 ## crates.\<name\>.modules.\<name\>
@@ -98,16 +98,14 @@ flattens an anonymous member into its named parent under a qualified field name
 INPUT   entity = (name, kind, defined_in, declared_in)
 OUTPUT  exactly one .rs
 
-1. CRATE  = the link unit owning it                 (build.json `libraries` or `executables`)
-2. MODULE = the subsystem within that crate         (from defined_in/declared_in)
+1. CRATE  = the link unit owning it                 (`link_units[*].name`)
+2. MODULE = its subsystem                           (`subsystems[*].name`)
 3. RS     = defined_in ? <stem(defined_in)>.rs      # .c and .h treated alike
                        : <stem(best-fit declared_in)>.rs
 4. KEY    = (name, defined_in) | (name, declared_in) when defined_in is null
 ```
 
-A header does not decide its own crate: `include/` sits in the `include_dirs`
-of several libraries and in the `source_dirs` of none, so step 1 has no path to
-match. Resolve in order:
+A header does not decide its own crate. Resolve in order:
 
 1. **stem-partner** — the header shares a stem with a TU
    (`include/internal/quic_ackm.h` ↔ `ssl/quic/quic_ackm.c`). Take that TU's

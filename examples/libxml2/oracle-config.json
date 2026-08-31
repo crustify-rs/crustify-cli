@@ -2,7 +2,7 @@
   "_comment": [
     "Objective-neutral oracle inventory for libxml2 v2.15.3.",
     "The published surface is under include/libxml/. impl_files mirrors the",
-    "LIBXML2_SRCS link unit selected by build.json plus its private headers."
+    "LIBXML2_SRCS link unit observed in the configured build plus its private headers."
   ],
   "_comment_files": [
     "`api_headers` is the published surface: 45 headers, 1416 XMLPUBFUN",
@@ -62,7 +62,7 @@
     "bindings are outside the inventory by construction.",
     "",
     "`features` is documentation only - no composer reads it. It lists the",
-    "LIBXML2_WITH_* options OFF in the configure line recorded in build.json."
+    "LIBXML2_WITH_* options disabled by build.json's configure command."
   ],
   "out_of_scope": {
     "paths": [],

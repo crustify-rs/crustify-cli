@@ -91,7 +91,7 @@
 # Campaign execution questions
 
 8. **Use default workload settings, or customize them?**
-   - Answer: defaults except `max-types: 1`; parallelism is orchestrator-selected
+   - Answer: defaults except `max-types: 1`; parallelism is orchestrator's choice
 9. **Do you want agentic review? At which milestones and with which model?**
    - Answer: no
 10. **What batch caps should review agents use? We recommend 3x the translation caps.**
@@ -119,7 +119,7 @@ A6. **Should I wait for your approval before starting UB audit passes?**
 12. **Which billing mode should agentic stages use?**
     - Answer: `api`
 13. **Where and in what format should results be recorded?**
-    - Answer: `/work/results.md`, standard template
+    - Answer: `/target/crustify/results.md`, standard template
 
 # Why this target
 
@@ -138,8 +138,9 @@ wrappers inherit that C-library property; do not claim otherwise.
 Run Phase 1 end to end. The pre-authored `build.json` and `oracle-config.json`
 may be copied from `/campaign/`. Its `crates.json` is a seeded shell: fill its
 module inventory after `extract-ql`, mirroring `include/libxml/`, and verify the
-suggested grouping against the real inventory. Populate `build.json`'s
-`test_baseline` and CodeQL provenance fields during setup. The toolchain is
+suggested grouping against the real inventory. Emit `subsystems.json` after the
+campaign-wide oracle target is populated. Record the test baseline and
+CodeQL provenance in the campaign record during setup. The toolchain is
 already installed.
 
 Before translation, report the API-only types, symbols and files and the

@@ -43,6 +43,10 @@ class Layout:
         return self.root / "build.json"
 
     @property
+    def subsystems_json(self) -> Path:
+        return self.root / "subsystems.json"
+
+    @property
     def crates_json(self) -> Path:
         return self.root / "crates.json"
 

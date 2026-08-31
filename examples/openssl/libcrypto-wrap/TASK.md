@@ -25,7 +25,7 @@
 # Campaign execution questions
 
 8. **Use default workload settings, or customize them?**
-   - Answer: defaults except `max-types: 2`; parallelism is orchestrator-selected
+   - Answer: defaults except `max-types: 2`; parallelism is orchestrator's choice
 9. **Do you want agentic review? At which milestones and with which model?**
    - Answer: ask the user for both milestones and model
 10. **What batch caps should review agents use? We recommend 3x the translation caps.**

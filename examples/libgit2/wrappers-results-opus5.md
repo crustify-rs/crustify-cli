@@ -556,8 +556,8 @@ written to a per-agent path.
 `build-static/libgit2.a` when present and gate the C-calling tests behind
 `cfg(crustify_c_linked)`. Absent the archive those tests silently compile out,
 so a green `cargo test` proves nothing about any release strategy. Every figure
-here was taken with the archive built from `build.json`'s own
-`static_build_commands`: **778 tests pass, 106 of them `linked::` round-trips
+here was taken with the campaign's recorded static-archive build:
+**778 tests pass, 106 of them `linked::` round-trips
 executing against real libgit2 C**.
 
 **Linkability is a campaign-wide constraint.** `libgit2.so` exports 902

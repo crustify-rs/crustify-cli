@@ -19,6 +19,8 @@ Copy this template into the campaign checkout, then fill it as work lands.
 - **`--parallel-max`** — `<n>`
 - **branch** — `<branch>`, tip `<sha>`
 - **deps** — crustify-cli `<sha>` (`<branch>`), ffibox `<sha>` (`<branch>`)
+- **build version** — `<build.json version>`
+- **C test baseline** — `<passed>/<total>, <skipped>, and every disabled test`
 
 ## Review pass
 
@@ -89,6 +91,7 @@ in Notes.
 
 - **Rust LoC, non-test** — `<n>`
 - **Rust LoC, tests** — `<n>`
+- **`io_equiv` test LoC** — `<n>`; **C LoC coverage** — `<n>`%; **Rust LoC coverage** — `<n>`%
 - **C LoC** — `<n>`
 - **ported types** — `<n>`
 - **ported symbols** — `<n>`

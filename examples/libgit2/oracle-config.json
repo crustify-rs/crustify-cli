@@ -55,9 +55,9 @@
     "feature contributes no entities and drops out on its own.",
     "",
     "`features` is documentation only - no composer reads it. It lists the",
-    "feature macros that are OFF in this build, mirroring build.json's",
-    "features.all entries whose `enabled` is false. The authoritative record",
-    "is build/gen_headers/git2_features.h."
+    "feature macros that are OFF in the build selected by build.json's",
+    "configure command. The authoritative record is",
+    "build/gen_headers/git2_features.h."
   ],
   "out_of_scope": {
     "paths": [],

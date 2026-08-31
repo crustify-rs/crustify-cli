@@ -1,0 +1,104 @@
+{
+  "_comment": "Example `<repo_root>/crustify/subsystems.json` (REPO-ROOT tier), emitted by the orchestrator after the campaign-wide oracle target is populated. `link_units` and each link unit's `subsystems` are ordered lists; their `name` fields are identifiers. The artifact covers the user-selected targeted subsystem span plus its imported producer closure. All paths are repo-root-relative.",
+  "build_version": 1,
+  "oracle_target": "campaign",
+  "link_units": [
+    {
+      "name": "libssl",
+      "kind": "library",
+      "linkage": "shared",
+      "target": "libssl.so",
+      "subsystems": [
+        {
+          "name": "record",
+          "scope": "targeted",
+          "implementation_files": [
+            "ssl/record/rec_layer_s3.c",
+            "ssl/record/methods/tls_common.c"
+          ],
+          "loc": 4821,
+          "nr_types": 17,
+          "nr_symbols": 143,
+          "depends_on": [
+            {
+              "link_unit": "libssl",
+              "subsystem": "statem",
+              "nr_edges": 28
+            },
+            {
+              "link_unit": "libcrypto",
+              "subsystem": "bio",
+              "nr_edges": 41
+            }
+          ]
+        },
+        {
+          "name": "statem",
+          "scope": "targeted",
+          "implementation_files": [
+            "ssl/statem/statem.c",
+            "ssl/statem/statem_lib.c"
+          ],
+          "loc": 2390,
+          "nr_types": 9,
+          "nr_symbols": 76,
+          "depends_on": [
+            {
+              "link_unit": "libcrypto",
+              "subsystem": "bio",
+              "nr_edges": 19
+            },
+            {
+              "link_unit": "libc",
+              "subsystem": "memory",
+              "nr_edges": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "libcrypto",
+      "kind": "library",
+      "linkage": "shared",
+      "target": "libcrypto.so",
+      "subsystems": [
+        {
+          "name": "bio",
+          "scope": "imported",
+          "implementation_files": [
+            "crypto/bio/bio_lib.c"
+          ],
+          "loc": 1320,
+          "nr_types": 8,
+          "nr_symbols": 61,
+          "depends_on": []
+        }
+      ]
+    },
+    {
+      "name": "libc",
+      "kind": "library",
+      "linkage": "system",
+      "target": null,
+      "subsystems": [
+        {
+          "name": "memory",
+          "scope": "imported",
+          "implementation_files": [],
+          "loc": 0,
+          "nr_types": 1,
+          "nr_symbols": 4,
+          "depends_on": []
+        }
+      ]
+    },
+    {
+      "name": "openssl",
+      "kind": "executable",
+      "linkage": null,
+      "target": "apps/openssl",
+      "subsystems": []
+    }
+  ]
+}

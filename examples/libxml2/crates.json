@@ -8,8 +8,8 @@
     "ahead of the database would be guessing at names. The crate identity,",
     "paths and link edges below ARE settled and do not depend on it.",
     "",
-    "One link unit, so one crate. `depends_on` mirrors build.json's",
-    "`link_dependencies` for libxml2 exactly - the placement oracle keys on",
+    "One link unit, so one crate. `depends_on` aggregates subsystems.json's",
+    "subsystem dependencies for libxml2 - the placement oracle keys on",
     "the same library names bindgen uses."
   ],
   "crates": {

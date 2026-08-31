@@ -1,7 +1,8 @@
 # Examples
 
 One campaign example per directory. Each holds the `TASK.md` a run is given,
-plus whatever Phase 1 artifacts are authored ahead of time.
+plus whatever Phase 1 inputs are authored ahead of time. Derived artifacts such
+as `subsystems.json` are emitted against the live oracle inventory.
 
 Copy [`TASK.md`](TASK.md) to start a campaign request. It is the canonical
 user-facing template; campaign directories contain filled instances. Campaign
@@ -14,16 +15,27 @@ Both commands from the repo root:
 ```sh
 docker build -f examples/Dockerfile -t crustify .
 
-docker run --rm -it --name crustify-libgit2 \
+docker run -it --name crustify-libgit2 \
     -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
-    -e CRUSTIFY_CAMPAIGN=libgit2 \
+    -e CRUSTIFY_CAMPAIGN=libgit2/src-port \
     -v "$(dirname "$PWD")/crustify-cli:/opt/crustify-cli" \
     -v "$(dirname "$PWD")/crustify-oracle:/opt/crustify-oracle" \
     -v "$(dirname "$PWD")/crustify-audit:/opt/crustify-audit" \
     -v "$(dirname "$PWD")/ffibox:/opt/ffibox" \
-    -v crustify-work:/work \
+    -v /absolute/path/to/your/target-fork:/target \
     crustify
 ```
+
+`/target` must be an existing Git checkout mounted read-write. The orchestrator
+uses its checked-out revision and existing `crustify/` state directly, making
+this suitable for resuming a partial translation on a personal fork. It does
+not clone or replace the target checkout.
+
+The example deliberately omits `--rm`. Restart its stopped container with
+`docker start -ai crustify-libgit2`; its writable root filesystem preserves all
+tools, caches, source-built dependencies, and `apt` packages installed after
+boot. Removing the container loses those changes, so generally useful packages
+should be added to the Dockerfile.
 
 ## Run-time environment
 
@@ -58,12 +70,12 @@ Set with `--build-arg` on `docker build`.
 | `/opt/crustify-oracle` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub, then installed editable |
 | `/opt/crustify-audit` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub, then installed editable |
 | `/opt/ffibox` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub and used by generated Cargo manifests |
-| `/work` | named volume | target clone, CodeQL database, emitted crates, session branches; survives `--rm` |
+| `/target` | read-write, required | existing target checkout; its partial translation, CodeQL data, branches, and logs remain on the host |
 | `/campaign` | read-only, optional | a `TASK.md` outside the checkout; wins over `CRUSTIFY_CAMPAIGN` |
 
 Results are tracked in `results.md`. The Dockerfile header documents
 what each flag buys. The three optional source mounts may be omitted from
-`docker run`; their `main` branches are then cloned into the ephemeral container.
+`docker run`; their `main` branches are then cloned into the campaign container.
 
 Historical aggregate measurements for the libgit2 and OpenSSL campaigns are
 preserved in [`libgit2-openssl-results.md`](libgit2-openssl-results.md).

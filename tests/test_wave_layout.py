@@ -8,6 +8,16 @@ from crustify.layout import Layout
 
 
 class WaveLayoutTests(unittest.TestCase):
+    def test_repo_tier_analysis_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            layout = Layout(repo)
+            self.assertEqual(layout.build_json, repo / "crustify" / "build.json")
+            self.assertEqual(
+                layout.subsystems_json,
+                repo / "crustify" / "subsystems.json",
+            )
+
     def test_campaign_storage_is_target_scoped(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)

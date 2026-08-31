@@ -47,7 +47,7 @@
 # Campaign execution questions
 
 8. **Use default workload settings, or customize them?**
-   - Answer: defaults except `max-types: 1`; parallelism is orchestrator-selected
+   - Answer: defaults except `max-types: 1`; parallelism is orchestrator's choice
 9. **Do you want agentic review? At which milestones and with which model?**
    - Answer: no
 10. **What batch caps should review agents use? We recommend 3x the translation caps.**
@@ -75,13 +75,14 @@ A6. **Should I wait for your approval before starting UB audit passes?**
 12. **Which billing mode should agentic stages use?**
     - Answer: `api`
 13. **Where and in what format should results be recorded?**
-    - Answer: `/work/results.md`, standard template
+    - Answer: `/target/crustify/results.md`, standard template
 
 # Setup notes
 
 Run Phase 1 end to end. The pre-authored `build.json`, `oracle-config.json`, and
-`crates.json` may be copied from `/campaign/`. Skip toolchain installation when
-the required tools are already installed.
+`crates.json` may be copied from `/campaign/`; emit `subsystems.json` after the
+campaign-wide oracle target is populated. Skip toolchain installation when the
+required tools are already installed.
 
 # Selection and recording notes
 

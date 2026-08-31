@@ -4,27 +4,27 @@
 #
 #   docker build -f examples/Dockerfile -t crustify .
 #
-#   docker run --rm -it --name crustify-libgit2 \
+#   docker run -it --name crustify-libgit2 \
 #       -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
-#       -e CRUSTIFY_CAMPAIGN=libgit2 \
+#       -e CRUSTIFY_CAMPAIGN=libgit2/src-port \
 #       -v "$(dirname "$PWD")/crustify-cli:/opt/crustify-cli" \
 #       -v "$(dirname "$PWD")/crustify-oracle:/opt/crustify-oracle" \
 #       -v "$(dirname "$PWD")/crustify-audit:/opt/crustify-audit" \
 #       -v "$(dirname "$PWD")/ffibox:/opt/ffibox" \
-#       -v crustify-work:/work \
+#       -v /absolute/path/to/your/target-fork:/target \
 #       crustify
 #
-# Source mounts and one persistent volume:
+# Source mounts and the target checkout:
 #
 #   /opt/crustify-cli  Required read-write host checkout.
 #   /opt/{crustify-oracle,crustify-audit,ffibox}
 #                      Optional read-write host checkouts. When one is absent,
 #                      the entrypoint clones its main branch into the container.
 #                      Mounted trees always win.
-#   /work              Named volume, the only thing that survives `--rm`:
-#                      target clone, CodeQL database, emitted Rust tree,
-#                      session branches, per-agent logs. Drop it and the run
-#                      is throwaway.
+#   /target            Required read-write bind mount of the existing target
+#                      checkout. Its current revision, branches, `crustify/`
+#                      directory, CodeQL data, partial translation, and logs are
+#                      used in place and remain on the host.
 #
 # THE CAMPAIGN IS NAMED: CRUSTIFY_CAMPAIGN picks a directory under the
 # checkout's examples/, and its TASK.md arrives through the mount above. Edit
@@ -35,19 +35,21 @@
 # The results template rides the same mount: the orchestrator reads
 # examples/results.md from the checkout and writes the filled table to the path
 # the campaign task names. Nothing is baked into the image or seeded into
-# /work, so editing the template on the host changes the next run.
+# /target, so editing the template on the host changes the next run.
 #
 # A task living outside the checkout mounts at /campaign, and wins when
 # present.
 #
-# The campaign task is the only run-time input. Everything else is the
-# orchestrator's own work: clone the target into /work, install its libraries,
-# then Phase 1 of the playbook — build.json, crates.json, oracle-config.json,
-# CodeQL database and compiling crate shells — before any wave.
+# The campaign task and mounted target are the run-time inputs. The
+# orchestrator works directly in /target: it assesses existing campaign state,
+# installs target libraries as needed, and resumes at the first incomplete
+# playbook stage. It must not clone, reset, or replace the mounted checkout.
 #
 # One container name per campaign: `docker attach` reaches a detached run,
-# `docker exec -it <name> bash` opens a shell beside the orchestrator, and a
-# stale name means a campaign is still up. `--rm` frees it.
+# `docker exec -it <name> bash` opens a shell beside the orchestrator, and
+# `docker start -ai <name>` resumes a stopped run with all post-boot installs
+# intact in the container's writable root filesystem. Removing the container
+# removes that state; bake generally useful packages into the image.
 #
 # `-it` because the prompt is built around approval gates. Detach with `-d`
 # and attach later, or run tmux inside. Both backends ship; CRUSTIFY_BACKEND
@@ -169,6 +171,9 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       '# a required host mount. The three capability checkouts are optional.' \
       '[ -f /opt/crustify-cli/pyproject.toml ] || {' \
       '    echo "missing checkout mount: /opt/crustify-cli" >&2; exit 2; }' \
+      '[ -e /target/.git ] || {' \
+      '    echo "missing target checkout mount: bind an existing Git checkout at /target" >&2; exit 2; }' \
+      'git config --global --add safe.directory /target' \
       'ensure_checkout() {' \
       '    path="$1"; marker="$2"; url="$3"' \
       '    if [ ! -f "$path/$marker" ]; then' \
@@ -252,7 +257,8 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       > /usr/local/bin/crustify-orchestrator \
     && chmod +x /usr/local/bin/crustify-orchestrator
 
-# The orchestrator clones the target here. Left empty so a volume mounted
-# over it shadows nothing.
-WORKDIR /work
+# The required target bind mount shadows this empty image directory. Starting
+# in it makes the existing checkout—and any partial crustify campaign—the
+# orchestrator's unambiguous working repository.
+WORKDIR /target
 CMD ["crustify-orchestrator"]

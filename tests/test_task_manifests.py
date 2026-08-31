@@ -19,8 +19,8 @@ class TaskManifestTests(unittest.TestCase):
                 for stale in banned:
                     self.assertNotIn(stale, text)
 
-                is_template = task == root / "examples" / "TASK.md"
-                if is_template:
+                is_canonical = "# Mandatory questions" in text
+                if is_canonical:
                     headings = (
                         "# Mandatory questions",
                         "## Campaign",
@@ -42,7 +42,7 @@ class TaskManifestTests(unittest.TestCase):
                 sub_campaigns = len(re.findall(r"^## `", text, re.MULTILINE))
                 if sub_campaigns:
                     self.assertIn("# Sub-campaign questions", text)
-                if is_template:
+                if is_canonical:
                     for number in range(1, 17):
                         self.assertEqual(
                             len(re.findall(rf"(?m)^{number}\. \*\*", text)),
@@ -56,12 +56,16 @@ class TaskManifestTests(unittest.TestCase):
                 )
                 self.assertIsNotNone(question_three)
                 scope_question = question_three.group(1).lower()
-                self.assertIn("one or two", scope_question)
                 self.assertIn("subsystems", scope_question)
-                self.assertIn("functions or types", scope_question)
                 self.assertIn("whole target", scope_question)
                 self.assertIn("brainstorm", scope_question)
-                if not is_template:
+                if is_canonical:
+                    self.assertIn("functions and types", scope_question)
+                    self.assertIn("orchestrator's choice", scope_question)
+                else:
+                    self.assertIn("one or two", scope_question)
+                    self.assertIn("functions or types", scope_question)
+                if not is_canonical:
                     for number in (4, 5, 6, 7):
                         self.assertEqual(
                             len(re.findall(rf"(?m)^{number}\. \*\*", text)),
@@ -85,10 +89,19 @@ class TaskManifestTests(unittest.TestCase):
                     re.findall(r"(?m)^(?:\d+|A\d+)\. \*\*", text)
                 )
                 self.assertEqual(text.count("- Answer:"), question_count)
-                self.assertEqual(
-                    text.count("Which backend and model should translate"),
-                    1 if is_template else sub_campaigns,
-                )
+                if is_canonical:
+                    self.assertEqual(
+                        text.count(
+                            "Which agentic backend and model should do the "
+                            "translation work?"
+                        ),
+                        1,
+                    )
+                else:
+                    self.assertEqual(
+                        text.count("Which backend and model should translate"),
+                        sub_campaigns,
+                    )
                 self.assertNotIn(
                     "Which backend and model run the orchestrator?", text
                 )
@@ -97,7 +110,8 @@ class TaskManifestTests(unittest.TestCase):
                 )
                 self.assertIn("recommend 3x", text.lower())
                 self.assertIn("agentic UB", text)
-                self.assertIn("which model", text.lower())
+                self.assertIn("backend and model", text.lower())
+                self.assertNotIn("orchestrator" + "-selected", text)
 
 
 if __name__ == "__main__":

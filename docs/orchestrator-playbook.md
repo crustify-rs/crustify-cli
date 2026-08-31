@@ -2,8 +2,9 @@
 
 Driving crustify, in two phases. Setup: toolchain install through the first
 commit of the initial Rust tree — authoring `build.json`, `cli-config.json` and
-a target's `oracle-config.json`, building the CodeQL database, extracting the
-T1/T2 tables, and seeding crate shells. Translation: preparing, running,
+a campaign-wide `oracle-config.json`, building the CodeQL database, extracting
+the T1/T2 tables, emitting `subsystems.json`, and seeding crate shells.
+Translation: preparing, running,
 landing and scanning waves with `crustify-audit`. Read Setup
 before any wave; every later stage reads what it produces.
 
@@ -17,18 +18,52 @@ Three artifact tiers decide where a file goes.
 
 | tier | path | authored | derived |
 |---|---|---|---|
-| repo | `<repo>/crustify/` | `build.json`, `crates.json`, `cli-config.json` | `rust/` |
+| repo | `<repo>/crustify/` | `build.json`, `crates.json`, `cli-config.json` | `subsystems.json`, `rust/` |
 | oracle | `<repo>/crustify/oracle/` | `targets/<target>/oracle-config.json`, `ownership-store.json` | `codeql/{db,t1,t2}/`, `.cache/` |
-| campaign | `<repo>/crustify/campaigns/<target>/` | `<wave-name>.json` | `logs/<session>/` |
+| campaign | `<repo>/crustify/campaigns/<target>/` | `<sub-campaign>/scope-config.json` | `<sub-campaign>/<wave-name>.json`, `logs/<session>/` |
 
 Repo-tier describes the whole repository. Oracle targets describe C inventory;
-campaigns contain tracked wave plans and the shared execution log namespace. A
-repo can carry several oracle targets and many named waves.
+campaigns contain one directory per sub-campaign, its tracked scope and wave
+plans, and one target-wide execution log namespace. A repo can carry several
+oracle targets and many named sub-campaigns.
 
-Every authored file has a commented example under `specs/` — except
-`oracle-config.json`, whose example lives in the standalone oracle checkout's
-own `specs/`. Read the template before authoring — the `_comment_*` keys carry
-the field semantics and are the only complete spec.
+Every repo-tier artifact contract has a commented example under `specs/` —
+except `oracle-config.json`, whose example lives in the standalone oracle
+checkout's own `specs/`. Read the template before authoring or emitting an
+artifact; detailed schema documents supplement the `_comment_*` keys.
+
+### Campaign directory layout
+
+Sub-campaign scope and wave plans live below the target campaign directory;
+logs remain target-wide:
+
+```text
+crustify/campaigns/<target>/
+├── raw-lifetime-void/
+│   ├── scope-config.json
+│   └── <wave-name>.json
+├── raw-lifetime-string/
+│   ├── scope-config.json
+│   └── <wave-name>.json
+├── <sub-campaign>/
+│   ├── scope-config.json
+│   └── <wave-name>.json
+└── logs/
+    └── <session>/
+        ├── session.log
+        ├── <stage>[__<agent-suffix>].log
+        └── <stage>[__<agent-suffix>].usage.json
+```
+
+`<target>` is the repo-relative oracle target passed to the CLI, so a target
+such as `ssl/statem` creates nested directories, while the repo-root target
+uses `crustify/campaigns/` directly. `<session>` is generated once per CLI
+invocation as `YYYY-MM-DD_HH-MM-SS_<4-hex>`.
+
+Wave paths do not select the log directory. The CLI always emits logs under
+`crustify/campaigns/<target>/logs/<session>/` from its target argument, so all
+sub-campaigns for one target share the same log namespace. Scope configs and
+wave plans are tracked; `logs/` is gitignored.
 
 ## Phase 1 — Setup
 
@@ -86,22 +121,10 @@ does not hide the checkout, executable, dependency or path from the agent.
 
 ### 3. `build.json`
 
-Author from `specs/build.json`. Downstream stages treat it as authoritative
-for library partitioning, link topology and build invocation, so it must be
-accurate before anything else runs. All paths repo-root-relative.
-
-**The naming rule.** Each `libraries` key MUST be the stem of its `target` —
-the filename without path or extension. `libssl.so` → `libssl`;
-`providers/fips.so` → `fips`. System libraries (no `target`, `kind: system`)
-take their conventional short name: `libc`, `libm`. This is what later
-link-time attribution matches against, and `crates.json` keys off it.
-
-`include_dirs` MAY overlap between libraries — a header's owning crate is
-resolved at placement time, not here. `link_dependencies` entries must each name
-a library defined in the same file.
-
-**`build_commands`** are shell strings run from the repo root, by hand,
-exposing  four generic stages: `configure`, `build`, `test` and `clean`.
+Author from `specs/build.json`. It fixes the exact shell strings used from the
+repo root for the campaign's three build stages: `configure`, `build`, and
+`test`. Increment its `version` whenever any command changes; derived artifacts
+record that version as provenance.
 
 - Prefer a `configure` that disables deprecated features.
 - Enable sanitizers, so agents catch memory-safety violations when testing their
@@ -114,10 +137,9 @@ exposing  four generic stages: `configure`, `build`, `test` and `clean`.
 Run `configure`, then `build`. Then run `test` to collect the port-equivalence
 baseline, disabling any test that fails on the unported tree.
 
-Record the result in `build.json`'s `test_baseline`: pass/total, plus the name of
-every test disabled to reach that state. A post-port run must match it. This is
-the only evidence that a translation preserved behaviour, and it cannot be
-reconstructed later.
+Record pass/total plus the name of every test disabled to reach that state in
+the campaign record. A post-port run must match it. This is the only evidence
+that a translation preserved behaviour, and it cannot be reconstructed later.
 
 ### 5. CodeQL database and the T1/T2 tables
 
@@ -130,10 +152,18 @@ from these on demand, which is why this is the one oracle command with side
 effects and the only one that must be run explicitly. It takes minutes; re-run
 it only after the C tree or the database changes.
 
-### 6. Configure an oracle target
+### 6. Configure the campaign-wide oracle target
 
-Author `crustify/oracle/targets/<target>/oracle-config.json` from the
+Author `crustify/oracle/targets/<campaign-target>/oracle-config.json` from the
 standalone oracle's `specs/oracle-config.json`.
+
+This first target spans the user's campaign selection. If the user named target
+subsystems, include those target implementation paths; if the user selected the
+whole target, include all of its implementation paths; if the user asked you to
+choose subsystems, include what you chose. This common target is
+the inventory from which the orchestrator decomposes both the selected target
+surface and its imported producer closure. More narrowly scheduled
+sub-campaigns may be derived after decomposition.
 
 It names **two file sets**. Entries in either set are a file
 (`include/internal/statem.h`) or a directory with a trailing slash (`ssl/`),
@@ -190,8 +220,7 @@ wave, chosen per wave by the orchestrator. A target type in a port campaign migh
 be wrapped and then ported, which is what the flag exists for. 
 
 `out_of_scope.paths` refines what a directory entry expands to;
-`out_of_scope.features` is documentation only, for the same reason as
-`build.json`'s `features`.
+`out_of_scope.features` is documentation only.
 
 Verify the result before proceeding:
 
@@ -212,15 +241,42 @@ This scaffolding is orchestrator-owned. `crustify-oracle schedule --output`
 writes the requested wave file but fails if its parent directory does not
 already exist.
 
-### 7. Seed crate shells
+### 7. Emit `subsystems.json`
+
+After the campaign-wide oracle target is populated, emit
+`crustify/subsystems.json` from `specs/subsystems.json`. Field semantics:
+`docs/schemas/subsystems.md`.
+
+Discover link units from the configured build's actual linker outputs. Store
+link units and their subsystems as ordered lists; each list entry is identified
+by its `name`. Cover exactly the target span the user selected and include its
+complete imported producer closure. Mark every subsystem `scope: targeted` or
+`scope: imported`, consistently with the oracle.
+
+Home every covered translation unit to exactly one subsystem. Keep a subsystem
+scope-homogeneous: do not mix targeted and imported translation units. Use the
+oracle's LoC, type, symbol, and edge statistics whenever available. Aggregate
+each consumer-to-producer relationship into one `depends_on` record with
+`nr_edges`.
+
+The resulting subsystem graph must be acyclic. Resolve a cycle by changing the
+decomposition—rehome translation units or merge subsystems—rather than omitting
+real dependency records. A subsystem with more incoming consumer edges has
+greater producer weight and should preferentially remain a producer;
+`nr_edges` refines that judgment.
+
+This is orchestrator judgment, not a new mechanical validation command or
+gate.
+
+### 8. Seed crate shells
 
 Author `crustify/crates.json`, the placement oracle. Schema:
 `docs/schemas/crates.md`; example: `specs/crates.json`.
 
 Seed the campaign's target crate and the top-level crates that own its imported
 dependencies. Leave `modules` empty and do not home items yet. Crate names
-match `build.json`'s link-unit keys; `depends_on` comes from
-`link_dependencies` and is acyclic.
+match `subsystems.json`'s `link_units[*].name`; derive their dependency
+relationships from subsystem `depends_on` records.
 
 The orchestrator creates minimal compiling wrapper crates. Each starts with a
 `Cargo.toml` and empty crate root following `conventions.md`. Do not create
@@ -239,7 +295,7 @@ cargo build
 cargo test
 ```
 
-### 8. Commit
+### 9. Commit
 
 Commit the initial `rust/` tree on `crustify/<target>-<model>`. Translate waves
 branch from this baseline.
@@ -248,7 +304,7 @@ branch from this baseline.
 
 | check | how |
 |---|---|
-| baseline recorded | `build.json.test_baseline` names pass/total and every disabled test |
+| baseline recorded | campaign record names pass/total and every disabled test |
 | T1/T2 populated | `crustify/oracle/codeql/{t1,t2}/` non-empty |
 | scope is what you meant | `query files --targeted-only` / `--imported-only` |
 | placement consistent | `crates validate` exits clean |
@@ -264,12 +320,36 @@ and divides it into sequential steps; the CLI enforces each step barrier and
 routes that step's batches to agents. Waves repeat until the target is closed.
 See `docs/schemas/wave.md` for the producer/consumer contract.
 
+### Plan sub-campaigns
+
+For a port campaign, split the selected campaign span into one sub-campaign per
+subsystem in `subsystems.json`, including imported producer subsystems needed by
+the selected targets. Imported or deliberate C-boundary subsystems use the
+`wrap` objective; selected migration subsystems use `port` according to the
+objective rules below.
+
+Schedule these sub-campaigns bottom-up over the subsystem graph. Because a
+`depends_on` record points consumer to producer, complete producers before
+their consumers. Use a deterministic topological order, breaking equally ready
+subsystems by greater producer weight and then by `(link_unit, subsystem)`
+name. Never start a consumer sub-campaign while one of its required producer
+sub-campaigns remains incomplete.
+
+Author
+`crustify/campaigns/<target>/<sub-campaign>/scope-config.json` from
+`specs/scope-config.json` for every raw-lifetime and subsystem sub-campaign.
+Field semantics: `docs/schemas/scope-config.md`. Use the campaign-wide oracle
+target to resolve and record the exact targeted and imported file, type, and
+symbol closure before scheduling the first wave. Do not infer closure sets from
+directory names or from `subsystems.json` statistics.
+
 ### Prepare each wave
 
 Before `translate`, the orchestrator:
 
 1. runs `crustify-oracle schedule` with the selection and batch budgets, writing
-   `crustify/campaigns/<target>/<wave-name>.json`;
+   `crustify/campaigns/<target>/<sub-campaign>/<wave-name>.json` from that
+   sub-campaign's `scope-config.json`;
 2. runs imported campaigns for any unsatisfied dependencies;
 3. homes each wave item in `crates.json`;
 4. creates its `.rs` files and connects them to the crate root;
@@ -278,16 +358,19 @@ Before `translate`, the orchestrator:
 
 ```bash
 crustify-oracle <repo_root> <target> schedule \
-  --output <repo>/crustify/campaigns/<target>/<wave-name>.json \
+  --output <repo>/crustify/campaigns/<target>/<sub-campaign>/<wave-name>.json \
   --name <items...> [--transitive] [--api-headers-only] \
   [--max-syms N] [--max-loc N] [--max-types N] [--min-fields N]
 crustify-cli --parallel-max N <repo_root> <target> translate \
-  <repo>/crustify/campaigns/<target>/<wave-name>.json \
+  <repo>/crustify/campaigns/<target>/<sub-campaign>/<wave-name>.json \
   --objective wrap --dry-run
 ```
 
-Imported waves run lazily and recursively before the target wave that needs
-them. They use the imported crate shells seeded during Setup.
+The bottom-up plan should already have completed imported producers before a
+target wave needs them. If an exact oracle closure reveals an unplanned
+imported subsystem, pause the consumer, add that producer as its own
+sub-campaign and `scope-config.json`, complete it, then resume the consumer.
+Imported work uses the crate shells seeded during Setup.
 
 The scheduler inserts TODO anchors. Translator agents extend their worklist's
 bindgen allowlists and regenerate bindings in their worktrees.
@@ -317,13 +400,15 @@ targeted closure instead, targeted symbols continue to run `port` directly.
 
 Do not include completed items when authoring the next oracle schedule.
 
-### Raw lifetime discovery stage
+### Raw lifetime discovery sub-campaigns
 
-Regardless of the target set, the first translation waves have to be the raw lifetime
-discovery set, which will produce release/clone strategies for owned pointers that host
-type-erased and NUL-terminated objects. Generate waves with
-`schedule --lifetime-for void` and then `schedule --lifetime-for string`. When resuming
-an interrupted campaign, skip if this stage has already been carried.
+Regardless of the target set, the first two sub-campaigns are raw lifetime
+discovery. They produce release/clone strategies for owned pointers that host
+type-erased and NUL-terminated objects. Generate the `raw-lifetime-void` waves
+with `schedule --lifetime-for void`, complete and review that sub-campaign as
+allowed, then do the same for `raw-lifetime-string` with
+`schedule --lifetime-for string`. When resuming an interrupted campaign, skip
+either sub-campaign only if it has already completed.
 
 ### Land and promote
 
@@ -355,17 +440,21 @@ crustify-audit <repo_root> unsafe --json
 
 ### Review objective
 
-Run the `--objective review` stage if the user instructed you to do so, choosing the model
-they've selected. This agentic review is independent of the deterministic
-`crustify-audit unsafe` gate above. `crustify-audit ub` is outside the campaign
-workflow. Run the review pass once after the raw void stage and once after the raw string
-stage, and then after a decent amount of units has been accumulated across waves - you don't have
-to run a review pass after every wave. Prefer larger caps for the review stage, so more
-units are batched per agent; e.g. 3x the defaults.
+If the user allowed agentic review, prefer one `--objective review` pass after
+each completed sub-campaign, including each raw-lifetime sub-campaign. Review
+the whole landed sub-campaign rather than reviewing every wave independently.
+Use the backend and model the user selected, or orchestrator's choice when they
+delegated it. This agentic review is independent of the deterministic
+`crustify-audit unsafe` gate above. Prefer larger caps for review so each agent
+sees more related units; use 3x the translation caps by default.
 
 ### UB patch promotion
 
 Run `crustify-audit ub` only with the user's explicit approval. The UB agent
+should normally run once at the end of the whole campaign, after all
+sub-campaigns and their allowed review passes have landed. Run it earlier only
+when the user explicitly requests another milestone or a confirmed finding
+blocks further work. The UB agent
 owns both the evidence and the repair: it creates a dedicated branch in the
 target repository, follows that repository's conventions, implements focused
 regression tests, builds the affected targets, runs their gates, reruns the

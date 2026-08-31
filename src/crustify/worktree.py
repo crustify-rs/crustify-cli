@@ -189,12 +189,14 @@ def link_shared(wt: Path, repo: Path) -> None:
     wave documents, and ownership-store entries already present in the worktree
     win over the recursive links.
 
-    `build.json` and `crates.json` are deliberately NOT here. Both are tracked
+    `build.json`, `subsystems.json`, and `crates.json` are deliberately NOT
+    here. All three are tracked
     (see `specs/gitignore`), so `git worktree add` checks each one out from HEAD
     and the worktree already holds its own copy — which is the rule stated on
-    `_SHARED` above. They are still read-only across a wave: `build.json` is
-    written before any wave, and the orchestrator fully populates `crates.json`
-    for a wave's units before it starts, so agents only ever READ either one. A
+    `_SHARED` above. They are still read-only across a wave: `build.json` and
+    `subsystems.json` are written before any wave, and the orchestrator fully
+    populates `crates.json` for a wave's units before it starts, so agents only
+    ever READ them. A
     genuine miss-fill therefore surfaces as a per-worktree edit that its landing
     commit carries, not as a write racing into the shared main copy.
 

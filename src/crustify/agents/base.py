@@ -170,7 +170,8 @@ class CrustifyAgent:
         # Target-scoped campaign store (tracked wave plans and logs).
         self.campaign_store = ArtifactStore(
             self.layout.campaign_dir(self.target))
-        # Repo-root-tier store: crustify/ (analysis, build.json).
+        # Repo-root-tier store: crustify/ (analysis, build.json,
+        # subsystems.json).
         self.root_store = ArtifactStore(self.layout.root)
         # Convenience alias for the tier this agent's output belongs to.
         self.store = self.root_store if self.tier == "repo_root" else self.campaign_store

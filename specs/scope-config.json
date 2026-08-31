@@ -1,0 +1,66 @@
+{
+  "_comment": "Example `<repo_root>/crustify/campaigns/<target>/<sub-campaign>/scope-config.json`, authored by the orchestrator before scheduling the sub-campaign. It records the user selection and the exact targeted/imported closure resolved from the campaign-wide oracle target. Raw `void` and `string` lifetime discovery each get their own scope config and sub-campaign directory.",
+  "name": "libssl-record",
+  "objective": "port",
+  "oracle_target": "campaign",
+  "selection": {
+    "subsystems": [
+      {
+        "link_unit": "libssl",
+        "name": "record"
+      }
+    ],
+    "types": [],
+    "symbols": [],
+    "lifetime_for": null
+  },
+  "closure": {
+    "targeted": {
+      "implementation_files": [
+        "ssl/record/rec_layer_s3.c",
+        "ssl/record/methods/tls_common.c"
+      ],
+      "types": [
+        {
+          "name": "record_layer_st",
+          "defined_in": "ssl/record/record_local.h",
+          "declared_in": [
+            "ssl/record/record_local.h"
+          ]
+        }
+      ],
+      "symbols": [
+        {
+          "name": "tls_get_more_records",
+          "defined_in": "ssl/record/rec_layer_s3.c",
+          "declared_in": [
+            "ssl/record/record_local.h"
+          ]
+        }
+      ]
+    },
+    "imported": {
+      "implementation_files": [
+        "crypto/bio/bio_lib.c"
+      ],
+      "types": [
+        {
+          "name": "bio_st",
+          "defined_in": "crypto/bio/bio_local.h",
+          "declared_in": [
+            "include/openssl/types.h"
+          ]
+        }
+      ],
+      "symbols": [
+        {
+          "name": "BIO_read",
+          "defined_in": "crypto/bio/bio_lib.c",
+          "declared_in": [
+            "include/openssl/bio.h"
+          ]
+        }
+      ]
+    }
+  }
+}

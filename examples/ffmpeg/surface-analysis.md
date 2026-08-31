@@ -266,7 +266,7 @@ libgit2's ~250k.
   lives in the always-built core files. The playbook does not re-check the C
   build or tests for a wrap wave, so a minimal build costs nothing here.
 - **FATE** — 3,253 test names, and the samples rsync is several GB. Needed for
-  `build.json`'s `test_baseline` even though a wrap campaign will not move it.
+  the campaign's test baseline even though a wrap campaign will not move it.
 - **Sanitizers** — enable them in the `build` command per the playbook, so
   agents catch memory-safety violations when testing Rust against C.
 

@@ -25,7 +25,7 @@
 # Campaign execution questions
 
 8. **Use default workload settings, or customize them?**
-   - Answer: defaults; parallelism is orchestrator-selected
+   - Answer: defaults; parallelism is orchestrator's choice
 9. **Do you want agentic review? At which milestones and with which model?**
    - Answer: at campaign end, using `claude-opus-5`
 10. **What batch caps should review agents use? We recommend 3x the translation caps.**

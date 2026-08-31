@@ -6,9 +6,10 @@ one objective-neutral wave document and `crustify-cli translate` executes it.
 
 The filename is not identity. `schedule --output` accepts any path whose parent
 directory already exists, so tracked plans normally use descriptive names such
-as `crustify/campaigns/<target>/types-l0.json`. The orchestrator scaffolds that
-target directory; the oracle never creates it. The CLI still takes the wave path
-explicitly. Regardless of where the file lives, execution logs go to
+as `crustify/campaigns/<target>/<sub-campaign>/types-l0.json`, beside that
+sub-campaign's `scope-config.json`. The orchestrator scaffolds the sub-campaign
+directory; the oracle never creates it. The CLI still takes the wave path
+explicitly. Regardless of where the wave file lives, execution logs go to
 `crustify/campaigns/<target>/logs/<session>/` using the CLI target argument and
 record the submitted path.
 

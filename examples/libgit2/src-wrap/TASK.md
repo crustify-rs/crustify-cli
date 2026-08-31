@@ -1,56 +1,75 @@
 ---
 
-# Campaign questions
+# Mandatory questions
+
+## Campaign
 
 1. **Which repository and revision should this campaign use?**
-   - Answer: `https://github.com/libgit2/libgit2`, latest revision
-2. **Should this campaign port the C implementation to Rust, or create safe Rust wrappers?**
+   - Answer: the existing checkout mounted at `/target`, at its current checked-out revision
+
+2. **Should this campaign port the C implementation to Rust, or create safe
+   Rust wrappers?**
    - Answer: create safe Rust wrappers
-3. **Where should this campaign start: one or two subsystems, a named subset of functions or types, or the whole target? Should sub-campaigns be defined now or brainstormed during the live session?**
-   - Answer: the whole public API; define the `public-api` sub-campaign now
 
-# Sub-campaign questions
+3. **What should this campaign target: a named subset of subsystems, or a named
+   subset of functions and types, or the whole target repo? You can define them
+   now or we can brainstorm them during the live session. You can also answer
+   orchestrator's choice.**
+   - Answer: the whole public API
 
-## `public-api`
+4. **Which agentic backend and model should do the translation work?**
+   - Answer: Codex, `gpt-5.6-sol`
 
-4. **Which implementation paths belong to this subsystem?**
-   - Answer: `src/`
-5. **Which headers define its public API?**
-   - Answer: `include/git2/`
-6. **Should it cover the whole subsystem or only named types and functions?**
-   - Answer: the subset reached by established safe wrapper crates
-7. **Which backend and model should translate this sub-campaign?**
-   - Answer: `codex`, `gpt-5.6-sol`
+5. **Do you want agentic review after translated work lands? If so, which
+   backend and model should perform each review?**
+   - Answer: yes, after each sub-campaign, using claude, `claude-opus-5`
 
-# Campaign execution questions
+6. **Should the campaign run the optional agentic UB audit pass? If so, which
+   backend and model should run it?**
+   - Answer: only with explicit approval, at campaign end, using claude, `claude-opus-5`
 
-8. **Use default workload settings, or customize them?**
-   - Answer: defaults except `max-types: 2`; parallelism is orchestrator-selected
-9. **Do you want agentic review? At which milestones and with which model?**
-   - Answer: after raw lifetime discovery and at campaign end, using `gpt-5.6-sol`
-10. **What batch caps should review agents use? We recommend 3x the translation caps.**
+7. **Should I run fully autonomously end to end?**
+   - Answer: yes
+
+8. **Which billing mode should agentic stages use?**
+   - Answer: API
+
+# Optional questions
+
+Unanswered optional questions use their defaults.
+
+## Campaign execution
+
+9. **Should the campaign use the default batching and parallelism settings, or
+   customize them?**
+   - Answer: defaults
+
+10. **What batch caps should review agents use? We recommend 3x the translation
+    caps so each reviewer sees more related units.**
     - Answer: recommended 3x
-11. **Run the optional agentic UB pass? If so, with which model?**
-    - Answer: at campaign end with explicit approval, using `gpt-5.6-sol`
 
-# Autonomy questions
+## Autonomy (if question 7 is answered `no`)
 
-A1. **Should I run fully autonomously end to end?**
+11. **Should I wait for your approval before starting the setup phase?**
     - Answer: no
-A2. **If no, should I wait for your approval before starting the setup phase?**
+12. **Should I wait for your approval before starting the translation phase?**
+    - Answer: yes, after setup identifies the selected public API surface and bottom-up oracle layers
+13. **Should I wait for your approval between sub-campaigns?**
     - Answer: no
-A3. **Should I wait for your approval before starting the translation phase?**
-    - Answer: yes, after setup identifies the selected surface
-A4. **Should I wait for your approval in between sub-campaigns?**
+14. **Should I wait for your approval before starting review passes?**
     - Answer: no
-A5. **Should I wait for your approval before starting review passes?**
+15. **Should I wait for your approval before starting UB audit passes?**
     - Answer: no
-A6. **Should I wait for your approval before starting UB audit passes?**
-    - Answer: yes
 
 # Benchmark recording questions
 
-12. **Which billing mode should agentic stages use?**
-    - Answer: `api`
-13. **Where and in what format should results be recorded?**
-    - Answer: `<repo-checkout>/crustify/results.md`, match the exact layout
+16. **Where and in what format should results be recorded?**
+    - Answer: `<repo-checkout>/crustify/results.md`, exact structure
+
+# Campaign notes
+
+- Work in `/target` in place. Do not clone, reset, replace, or discard its
+  existing branches or partial `crustify/` work.
+- Refresh the machine-local paths in `crustify/cli-config.json` from the
+  provisioned `CRUSTIFY_DEP_*` and `CRUSTIFY_BIN_*` environment variables if
+  the existing file refers to paths outside the container.

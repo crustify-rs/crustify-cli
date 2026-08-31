@@ -1,5 +1,5 @@
 {
-  "_comment": "Cumulative crate/module placement oracle for the Rust tree. Field meaning and the placement algorithm: docs/schemas/crates.md. The orchestrator authors it lazily; `crustify-cli crates locate|validate` only reads it.",
+  "_comment": "Cumulative crate/module placement oracle for the Rust tree. Crate and module identities derive from subsystems.json. Field meaning and the placement algorithm: docs/schemas/crates.md. The orchestrator authors it lazily; `crustify-cli crates locate|validate` only reads it.",
 
   "crates": {
     "libssl": {
@@ -30,7 +30,7 @@
           "rust_path": "src/quic",
           "rs": {
             "src/quic/quic_ackm.rs": {
-              "_comment": "STEM-PARTNER attribution: include/internal/quic_ackm.h names no crate on its own (include/ is in several libraries' include_dirs and no library's source_dirs), but it shares a stem with ssl/quic/quic_ackm.c — so it takes that TU's crate and module, and both co-home in this one .rs.",
+              "_comment": "STEM-PARTNER attribution: include/internal/quic_ackm.h shares a stem with ssl/quic/quic_ackm.c, so it takes that TU's link unit and subsystem and both co-home in this one .rs.",
               "tu": "ssl/quic/quic_ackm.c",
               "headers": ["include/internal/quic_ackm.h"],
               "members": {

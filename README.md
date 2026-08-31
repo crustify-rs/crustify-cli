@@ -3,10 +3,9 @@
 Crustify is an agent harness for incrementally migrating production C and C++
 code to safe, idiomatic Rust. It can:
 
-- port an implementation to native Rust;
+- port an implementation to native Rust, fully or partially;
 - generate safe Rust wrappers over an unsafe API; or
-- migrate selected subsystems, types, or functions while preserving FFI
-  interoperability with the code left behind.
+- find undefined behavior and memory safety bugs in safe Rust code.
 
 Reliable translation takes more than a capable model, so Crustify equips its
 agents with the tools and skills the job actually requires: a CodeQL-backed dependency
@@ -103,13 +102,14 @@ see [`examples/`](examples/README.md).
 1. **Scope:** choose a target and objective, then define sub-campaigns now or
    brainstorm them with the orchestrator.
 2. **Setup:** establish the build and test baseline, extract CodeQL data,
-   configure the oracle target, and scaffold compiling Rust crates.
-3. **Plan:** the oracle resolves the selected dependency closure into a
-   deterministic order and divides it into batches. Scheduling stays
-   orchestrator-driven — it chooses the objective, budgets, and parallelism per
-   wave — but that order is what makes those choices sound, since it guarantees
-   every consumer is presented with already-safe producers. Waves are internal
-   scheduling artifacts.
+   configure the campaign-wide oracle target, decompose its targeted and
+   imported translation units into `subsystems.json`, and scaffold compiling
+   Rust crates.
+3. **Plan:** for a port campaign, the orchestrator creates one sub-campaign per
+   subsystem plus separate raw `void` and raw `string` lifetime sub-campaigns.
+   Each gets a `scope-config.json` whose exact closure comes from the oracle.
+   Sub-campaigns and their waves run bottom-up so every consumer sees already-safe
+   producers. Waves remain internal scheduling artifacts.
 4. **Translate:** isolated translator agents port, wrap, or review one batch at
    a time and verify both Rust and original project tests.
 5. **Land and audit:** the orchestrator reconciles parallel work, runs
@@ -169,6 +169,8 @@ Newer per-campaign reports and reproducible inputs live under
   procedures for types, symbols, lifetimes, tests, and completion
 - [`docs/conventions.md`](docs/conventions.md): generated Rust conventions
 - [`docs/schemas/`](docs/schemas/): crate-placement and wave schemas
+- [`docs/schemas/subsystems.md`](docs/schemas/subsystems.md): link-unit and subsystem decomposition artifact
+- [`docs/schemas/scope-config.md`](docs/schemas/scope-config.md): per-sub-campaign selection and oracle closure
 - [`examples/TASK.md`](examples/TASK.md): optional pre-filled campaign questionnaire
 - [`examples/results.md`](examples/results.md): campaign results
   template
