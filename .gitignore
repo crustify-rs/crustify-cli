@@ -26,7 +26,6 @@ tmp/
 
 # The rustc driver crate is built at run time against the nightly driving
 # that run, so its build tree never belongs in the repository.
-src/driver/target/
 
 # Rust build trees anywhere -- test fixtures build too, and the driver's is
 # rebuilt against whichever nightly drives a run.

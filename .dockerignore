@@ -1,7 +1,15 @@
-# Both images build with the repository root as context and copy it whole.
-# Source layout is deliberately NOT filtered: each tool reaches into the
-# other's package (`crustify.core`), so a partial context breaks the build.
-# What is excluded is what no image can use and what would bloat the context.
+# Both images build with the repository ROOT as context and copy it whole.
+#
+# The two PACKAGES are deliberately not filtered. `crustify_audit` imports
+# `crustify.core`, so excluding either from the other's image breaks it -- a
+# partial context fails at import, not at build.
+#
+# Everything below is either unusable in an image or large enough to slow the
+# context transfer. The last entry is the one worth reading twice: `crustify/`
+# is anchored at the context root, so it matches the `crustify/audit/` ARTIFACT
+# tree a local run would leave here -- not `src/crustify/`, the package, which
+# stays. Those artifacts are gitignored but still reach a build context, which
+# is why the rule exists at all.
 .git/
 **/__pycache__/
 **/*.pyc

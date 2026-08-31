@@ -21,4 +21,6 @@ include = ["crustify*"]
 
 [tool.setuptools.package-data]
 crustify = ["prompts/*.md", "prompts/skills/*.md"]
-crustify_audit = ["prompts/*.md", "templates/*", "SKILL.md"]
+crustify_audit = ["prompts/*.md", "templates/*", "SKILL.md",
+                  "unsafe_driver/Cargo.toml", "unsafe_driver/Cargo.lock",
+                  "unsafe_driver/rust-toolchain.toml", "unsafe_driver/src/*.rs"]

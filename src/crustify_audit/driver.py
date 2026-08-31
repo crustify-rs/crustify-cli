@@ -1,6 +1,7 @@
 """driver.py — the deterministic pass.
 
-Runs the canonical rustc driver (``src/driver/``) over the subject workspace
+Runs the canonical rustc driver (``crustify_audit/unsafe_driver/``) over the
+subject workspace
 and returns its tree-wide metrics block.
 
 Resolution-aware because the questions are: which C type a pointer points at,
@@ -21,7 +22,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
-_DRIVER_CRATE = Path(__file__).resolve().parents[1] / "driver"
+# INSIDE the package, not beside it. `parents[1]` used to reach a sibling of
+# `src/`, which an editable install and the container's PYTHONPATH mount both
+# happen to resolve -- and a real `pip install` does not, because package data
+# cannot ship a sibling. The crate travels with the package now.
+_DRIVER_CRATE = Path(__file__).resolve().parent / "unsafe_driver"
 
 # Count fields summed across the per-crate emissions, and site arrays
 # concatenated. The set the driver emits; kept explicit so a field added there
