@@ -39,7 +39,7 @@
   ],
   "bins": {
     "crustify": "/absolute/path/to/venv/bin/crustify",
-    "wavefront": "/absolute/path/to/venv/bin/wavefront",
+    "wavefront": "/absolute/path/to/venv/bin/crustify-oracle",
     "crustify-audit": "/absolute/path/to/venv/bin/crustify-audit"
   },
 
