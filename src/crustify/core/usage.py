@@ -65,7 +65,12 @@ def _read_usage(transcript: Path) -> tuple[list[dict], str]:
             if mid in seen:
                 continue
             seen.add(mid)
-            model = msg.get("model") or model
+            # `<synthetic>` marks a CLI-generated message, not a model that
+            # billed anything. Letting it win makes the whole file price as
+            # UNKNOWN -- silently dropping a real run from the total.
+            named = msg.get("model") or ""
+            if named and not named.startswith("<"):
+                model = named
             u = msg.get("usage") or {}
             cc = u.get("cache_creation") or {}
             requests.append({
