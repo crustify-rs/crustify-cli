@@ -1,0 +1,23 @@
+# crustify-audit artifacts — written into <repo>/crustify/audit/.
+#
+# The RECORD is meant to be committed: advisories, their reproducer SOURCES,
+# leads, and the report are the deliverable, and an advisory is only worth
+# anything if someone else can rebuild its reproduction. What is excluded here
+# is everything a clean checkout regenerates.
+
+# Deterministic scan output. Regenerate with `crustify-audit <repo> unsafe`.
+/unsafe.json
+
+# The agent's working area. Disposable by design and deleted between runs;
+# a confirmed reproduction lives beside its advisory, never here.
+/scratch/
+
+# Cargo build trees under the reproducers. These dominate the directory —
+# typically ~99% of its bytes — and hold rebuildable object files, static
+# libcurl copies and incremental-compilation graphs.
+**/target/
+**/target-*/
+
+# Uncomment to keep agent transcripts out of the history as well. They are the
+# provenance for advisory attribution, so they are tracked by default.
+# /logs/

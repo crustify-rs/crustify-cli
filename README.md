@@ -72,7 +72,7 @@ Optionally copy and pre-fill the campaign questionnaire before starting the
 orchestrator:
 
 ```bash
-cp crustify-cli/examples/TASK.md campaign-TASK.md
+cp crustify-cli/examples/crustify/TASK.md campaign-TASK.md
 # Edit campaign-TASK.md and answer as many questions as you want.
 ```
 
@@ -92,10 +92,10 @@ autonomy it has. It presents a consolidated campaign brief for approval before
 mutating the target repository.
 
 Campaign reports follow the
-[`examples/results.md`](examples/results.md) template.
+[`examples/crustify/results.md`](examples/crustify/results.md) template.
 
 For a reproducible container environment or a pre-filled campaign manifest,
-see [`examples/`](examples/README.md).
+see [`examples/`](examples/crustify/README.md).
 
 ## Campaign lifecycle
 
@@ -157,7 +157,7 @@ type's accessors. An independent agentic review pass and the optional
 per-wave gates.
 
 Detailed cost, wall-time, unsafe-surface, and test measurements are preserved
-in [`examples/libgit2-openssl-results.md`](examples/libgit2-openssl-results.md).
+in [`examples/crustify/libgit2-openssl-results.md`](examples/crustify/libgit2-openssl-results.md).
 Newer per-campaign reports and reproducible inputs live under
 [`examples/`](examples/).
 
@@ -171,8 +171,8 @@ Newer per-campaign reports and reproducible inputs live under
 - [`docs/schemas/`](docs/schemas/): crate-placement and wave schemas
 - [`docs/schemas/subsystems.md`](docs/schemas/subsystems.md): link-unit and subsystem decomposition artifact
 - [`docs/schemas/scope-config.md`](docs/schemas/scope-config.md): per-sub-campaign selection and oracle closure
-- [`examples/TASK.md`](examples/TASK.md): optional pre-filled campaign questionnaire
-- [`examples/results.md`](examples/results.md): campaign results
+- [`examples/crustify/TASK.md`](examples/crustify/TASK.md): optional pre-filled campaign questionnaire
+- [`examples/crustify/results.md`](examples/crustify/results.md): campaign results
   template
 
 ## Acknowledgements

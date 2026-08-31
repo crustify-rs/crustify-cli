@@ -1,0 +1,5 @@
+# Applies to BOTH images: they build with the repository root as context.
+# Only what is useless to every build belongs here.
+**/__pycache__/
+**/*.pyc
+.git/

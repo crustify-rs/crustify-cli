@@ -2,7 +2,7 @@
 #
 # Both commands run from the repo root:
 #
-#   docker build -f examples/Dockerfile -t crustify .
+#   docker build -f examples/crustify/Dockerfile -t crustify .
 #
 #   docker run -it --name crustify-libgit2 \
 #       -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
@@ -33,7 +33,7 @@
 # name resolves from the mounted crustify-cli checkout.
 #
 # The results template rides the same mount: the orchestrator reads
-# examples/results.md from the checkout and writes the filled table to the path
+# examples/crustify/results.md from the checkout and writes the filled table to the path
 # the campaign task names. Nothing is baked into the image or seeded into
 # /target, so editing the template on the host changes the next run.
 #

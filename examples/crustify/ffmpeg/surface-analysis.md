@@ -180,7 +180,7 @@ memory-unsafe by construction: `avio.h` (Rust closures called from C),
 
 ## Workload
 
-Calibration is the libgit2 opus5 run (`examples/libgit2/wrappers-results-opus5.md`):
+Calibration is the libgit2 opus5 run (`examples/crustify/libgit2/wrappers-results-opus5.md`):
 **$8.16 per type-or-callback unit** at `--max-types 1`, **$0.56 per symbol**,
 ~12m mean agent wall. `--max-types 2` batches types and takes roughly 30-40%
 off the type line. Neither figure includes a review pass; budget +25-40% for

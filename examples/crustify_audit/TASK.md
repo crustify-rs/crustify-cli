@@ -1,0 +1,55 @@
+---
+
+Fill in every mandatory answer before a headless run.
+Optional answers may be left unresolved for the orchestrator to decide.
+
+# Mandatory questions
+
+## Audit
+
+1. **Should the auditors only report, also repair what they confirm, only
+   repair advisories that are already there, or re-investigate open leads?**
+   - Answer: `<audit | audit+patch | patch | revisit>`
+   - `revisit` hunts nothing new: it re-opens the leads an earlier campaign
+     could not settle, which is what you want after adding an instrument that
+     can now decide one. The worksets are lead files, not source files.
+2. **How many auditors should run at once?**
+   - Answer: `<N>`
+3. **What is the wall-clock budget per auditor, in minutes? Spend is roughly
+   this times the number of auditors.**
+   - Answer: `<minutes>`
+4. **Which backend and model should the auditors use?**
+   - Answer: `<backend, model>`
+5. **Which billing mode should agentic stages use?**
+   - Answer: `<api | subscription>`
+6. **Which instruments should the auditors hunt with?**
+   - Answer: `<miri | asan/ubsan | bsan (borrowsanitizer) | msan (memorysanitizer) | tsan (threadsanitizer) | and-separated combination>`
+   - `miri`: Rust-side memory, value-validity, alignment, aliasing, intrinsic,
+     and data-race UB in code Miri can execute.
+   - `asan/ubsan`: native out-of-bounds, lifetime/free, pointer/alignment,
+     integer/shift, and invalid runtime-value UB in executed instrumented code.
+   - `bsan`: Tree Borrows aliasing and pointer invalidation across Rust and
+     foreign code.
+   - `msan`: use of uninitialized memory, including buffers and struct tails a
+     foreign initializer left partly unwritten. Needs the standard library
+     rebuilt (`-Zbuild-std`) and the foreign code instrumented too; anything
+     uninstrumented reads as uninitialized and reports falsely.
+   - `tsan`: data races across Rust and foreign threads, and unsynchronized use
+     of types whose `Send`/`Sync` is asserted by hand. Reports only the
+     interleavings that actually run.
+   - `msan` and `tsan` each need their own build and cannot share a binary with
+     `asan/ubsan`, so selecting them costs an extra build per auditor.
+
+# Optional questions
+
+Unanswered optional questions are decided by the orchestrator.
+
+## Reporting
+
+7. **Where and in what format should results be recorded?**
+   - Answer: `<results path>, <examples/crustify_audit/results.md | custom template>`
+
+
+## Additional instructions
+
+Unless otherwise stated, match the structure of the given results table exactly.

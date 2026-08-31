@@ -8,7 +8,7 @@ from pathlib import Path
 class TaskManifestTests(unittest.TestCase):
     def test_example_tasks_follow_campaign_intake_schema(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        tasks = sorted((root / "examples").rglob("TASK.md"))
+        tasks = sorted((root / "examples" / "crustify").rglob("TASK.md"))
         self.assertTrue(tasks)
 
         banned = ("wave-planning", "campaign-surface", "campaign.json")

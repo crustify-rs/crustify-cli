@@ -13,7 +13,7 @@ reports use [`results.md`](results.md).
 Both commands from the repo root:
 
 ```sh
-docker build -f examples/Dockerfile -t crustify .
+docker build -f examples/crustify/Dockerfile -t crustify .
 
 docker run -it --name crustify-libgit2 \
     -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
