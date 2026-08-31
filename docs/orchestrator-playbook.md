@@ -81,7 +81,7 @@ From an untouched checkout to the first commit of the initial Rust tree.
 | CodeQL | the CodeQL CLI bundle, on `PATH` |
 | `ffibox` | `git clone https://github.com/crustify-rs/ffibox.git` |
 | `crustify-audit` | `git clone git@github.com:crustify-rs/crustify-audit.git` beside `ffibox`; `python -m pip install -e <checkout>` |
-| `crustify-oracle` | clone beside `ffibox`; `python -m pip install -e <checkout>` |
+| `wavefront` | clone beside `ffibox`; `python -m pip install -e <checkout>` |
 
 On macOS arm64 the CodeQL bundle needs Rosetta.
 
@@ -104,7 +104,7 @@ Author `<repo>/crustify/cli-config.json` from `specs/cli-config.json`:
 | block | holds |
 |---|---|
 | `deps` | absolute paths to the crustify, crustify-oracle, ffibox and crustify-audit checkouts |
-| `bins` | absolute paths to `crustify`, `crustify-oracle` and `crustify-audit` |
+| `bins` | absolute paths to `crustify`, `wavefront` and `crustify-audit` |
 | `prompt_capabilities` | optional skill instructions injected per agent role |
 
 **Absolute paths only.** An agent runs inside a git worktree, so nothing
@@ -114,7 +114,7 @@ gitignored — it reaches a worktree through `worktree.link_shared`, not git.
 **Take the paths from the environment when it offers them.** A provisioned
 environment may export exactly these values.
 
-For translators, list any of `crustify-oracle`, `ffibox` and
+For translators, list any of `wavefront`, `ffibox` and
 `crustify-audit` under `prompt_capabilities.translator`. A missing capability
 is omitted from the rendered prompt. This is an instruction ablation only: it
 does not hide the checkout, executable, dependency or path from the agent.
@@ -478,6 +478,6 @@ Fill whatever evaluation table the user provides.
 ## Self-repair
 
 If throughout driving campaigns you discover any bugs or flaws in `crustify`,
-`crustify-oracle`, `crustify-audit`, or `ffibox`, including new generic primitives that can be used
+`wavefront`, `crustify-audit`, or `ffibox`, including new generic primitives that can be used
 for C/Rust interop in `ffibox`, then create a new branch and worktree on the respective repository,
 naming it accordingly, and develop a patch for the fix / enhancement.

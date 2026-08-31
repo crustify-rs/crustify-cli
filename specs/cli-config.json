@@ -38,7 +38,7 @@
     "inherited, which is not something crustify controls."
   ],
   "bins": {
-    "crustify-cli": "/absolute/path/to/venv/bin/crustify-cli",
+    "crustify": "/absolute/path/to/venv/bin/crustify",
     "crustify-oracle": "/absolute/path/to/venv/bin/crustify-oracle",
     "crustify-audit": "/absolute/path/to/venv/bin/crustify-audit"
   },
