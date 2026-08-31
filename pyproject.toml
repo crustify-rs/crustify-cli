@@ -10,7 +10,7 @@ requires-python = ">=3.13"
 dependencies = []
 
 [project.scripts]
-crustify-cli = "crustify.cli:main"
+crustify = "crustify.cli:main"
 crustify-log-cost = "crustify.log_cost:main"
 crustify-orchestrator-prompt = "crustify.orchestrator_prompt:main"
 crustify-audit = "crustify_audit.cli:main"
@@ -21,4 +21,4 @@ include = ["crustify*"]
 
 [tool.setuptools.package-data]
 crustify = ["prompts/*.md", "prompts/skills/*.md"]
-crustify_audit = ["prompts/*.md", "templates/*"]
+crustify_audit = ["prompts/*.md", "templates/*", "SKILL.md"]

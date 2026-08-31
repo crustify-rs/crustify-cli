@@ -1,6 +1,6 @@
 """base.py — the single audit agent.
 
-WHAT THIS BORROWS FROM crustify-cli, AND WHAT IT DELIBERATELY DOES NOT.
+WHAT THIS BORROWS FROM crustify, AND WHAT IT DELIBERATELY DOES NOT.
 
 Kept, because they earned their place there and the reasons carry over:
 

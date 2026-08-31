@@ -248,4 +248,4 @@ def execute(target: Path, wave_path: Path, *, objective: str,
             f"  - {batch.label()}: {type(exc).__name__}: {exc}"
             for batch, exc in failures)
         raise SystemExit(f"translate failed for {len(failures)} batch(es):\n{lines}")
-    print("[crustify-cli translate] done.")
+    print("[crustify translate] done.")

@@ -28,7 +28,7 @@ worklist, its objective, dependency order and authored Rust homes.
    agent-owned findings through an enabled capability when one provides that
    operation.
 4. Locate every authored Rust home with
-   `crustify-cli {repo_root} {target} crates locate`. For a raw-lifetime route,
+   `crustify {repo_root} {target} crates locate`. For a raw-lifetime route,
    locate the concrete primitives after discovering them and home them yourself
    in `crates.json`. Otherwise, you should never really have to edit the spec;
    report a missing home.

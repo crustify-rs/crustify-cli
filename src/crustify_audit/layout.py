@@ -1,6 +1,6 @@
 """layout.py — where crustify-audit puts things.
 
-ONE deliberate difference from crustify-cli, and it is the whole reason this is
+ONE deliberate difference from crustify, and it is the whole reason this is
 a separate binary: the subject is an ORDINARY CARGO WORKSPACE. There is no
 ``crustify/`` directory to find, no ``scope-config.json`` to read, no CodeQL
 database, no campaign. The campaign binaries mandate ``<repo_root> <target>``;
@@ -8,7 +8,7 @@ the audit that motivated this tool was of a third-party crate with none of
 that, and could not have been run through either.
 
 Artifacts land in ``<repo>/crustify/audit/`` -- under the same directory
-crustify-cli uses at a repo root, so auditing a crate that IS a crustify
+crustify uses at a repo root, so auditing a crate that IS a crustify
 campaign target puts the audit beside the campaign rather than in a second
 place. Inside the audited tree on purpose: leads and advisories are about that
 crate and should travel with it, and accumulate across runs.
@@ -20,7 +20,7 @@ from pathlib import Path
 
 #: Under `crustify/`, not beside it: auditing a campaign target should put the
 #: audit next to the campaign. In its OWN subdirectory, because a target that
-#: has been through crustify-cli already has `codeql/`, `rust/`, `crates.json`
+#: has been through crustify already has `codeql/`, `rust/`, `crates.json`
 #: and the rest at that level, and interleaving two tools' artifacts in one
 #: listing makes neither readable — and leaves the next name either side adds
 #: free to collide.

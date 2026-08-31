@@ -1,0 +1,10 @@
+# PoC: HIR/typeck pass counting unsafe blocks, unsafe-block statements/lines,
+# and (type-precise) raw-pointer dereferences. Uses rustc_private (nightly).
+[package]
+name = "crustify-audit-driver"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "crustify-audit-driver"
+path = "src/main.rs"

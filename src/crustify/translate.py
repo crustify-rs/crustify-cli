@@ -103,4 +103,4 @@ def translate_lifetime_for(target: Path, spec: str, *, objective: str = "wrap",
     if failures:
         raise SystemExit(
             f"translate raw-lifetime {spec}: agent failed: {failures[0][1]}")
-    print("[crustify-cli translate] done.")
+    print("[crustify translate] done.")

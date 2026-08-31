@@ -8,7 +8,7 @@
     "in the `imported` section, derived.",
     "",
     "The repo root and the target id are NOT in this file: both are CLI",
-    "positionals (`crustify-cli <repo_root> <target> ...`), and this config is",
+    "positionals (`crustify <repo_root> <target> ...`), and this config is",
     "located by the target at crustify/oracle/targets/<target>/oracle-config.json."
   ],
   "_comment_files": [

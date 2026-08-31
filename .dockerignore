@@ -1,6 +1,10 @@
 # Both images build with the repository root as context and copy it whole.
-# Only what no build can use belongs here; source layout is not filtered,
-# because each tool now reaches into the other's package (`crustify.core`).
+# Source layout is deliberately NOT filtered: each tool reaches into the
+# other's package (`crustify.core`), so a partial context breaks the build.
+# What is excluded is what no image can use and what would bloat the context.
+.git/
 **/__pycache__/
 **/*.pyc
-.git/
+**/*.egg-info
+**/target
+crustify/

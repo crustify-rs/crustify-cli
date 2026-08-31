@@ -7,7 +7,7 @@
 #   docker run -it --name crustify-libgit2 \
 #       -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
 #       -e CRUSTIFY_CAMPAIGN=libgit2/src-port \
-#       -v "$(dirname "$PWD")/crustify-cli:/opt/crustify-cli" \
+#       -v "$(dirname "$PWD")/crustify:/opt/crustify" \
 #       -v "$(dirname "$PWD")/crustify-oracle:/opt/crustify-oracle" \
 #       -v "$(dirname "$PWD")/crustify-audit:/opt/crustify-audit" \
 #       -v "$(dirname "$PWD")/ffibox:/opt/ffibox" \
@@ -16,7 +16,7 @@
 #
 # Source mounts and the target checkout:
 #
-#   /opt/crustify-cli  Required read-write host checkout.
+#   /opt/crustify  Required read-write host checkout.
 #   /opt/{crustify-oracle,crustify-audit,ffibox}
 #                      Optional read-write host checkouts. When one is absent,
 #                      the entrypoint clones its main branch into the container.
@@ -30,7 +30,7 @@
 # checkout's examples/, and its TASK.md arrives through the mount above. Edit
 # that file on the host and the next run picks it up. Naming a campaign that
 # does not exist exits 2 with the path it looked for. examples/ is tracked, so a
-# name resolves from the mounted crustify-cli checkout.
+# name resolves from the mounted crustify checkout.
 #
 # The results template rides the same mount: the orchestrator reads
 # examples/crustify/results.md from the checkout and writes the filled table to the path
@@ -117,7 +117,7 @@ RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
         curl -fsSL https://chatgpt.com/codex/install.sh | sh; \
     fi
 
-# 6. Quick Setup sources live under /opt. crustify-cli is a required runtime
+# 6. Quick Setup sources live under /opt. crustify is a required runtime
 #    mount; the entrypoint uses mounted oracle/audit/ffibox trees when present
 #    and clones only the missing ones. It then installs the Python projects
 #    editable and installs the oracle's CodeQL pack before rendering the prompt.
@@ -127,16 +127,16 @@ RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
 # crustify/" reads these by name: set here, copied verbatim into `deps` and
 # `bins`. CRUSTIFY_DEP_CRUSTIFY doubles as the "this environment is already
 # provisioned" flag that tells it not to re-clone the checkouts above.
-ENV CRUSTIFY_DEP_CRUSTIFY=/opt/crustify-cli \
+ENV CRUSTIFY_DEP_CRUSTIFY=/opt/crustify \
     CRUSTIFY_DEP_FFIBOX=/opt/ffibox \
     CRUSTIFY_DEP_ORACLE=/opt/crustify-oracle \
     CRUSTIFY_DEP_AUDIT=/opt/crustify-audit \
-    CRUSTIFY_BIN_CLI=/opt/venv/bin/crustify-cli \
+    CRUSTIFY_BIN_CLI=/opt/venv/bin/crustify \
     CRUSTIFY_BIN_ORACLE=/opt/venv/bin/crustify-oracle \
     CRUSTIFY_BIN_AUDIT=/opt/venv/bin/crustify-audit
 
 # Drives the ORCHESTRATOR only; a wave's translate agents come from
-# `crustify-cli --model`, chosen per wave.
+# `crustify --model`, chosen per wave.
 ENV CRUSTIFY_BACKEND=claude
 
 # Interactive by default: the prompt asks what to port before Phase 1 and
@@ -155,7 +155,7 @@ ENV CRUSTIFY_CAMPAIGN=
 # by the claude backend.
 ENV CRUSTIFY_EFFORT=high
 
-# How the ORCHESTRATOR authenticates, the container's echo of crustify-cli's
+# How the ORCHESTRATOR authenticates, the container's echo of crustify's
 # `--billing`. Neither CLI switches to API-key auth on the key alone -- claude
 # keeps sending its stored OAuth token unless `--bare`, and codex's built-in
 # openai provider reads auth.json and 401s on OPENAI_API_KEY unless the
@@ -163,14 +163,14 @@ ENV CRUSTIFY_EFFORT=high
 # nothing until this says to use it. `api` (the default, since a fresh image
 # holds no login) or `subscription` for a run with credentials mounted in. A
 # wave's translate agents get theirs from the TASK.md config, through
-# `crustify-cli --billing`.
+# `crustify --billing`.
 ENV CRUSTIFY_BILLING=api
 
 RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
-      '# crustify-cli supplies this entrypoint and campaign task, so it remains' \
+      '# crustify supplies this entrypoint and campaign task, so it remains' \
       '# a required host mount. The three capability checkouts are optional.' \
-      '[ -f /opt/crustify-cli/pyproject.toml ] || {' \
-      '    echo "missing checkout mount: /opt/crustify-cli" >&2; exit 2; }' \
+      '[ -f /opt/crustify/pyproject.toml ] || {' \
+      '    echo "missing checkout mount: /opt/crustify" >&2; exit 2; }' \
       '[ -e /target/.git ] || {' \
       '    echo "missing target checkout mount: bind an existing Git checkout at /target" >&2; exit 2; }' \
       'git config --global --add safe.directory /target' \
@@ -186,7 +186,7 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       'ensure_checkout /opt/crustify-oracle pyproject.toml https://github.com/crustify-rs/crustify-oracle.git' \
       'ensure_checkout /opt/crustify-audit pyproject.toml https://github.com/crustify-rs/crustify-audit.git' \
       'ensure_checkout /opt/ffibox Cargo.toml https://github.com/crustify-rs/ffibox.git' \
-      'uv pip install --python /opt/venv -e /opt/crustify-cli' \
+      'uv pip install --python /opt/venv -e /opt/crustify' \
       'uv pip install --python /opt/venv -e /opt/crustify-oracle' \
       'uv pip install --python /opt/venv -e /opt/crustify-audit' \
       '(cd /opt/crustify-oracle && codeql pack install)' \
@@ -197,10 +197,10 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       'if [ -f /campaign/TASK.md ]; then' \
       '    task=/campaign/TASK.md' \
       'elif [ -n "${CRUSTIFY_CAMPAIGN:-}" ]; then' \
-      '    task=/opt/crustify-cli/examples/${CRUSTIFY_CAMPAIGN}/TASK.md' \
+      '    task=/opt/crustify/examples/${CRUSTIFY_CAMPAIGN}/TASK.md' \
       '    [ -f "$task" ] || { echo "no campaign at $task" >&2; exit 2; }' \
       'fi' \
-      '# /opt/crustify-cli is a mount point, so only a prompt generated now' \
+      '# /opt/crustify is a mount point, so only a prompt generated now' \
       '# matches the checkout driving this run. Passing the optional task to' \
       '# the renderer keeps container and direct CLI usage identical.' \
       'if [ -n "$task" ]; then' \

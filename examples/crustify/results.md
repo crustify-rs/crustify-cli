@@ -18,7 +18,7 @@ Copy this template into the campaign checkout, then fill it as work lands.
 - **`--min-fields`** — `<n>`
 - **`--parallel-max`** — `<n>`
 - **branch** — `<branch>`, tip `<sha>`
-- **deps** — crustify-cli `<sha>` (`<branch>`), ffibox `<sha>` (`<branch>`)
+- **deps** — crustify `<sha>` (`<branch>`), ffibox `<sha>` (`<branch>`)
 - **build version** — `<build.json version>`
 - **C test baseline** — `<passed>/<total>, <skipped>, and every disabled test`
 
@@ -250,7 +250,7 @@ Deterministic `crustify-audit unsafe`; no model.
 The only prose outside the setup and legend above: pitfalls, findings, and the
 context each table cannot carry. One `###` subsection per finding, titled by
 what it is about. Describe the EXPERIMENT and its results — a fix made to
-crustify-cli or ffibox along the way belongs in that repo's history, not here.
+crustify or ffibox along the way belongs in that repo's history, not here.
 
 > Gate misses and anything the oracle and `translate` disagreed on; a wave that
 > was superseded and why; what each wave's diff actually contained beyond its

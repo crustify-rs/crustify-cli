@@ -22,7 +22,7 @@ There is no `report` verb. Writing the advisory is the agent's job, not a
 formatter's -- a template the harness fills in would flatten exactly the
 judgement the agent is there to exercise.
 
-WHY A SEPARATE BINARY FROM crustify-cli. Both crustify binaries mandate
+WHY A SEPARATE BINARY FROM crustify. Both crustify binaries mandate
 ``<repo_root> <target>`` and refuse to run without a ``crustify/`` directory.
 This tool's most valuable use is auditing a crate that has never heard of
 crustify. That is a different CLI contract, not a new subcommand.

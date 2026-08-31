@@ -3,7 +3,7 @@
 Campaign: libgit2 @ `ddf3b5c85`, target section `src/` + `include/` (409 files),
 import section 102. Agent backend `claude_cli`, model `anthropic/claude-opus-5`,
 `--billing api`, `--max-types 1`, `--parallel-max 32`, policy `per-agent`.
-Deps: crustify-cli `05b76b2` (**ref**), ffibox `7282e05` (**ref**).
+Deps: crustify `05b76b2` (**ref**), ffibox `7282e05` (**ref**).
 Campaign branch `crustify/src-opus5`; `crustify/src` is the untouched scaffold
 baseline. Cost is priced from token counts by `log_cost.py`'s own
 `parse_usage`, never from provider-reported dollars.

@@ -1,6 +1,6 @@
 """log_cost.py — price agent runs from token counts.
 
-The port of crustify-cli's `log_cost.py` that `agentlog` already claimed to
+The port of crustify's `log_cost.py` that `agentlog` already claimed to
 follow. Until it existed, nothing here priced anything: the dollar figures in a
 campaign's `results.md` were whatever rate card the reporting agent happened to
 remember, and a model released after its training data was priced at the

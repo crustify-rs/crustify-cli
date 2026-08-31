@@ -22,7 +22,7 @@ def _parallel_max_type(s: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="crustify-cli",
+        prog="crustify",
         description="Multi-agent C-to-Rust translation pipeline.",
     )
     parser.add_argument(
@@ -91,7 +91,7 @@ def main() -> None:
 
     # Each stage binds ONE blurb and passes it to both `help=` (which renders in
     # the parent's subcommand listing) and `description=` (which renders on the
-    # stage's own --help). Without the second, `crustify-cli … <stage> --help`
+    # stage's own --help). Without the second, `crustify … <stage> --help`
     # prints a usage line and a flag list and never says what the stage does.
     # -- crates (read-only crates.json interface) ------------------------
     _crates_blurb = (

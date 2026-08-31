@@ -11,7 +11,7 @@ WHAT IT COSTS. A rustc driver has to compile the crate, and an FFI wrapper
 often needs system libraries that are not installed. When the build fails there
 are NO counts rather than substitute ones: ``compose`` reports ``counts: null``
 and says why. A number absent is recoverable; a number that looks like
-crustify-cli's but was produced differently is not.
+crustify's but was produced differently is not.
 """
 from __future__ import annotations
 

@@ -104,7 +104,7 @@ Author `<repo>/crustify/cli-config.json` from `specs/cli-config.json`:
 | block | holds |
 |---|---|
 | `deps` | absolute paths to the crustify, crustify-oracle, ffibox and crustify-audit checkouts |
-| `bins` | absolute paths to `crustify-cli`, `crustify-oracle` and `crustify-audit` |
+| `bins` | absolute paths to `crustify`, `crustify-oracle` and `crustify-audit` |
 | `prompt_capabilities` | optional skill instructions injected per agent role |
 
 **Absolute paths only.** An agent runs inside a git worktree, so nothing
@@ -290,7 +290,7 @@ agents populate that allowlist lazily.
 Gate the shells:
 
 ```bash
-crustify-cli <repo_root> <target> crates validate
+crustify <repo_root> <target> crates validate
 cargo build
 cargo test
 ```
@@ -361,7 +361,7 @@ crustify-oracle <repo_root> <target> schedule \
   --output <repo>/crustify/campaigns/<target>/<sub-campaign>/<wave-name>.json \
   --name <items...> [--transitive] [--api-headers-only] \
   [--max-syms N] [--max-loc N] [--max-types N] [--min-fields N]
-crustify-cli --parallel-max N <repo_root> <target> translate \
+crustify --parallel-max N <repo_root> <target> translate \
   <repo>/crustify/campaigns/<target>/<sub-campaign>/<wave-name>.json \
   --objective wrap --dry-run
 ```
@@ -477,7 +477,7 @@ Fill whatever evaluation table the user provides.
 
 ## Self-repair
 
-If throughout driving campaigns you discover any bugs or flaws in `crustify-cli`,
+If throughout driving campaigns you discover any bugs or flaws in `crustify`,
 `crustify-oracle`, `crustify-audit`, or `ffibox`, including new generic primitives that can be used
 for C/Rust interop in `ffibox`, then create a new branch and worktree on the respective repository,
 naming it accordingly, and develop a patch for the fix / enhancement.

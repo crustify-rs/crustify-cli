@@ -55,7 +55,7 @@ to use safe Rust code for all your worklist's dependencies.
 Run:
 
 ```bash
-crustify-cli <repo_root> <target> crates locate --name <worklist names...>
+crustify <repo_root> <target> crates locate --name <worklist names...>
 ```
 
 Use `--file <defined_in>` to disambiguate colliding names. The orchestrator has

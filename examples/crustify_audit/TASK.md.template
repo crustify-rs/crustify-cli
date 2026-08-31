@@ -53,6 +53,7 @@ Unanswered optional questions are decided by the orchestrator.
 
 Unless otherwise stated, match the structure of the given results table exactly.
 
-If the user provided a centralized audit tracker at `/opt/crustify-audit-tracker/targets/<target>/`,
-then copy into it all the artifacts that are not gitignored from `<target repo>/crustify/audit/*`
+If the user provided a centralized audit tracker at `optcrustify-audit-tracker`,
+then copy into it all the artifacts that are not gitignored from
+`<target repo>/crustify/audit/*` into `<tracker>/targets/<target>/`
 and record the results in the tracker's aggregate `README.md`.

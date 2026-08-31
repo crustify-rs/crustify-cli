@@ -40,7 +40,7 @@ as skills.
 
 | Component | Responsibility |
 |---|---|
-| `crustify-cli` | Agent execution, isolated worktrees, crate placement, logging, and campaign artifacts |
+| `crustify` | Agent execution, isolated worktrees, crate placement, logging, and campaign artifacts |
 | [`crustify-oracle`](https://github.com/crustify-rs/crustify-oracle) | CodeQL-backed dependency analysis, scope selection, and deterministic scheduling |
 | [`crustify-audit`](https://github.com/crustify-rs/crustify-audit) | Compiled Rust safety analysis and optional UB review |
 | [`ffibox`](https://github.com/crustify-rs/ffibox) | Safe FFI smart pointers and lifetime traits used by generated wrappers |
@@ -58,12 +58,12 @@ install the three Python packages; `ffibox` is a Rust crate that generated
 wrappers depend on, so it is cloned but not installed:
 
 ```bash
-git clone https://github.com/crustify-rs/crustify-cli.git
+git clone https://github.com/crustify-rs/crustify.git
 git clone https://github.com/crustify-rs/crustify-oracle.git
 git clone https://github.com/crustify-rs/crustify-audit.git
 git clone https://github.com/crustify-rs/ffibox.git
 
-python -m pip install -e crustify-cli
+python -m pip install -e crustify
 python -m pip install -e crustify-oracle
 python -m pip install -e crustify-audit
 ```
@@ -72,7 +72,7 @@ Optionally copy and pre-fill the campaign questionnaire before starting the
 orchestrator:
 
 ```bash
-cp crustify-cli/examples/crustify/TASK.md campaign-TASK.md
+cp crustify/examples/crustify/TASK.md campaign-TASK.md
 # Edit campaign-TASK.md and answer as many questions as you want.
 ```
 
@@ -126,7 +126,7 @@ This repository installs three commands:
 
 ```text
 crustify-orchestrator-prompt  render the campaign orchestrator prompt
-crustify-cli                 validate crate placement and execute wave documents
+crustify                 validate crate placement and execute wave documents
 crustify-log-cost            summarize agent usage and cost logs
 ```
 

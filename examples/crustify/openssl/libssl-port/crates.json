@@ -1,5 +1,5 @@
 {
-  "_comment": "Crate placement follows docs/schemas/crates.md. Home modules and items before their wave, then gate with `crustify-cli <root> <target> crates validate`.",
+  "_comment": "Crate placement follows docs/schemas/crates.md. Home modules and items before their wave, then gate with `crustify <root> <target> crates validate`.",
   "crates": {
     "libc": {
       "kind": "library",

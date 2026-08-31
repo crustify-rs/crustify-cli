@@ -152,7 +152,7 @@ def _place_batch_anchors(batch: Batch, layout, target, stage: Stage) -> None:
     if unanchored:
         action = "have no anchor — nothing emitted to review" if review else (
             "have no home in crates.json and were left unanchored")
-        print(f"[crustify-cli {stage.verb}] {len(unanchored)} item(s) {action}: "
+        print(f"[crustify {stage.verb}] {len(unanchored)} item(s) {action}: "
               + ", ".join(sorted(unanchored)[:8])
               + (" …" if len(unanchored) > 8 else ""))
 

@@ -119,7 +119,7 @@ def validate_command(target: Path) -> None:
         for error in errors:
             print(f"crates validate: {error}", file=sys.stderr)
         raise SystemExit(1)
-    print(f"[crustify-cli crates validate] crates.json OK ({layout.crates_json})")
+    print(f"[crustify crates validate] crates.json OK ({layout.crates_json})")
 
 
 def _entry(cname: str, crate: dict, rs: str, record: dict) -> dict:

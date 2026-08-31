@@ -1,6 +1,6 @@
 """Pluggable agent backends.
 
-The contract is crustify-cli's, deliberately: render a prompt, run an agent
+The contract is crustify's, deliberately: render a prompt, run an agent
 confined to a shell tool in a work dir, stream its output to a log. Keeping the
 two identical means a backend improvement -- better usage parsing, a new
 provider -- ports between the projects as a file copy rather than a rewrite.

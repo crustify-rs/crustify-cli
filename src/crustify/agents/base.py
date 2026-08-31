@@ -157,7 +157,7 @@ class CrustifyAgent:
     def __init__(self, target: Path, *, repo_root: Path | None = None) -> None:
         self.target = target.resolve()
         # An isolated-wave agent passes its WORKTREE as `repo_root` (only when a
-        # worktree is actually in play) so every `crustify-cli <repo_root> …` the
+        # worktree is actually in play) so every `crustify <repo_root> …` the
         # prompt runs — and every artifact path (rust/, logs) — resolves to the
         # worktree, not the pinned main repo. Without it, parallel agents' Rust-tree
         # writes and commits leak into the shared main checkout. Default (None) keeps
@@ -276,7 +276,7 @@ class CrustifyAgent:
 
     def _arguments(self) -> dict:
         # `target` is the repo-RELATIVE id and `repo_root` the full path —
-        # together the two positionals every `crustify-cli <repo_root> <target> …`
+        # together the two positionals every `crustify <repo_root> <target> …`
         # invocation in a prompt needs. `git_base` is the wave's base worktree,
         # the branch an isolated agent lands its own commit on (empty outside a
         # wave). Supplied to EVERY agent: `str.format` ignores a key the template

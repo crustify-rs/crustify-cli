@@ -2,7 +2,7 @@
 
 A campaign is the orchestrator's end-to-end translation session. Each scheduler
 selection within that campaign is a **wave**. `crustify-oracle schedule` writes
-one objective-neutral wave document and `crustify-cli translate` executes it.
+one objective-neutral wave document and `crustify translate` executes it.
 
 The filename is not identity. `schedule --output` accepts any path whose parent
 directory already exists, so tracked plans normally use descriptive names such
