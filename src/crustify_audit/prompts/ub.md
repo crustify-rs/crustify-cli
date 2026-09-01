@@ -28,7 +28,7 @@ classes merely because they are also undefined behavior.
 
 If the target ships its own sanitizers because the selected ones structurally
 cannot run against it -- the Linux kernel's KASAN, KMSAN, KCSAN and kernel
-UBSAN -- use those, and record them under the selected name they implement.
+UBSAN -- use those, and record them under the canonical name they implement.
 
 ## Audit record
 
