@@ -84,6 +84,6 @@ notices under 450 words. Only offer to provide fix patches or PRs when your obje
 included that, otherwise we only disclose. Mentioned reproducers are only provided
 on request but add in the disclosure a small snippet and the santizer crash.
 
-Add the following note to the disclosure: `Found by [Crustify](https://github.com/crustify-rs/crustify-audit),
+Add the following note to the disclosure: `Found by [Crustify](https://github.com/crustify-rs/crustify),
 an experimental UB/soundness auditing agent developed at UC Berkeley and running on <model name>,
 then manually reviewed and independently reproduced.`

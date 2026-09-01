@@ -9,7 +9,6 @@
 #       -e CRUSTIFY_CAMPAIGN=libgit2/src-port \
 #       -v "$(dirname "$PWD")/crustify:/opt/crustify" \
 #       -v "$(dirname "$PWD")/wavefront:/opt/wavefront" \
-#       -v "$(dirname "$PWD")/crustify-audit:/opt/crustify-audit" \
 #       -v "$(dirname "$PWD")/ffibox:/opt/ffibox" \
 #       -v /absolute/path/to/your/target-fork:/target \
 #       crustify
@@ -17,7 +16,7 @@
 # Source mounts and the target checkout:
 #
 #   /opt/crustify  Required read-write host checkout.
-#   /opt/{wavefront,crustify-audit,ffibox}
+#   /opt/{wavefront,ffibox}
 #                      Optional read-write host checkouts. When one is absent,
 #                      the entrypoint clones its main branch into the container.
 #                      Mounted trees always win.
@@ -130,7 +129,7 @@ RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
 ENV CRUSTIFY_DEP_CRUSTIFY=/opt/crustify \
     CRUSTIFY_DEP_FFIBOX=/opt/ffibox \
     CRUSTIFY_DEP_ORACLE=/opt/wavefront \
-    CRUSTIFY_DEP_AUDIT=/opt/crustify-audit \
+    CRUSTIFY_DEP_AUDIT=/opt/crustify \
     CRUSTIFY_BIN_CLI=/opt/venv/bin/crustify \
     CRUSTIFY_BIN_ORACLE=/opt/venv/bin/wavefront \
     CRUSTIFY_BIN_AUDIT=/opt/venv/bin/crustify-audit
@@ -184,11 +183,9 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       '        echo "invalid checkout at $path: missing $marker" >&2; exit 2; }' \
       '}' \
       'ensure_checkout /opt/wavefront pyproject.toml https://github.com/crustify-rs/wavefront.git' \
-      'ensure_checkout /opt/crustify-audit pyproject.toml https://github.com/crustify-rs/crustify-audit.git' \
       'ensure_checkout /opt/ffibox Cargo.toml https://github.com/crustify-rs/ffibox.git' \
       'uv pip install --python /opt/venv -e /opt/crustify' \
       'uv pip install --python /opt/venv -e /opt/wavefront' \
-      'uv pip install --python /opt/venv -e /opt/crustify-audit' \
       '(cd /opt/wavefront && codeql pack install)' \
       '# A mounted /campaign wins; otherwise CRUSTIFY_CAMPAIGN names one' \
       '# under the checkout. A named campaign that is absent is fatal, so a' \
@@ -204,9 +201,9 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       '# matches the checkout driving this run. Passing the optional task to' \
       '# the renderer keeps container and direct CLI usage identical.' \
       'if [ -n "$task" ]; then' \
-      '    crustify-orchestrator-prompt /opt/wavefront /opt/crustify-audit "$task" -o /tmp/orchestrator.md' \
+      '    crustify-orchestrator-prompt /opt/wavefront /opt/crustify/src/crustify_audit "$task" -o /tmp/orchestrator.md' \
       'else' \
-      '    crustify-orchestrator-prompt /opt/wavefront /opt/crustify-audit -o /tmp/orchestrator.md' \
+      '    crustify-orchestrator-prompt /opt/wavefront /opt/crustify/src/crustify_audit -o /tmp/orchestrator.md' \
       'fi' \
       'prompt=/tmp/orchestrator.md' \
       'text="$(cat "$prompt")"' \

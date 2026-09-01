@@ -80,7 +80,6 @@ From an untouched checkout to the first commit of the initial Rust tree.
 | `bindgen-cli` | `cargo install bindgen-cli` |
 | CodeQL | the CodeQL CLI bundle, on `PATH` |
 | `ffibox` | `git clone https://github.com/crustify-rs/ffibox.git` |
-| `crustify-audit` | `git clone git@github.com:crustify-rs/crustify-audit.git` beside `ffibox`; `python -m pip install -e <checkout>` |
 | `wavefront` | clone beside `ffibox`; `python -m pip install -e <checkout>` |
 
 On macOS arm64 the CodeQL bundle needs Rosetta.

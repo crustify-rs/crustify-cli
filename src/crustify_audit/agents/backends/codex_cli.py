@@ -8,10 +8,16 @@ placement, which is exactly what the Backend docstring warns about.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
+from pathlib import Path
+
+from crustify.core.usage import read_rollout_usage, rollout_path
 
 from crustify_audit.agentlog import AgentLog
+
+_SESSION_RE = re.compile(r"session id:\s*([0-9a-fA-F-]{36})")
 
 # Codex's built-in OpenAI provider authenticates from `auth.json` in CODEX_HOME
 # (what `codex login` writes) and ignores an API key in the environment. API
@@ -90,9 +96,21 @@ class CodexCliBackend:
         proc = subprocess.Popen(
             cmd, cwd=work_dir, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1)
+        session = ""
         for line in proc.stdout or ():
             log.line(line.rstrip("\n"))
+            if not session:
+                m = _SESSION_RE.search(line)
+                if m:
+                    session = m.group(1)
         proc.wait()
-        # No codex transcript reader yet, so this run is UNPRICED rather than
-        # wrongly priced: `requests: []` makes that explicit downstream.
-        log.usage({"provider": provider, "model": model, "requests": []})
+        # Codex never reports cost, and its stream does not name the model, so
+        # accounting comes from the rollout it persists independently of stdout.
+        requests: list[dict] = []
+        if session:
+            home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+            rollout = rollout_path(home, session)
+            if rollout is not None:
+                requests = read_rollout_usage(rollout)
+        log.usage({"provider": provider, "model": model,
+                   "session_id": session, "requests": requests})

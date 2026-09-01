@@ -133,57 +133,11 @@ _REASONING_EFFORT = {
 # a target outside the granted dir failed `Operation not permitted` (verified).
 
 
-def _rollout_path(codex_home: Path, session_id: str) -> Path | None:
-    """Locate the session rollout for ``session_id``.
+from crustify.core.usage import (  # noqa: F401 - re-exported
+    read_rollout_usage as _read_usage,
+    rollout_path as _rollout_path,
+)
 
-    Codex files rollouts by date (``sessions/YYYY/MM/DD/rollout-<ts>-<id>``),
-    so the id is matched by glob rather than by computing the path.
-    """
-    hits = sorted(codex_home.glob(f"sessions/*/*/*/rollout-*-{session_id}.jsonl"))
-    return hits[-1] if hits else None
-
-
-def _read_usage(rollout: Path) -> list[dict]:
-    """One usage record per turn, from the rollout's ``token_count`` events.
-
-    Each event reports both a running ``total_token_usage`` and that turn's
-    ``last_token_usage``. The per-turn figure is taken, but only when the
-    running total has actually moved: codex re-emits ``token_count``
-    without a new request, and counting those would inflate every session.
-
-    Counts are converted to crustify's exclusive buckets - codex's
-    ``input_tokens`` includes ``cached_input_tokens``, so cached reads
-    would otherwise be billed twice, once at the input rate and once at
-    the cache rate.
-    """
-    requests: list[dict] = []
-    prev_total = None
-    with open(rollout, errors="replace") as fh:
-        for line in fh:
-            try:
-                d = json.loads(line)
-            except ValueError:
-                continue
-            payload = d.get("payload") or {}
-            if payload.get("type") != "token_count":
-                continue
-            info = payload.get("info") or {}
-            total = info.get("total_token_usage") or {}
-            last = info.get("last_token_usage") or {}
-            marker = total.get("total_tokens")
-            if marker is None or marker == prev_total:
-                continue
-            prev_total = marker
-            cached = int(last.get("cached_input_tokens") or 0)
-            inp = int(last.get("input_tokens") or 0)
-            requests.append({
-                "input_tokens": max(inp - cached, 0),
-                "output_tokens": int(last.get("output_tokens") or 0),
-                "cache_read_tokens": cached,
-                "cache_write_tokens": int(last.get("cache_write_input_tokens") or 0),
-                "cache_write_1h_tokens": 0,
-            })
-    return requests
 
 
 class CodexCliBackend:
