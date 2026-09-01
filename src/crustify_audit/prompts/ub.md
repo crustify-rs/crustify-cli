@@ -26,6 +26,13 @@ instruments can demonstrate. A confirmed reproducer must trigger at least one
 of them. The bug-class lists are the hunt scope: do not spend the run on other
 classes merely because they are also undefined behavior.
 
+If the target ships its own sanitizers because the selected ones structurally
+cannot run against it -- the Linux kernel's KASAN, KMSAN, KCSAN and kernel
+UBSAN are the obvious case -- use the target's. Record the one that actually
+fired under its own name, not the selected name it stands in for: the reach
+differs, and the instrument column is evidence rather than a label. A selected
+instrument that could not run is still untested, never clean.
+
 ## Audit record
 
 Use `{workspace}/crustify/audit/`:
