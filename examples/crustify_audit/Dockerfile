@@ -221,6 +221,12 @@ ENV CRUSTIFY_PROVIDER=
 # Headless mode cannot resolve missing mandatory TASK answers interactively.
 ENV CRUSTIFY_HEADLESS=0
 
+# Ablation: 1 drops the orchestrator prompt entirely and hands the backend the
+# mounted TASK.md verbatim. Everything else -- image, toolchain, sanitizers,
+# target mount, auth -- stays identical, so a run measures the prompt's
+# contribution and nothing else. See examples/crustify_audit/TASK-bare.md.template.
+ENV CRUSTIFY_BARE=0
+
 # Codex reasoning effort for both the orchestrator and every auditor it spawns.
 # The CLI accepts any string locally and rejects unsupported values at the API.
 ENV CRUSTIFY_EFFORT=high
@@ -329,6 +335,18 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       '        effort=(-c "model_reasoning_effort=\"${CRUSTIFY_EFFORT}\"") ;;' \
       '    *) echo "bad CRUSTIFY_EFFORT: ${CRUSTIFY_EFFORT}" >&2; exit 2 ;;' \
       'esac' \
+      '# ABLATION SWITCH. With CRUSTIFY_BARE=1 the harness contributes NOTHING' \
+      '# to the prompt: no orchestrator role, no container context, no workset' \
+      '# or instrument guidance, no artifact layout. The TASK file IS the whole' \
+      '# prompt. That is the point -- it measures what the bare model finds on' \
+      '# its own, against a full crustify run on the same target and budget.' \
+      'if [ "${CRUSTIFY_BARE:-0}" = 1 ]; then' \
+      '    [ -f /campaign/TASK.md ] || {' \
+      '        echo "CRUSTIFY_BARE=1 needs a task at /campaign/TASK.md" >&2' \
+      '        exit 2; }' \
+      '    echo "[crustify-audit] BARE: /campaign/TASK.md is the entire prompt"' \
+      '    text="$(cat /campaign/TASK.md)"' \
+      'else' \
       '# A development mount overrides the prompt baked into the image.' \
       'prompt=/opt/crustify-audit/src/crustify_audit/prompts/orchestrator.md' \
       '[ -f "$prompt" ] || { echo "no orchestrator prompt at $prompt" >&2; exit 2; }' \
@@ -371,6 +389,7 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       'launch while a mandatory answer is unresolved.' \
       '' \
       '$(cat "$task")"' \
+      'fi' \
       'fi' \
       'skip=--dangerously-skip-permissions' \
       'bypass=--dangerously-bypass-approvals-and-sandbox' \
