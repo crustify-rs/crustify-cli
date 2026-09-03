@@ -16,7 +16,7 @@
 4. **Which implementation paths belong to this subsystem?**
    - Answer: `ssl/` plus headers outside it that libssl implements
 5. **Which headers define its public API?**
-   - Answer: derive from `oracle-config.json`
+   - Answer: derive from `wavefront-config.json`
 6. **Should it cover the whole subsystem or only named types and functions?**
    - Answer: the imported type closure, imported symbols required by target layers L0 through L2, and the three god objects listed below
 7. **Which backend and model should translate this sub-campaign?**
@@ -57,7 +57,7 @@ A6. **Should I wait for your approval before starting UB audit passes?**
 
 # Setup notes
 
-Run Phase 1 end to end. The pre-authored `build.json`, `oracle-config.json`, and
+Run Phase 1 end to end. The pre-authored `build.json`, `wavefront-config.json`, and
 `crates.json` may be copied from `/campaign/`; emit `subsystems.json` after the
 campaign-wide oracle target is populated. Skip toolchain installation when the
 required tools are already installed.

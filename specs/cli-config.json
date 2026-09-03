@@ -6,8 +6,8 @@
     "so nothing relative to its cwd resolves the same way twice.",
     "Machine-local by construction, hence gitignored - it reaches a worktree",
     "through `worktree.link_shared`, not through git.",
-    "Oracle target configuration lives separately under",
-    "crustify/oracle/targets/<target>/oracle-config.json."
+    "Wavefront target configuration lives separately under",
+    "crustify/wavefront/targets/<target>/wavefront-config.json."
   ],
 
   "_comment_deps": [
@@ -15,7 +15,7 @@
     "  * `crustify`      - the crustify checkout. Supplies",
     "                      core translator/orchestrator skills; falls back to",
     "                      the installed package's own tree when absent.",
-    "  * `wavefront` - standalone semantic oracle. Its generic SKILL.md",
+    "  * `wavefront`     - standalone semantic oracle. Its generic SKILL.md",
     "                      can join a translator's prompt.",
     "  * `ffibox`         - the wrap-primitive crate. Its generic `SKILL.md`",
     "                      can join a translator's prompt, and the orchestrator writes this path into",

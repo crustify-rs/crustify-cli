@@ -81,7 +81,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #    trips on. Versioned packages ship only versioned binaries, so the names a
 #    build system actually invokes are linked by hand.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git unzip xz-utils pkg-config file \
+        ca-certificates curl git unzip xz-utils pkg-config file jq ripgrep \
         build-essential clang-19 lld-19 cmake ninja-build python3 \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s clang-19   /usr/bin/clang \
@@ -101,12 +101,20 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     && rustup toolchain install nightly --component rustc-dev --component llvm-tools \
     && cargo install bindgen-cli --locked
 
-# 4. CodeQL CLI. The cpp pack is installed from wavefront's qlpack
-#    by the entrypoint, once that checkout is resolved.
-RUN curl -fsSL -o /tmp/codeql.zip \
-      "https://github.com/github/codeql-cli-binaries/releases/download/${CODEQL_VERSION}/codeql-linux64.zip" \
-    && unzip -q /tmp/codeql.zip -d /opt && rm /tmp/codeql.zip \
-    && codeql version --format=terse
+# 4. CodeQL CLI. GitHub publishes this bundle for x86-64 Linux, but not native
+#    Linux ARM64. ARM campaigns can still consume T1/T2 tables extracted on an
+#    x86-64 machine; the entrypoint verifies those tables before starting. The
+#    cpp pack is installed from wavefront's qlpack on hosts that have CodeQL.
+RUN arch="$(dpkg --print-architecture)"; \
+    if [ "$arch" = amd64 ]; then \
+        curl -fsSL -o /tmp/codeql.zip \
+          "https://github.com/github/codeql-cli-binaries/releases/download/${CODEQL_VERSION}/codeql-linux64.zip" \
+        && unzip -q /tmp/codeql.zip -d /opt \
+        && rm /tmp/codeql.zip \
+        && codeql version --format=terse; \
+    else \
+        echo "CodeQL is unavailable natively on $arch; pre-extracted T1/T2 tables are required"; \
+    fi
 
 # 5. Agent backends.
 RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
@@ -128,10 +136,10 @@ RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
 # provisioned" flag that tells it not to re-clone the checkouts above.
 ENV CRUSTIFY_DEP_CRUSTIFY=/opt/crustify \
     CRUSTIFY_DEP_FFIBOX=/opt/ffibox \
-    CRUSTIFY_DEP_ORACLE=/opt/wavefront \
+    CRUSTIFY_DEP_WAVEFRONT=/opt/wavefront \
     CRUSTIFY_DEP_AUDIT=/opt/crustify \
     CRUSTIFY_BIN_CLI=/opt/venv/bin/crustify \
-    CRUSTIFY_BIN_ORACLE=/opt/venv/bin/wavefront \
+    CRUSTIFY_BIN_WAVEFRONT=/opt/venv/bin/wavefront \
     CRUSTIFY_BIN_AUDIT=/opt/venv/bin/crustify-audit
 
 # Drives the ORCHESTRATOR only; a wave's translate agents come from
@@ -186,7 +194,19 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       'ensure_checkout /opt/ffibox Cargo.toml https://github.com/crustify-rs/ffibox.git' \
       'uv pip install --python /opt/venv -e /opt/crustify' \
       'uv pip install --python /opt/venv -e /opt/wavefront' \
-      '(cd /opt/wavefront && codeql pack install)' \
+      'if command -v codeql >/dev/null 2>&1; then' \
+      '    qlpack=/opt/wavefront' \
+      '    [ ! -f /opt/wavefront/src/qlpack.yml ] || qlpack=/opt/wavefront/src' \
+      '    (cd "$qlpack" && codeql pack install)' \
+      'else' \
+      '    t1=/target/crustify/wavefront/codeql/t1/functions.csv' \
+      '    t2=/target/crustify/wavefront/codeql/t2/function_calls.csv' \
+      '    [ -s "$t1" ] && [ -s "$t2" ] || {' \
+      '        echo "CodeQL is unavailable and the target has no reusable T1/T2 tables" >&2' \
+      '        echo "expected non-empty $t1 and $t2" >&2' \
+      '        exit 2; }' \
+      '    echo "CodeQL unavailable; using pre-extracted target T1/T2 tables" >&2' \
+      'fi' \
       '# A mounted /campaign wins; otherwise CRUSTIFY_CAMPAIGN names one' \
       '# under the checkout. A named campaign that is absent is fatal, so a' \
       '# typo costs one exit rather than a whole run on a task-less prompt.' \

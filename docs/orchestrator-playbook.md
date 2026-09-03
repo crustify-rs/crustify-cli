@@ -2,7 +2,7 @@
 
 Driving crustify, in two phases. Setup: toolchain install through the first
 commit of the initial Rust tree — authoring `build.json`, `cli-config.json` and
-a campaign-wide `oracle-config.json`, building the CodeQL database, extracting
+a campaign-wide `wavefront-config.json`, building the CodeQL database, extracting
 the T1/T2 tables, emitting `subsystems.json`, and seeding crate shells.
 Translation: preparing, running,
 landing and scanning waves with `crustify-audit`. Read Setup
@@ -19,7 +19,7 @@ Three artifact tiers decide where a file goes.
 | tier | path | authored | derived |
 |---|---|---|---|
 | repo | `<repo>/crustify/` | `build.json`, `crates.json`, `cli-config.json` | `subsystems.json`, `rust/` |
-| oracle | `<repo>/crustify/oracle/` | `targets/<target>/oracle-config.json`, `ownership-store.json` | `codeql/{db,t1,t2}/`, `.cache/` |
+| Wavefront | `<repo>/crustify/wavefront/` | `targets/<target>/wavefront-config.json`, `ownership-store.json` | `codeql/{db,t1,t2}/`, `.cache/` |
 | campaign | `<repo>/crustify/campaigns/<target>/` | `<sub-campaign>/scope-config.json` | `<sub-campaign>/<wave-name>.json`, `logs/<session>/` |
 
 Repo-tier describes the whole repository. Oracle targets describe C inventory;
@@ -28,7 +28,7 @@ plans, and one target-wide execution log namespace. A repo can carry several
 oracle targets and many named sub-campaigns.
 
 Every repo-tier artifact contract has a commented example under `specs/` —
-except `oracle-config.json`, whose example lives in the standalone oracle
+except `wavefront-config.json`, whose example lives in the standalone Wavefront
 checkout's own `specs/`. Read the template before authoring or emitting an
 artifact; detailed schema documents supplement the `_comment_*` keys.
 
@@ -145,7 +145,7 @@ that a translation preserved behaviour, and it cannot be reconstructed later.
 Build the CodeQL database manually, and run `wavefront extract-ql`
 to emit the T1 (entities) and T2 (edges) against that database.
 
-It writes one CSV per query under `crustify/oracle/codeql/{t1,t2}/` — T1 entities, T2
+It writes one CSV per query under `crustify/wavefront/codeql/{t1,t2}/` — T1 entities, T2
 edges. Every type/symbol record, the scope sets and the dependency DAG derive
 from these on demand, which is why this is the one oracle command with side
 effects and the only one that must be run explicitly. It takes minutes; re-run
@@ -153,8 +153,8 @@ it only after the C tree or the database changes.
 
 ### 6. Configure the campaign-wide oracle target
 
-Author `crustify/oracle/targets/<campaign-target>/oracle-config.json` from the
-standalone oracle's `specs/oracle-config.json`.
+Author `crustify/wavefront/targets/<campaign-target>/wavefront-config.json` from
+Wavefront's `specs/wavefront-config.json`.
 
 This first target spans the user's campaign selection. If the user named target
 subsystems, include those target implementation paths; if the user selected the
@@ -304,7 +304,7 @@ branch from this baseline.
 | check | how |
 |---|---|
 | baseline recorded | campaign record names pass/total and every disabled test |
-| T1/T2 populated | `crustify/oracle/codeql/{t1,t2}/` non-empty |
+| T1/T2 populated | `crustify/wavefront/codeql/{t1,t2}/` non-empty |
 | scope is what you meant | `query files --targeted-only` / `--imported-only` |
 | placement consistent | `crates validate` exits clean |
 | FFI crates link | `cargo build` + `cargo test` on each `<lib>-sys` |

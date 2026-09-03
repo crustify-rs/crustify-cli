@@ -135,7 +135,7 @@ wrappers inherit that C-library property; do not claim otherwise.
 
 # Setup notes
 
-Run Phase 1 end to end. The pre-authored `build.json` and `oracle-config.json`
+Run Phase 1 end to end. The pre-authored `build.json` and `wavefront-config.json`
 may be copied from `/campaign/`. Its `crates.json` is a seeded shell: fill its
 module inventory after `extract-ql`, mirroring `include/libxml/`, and verify the
 suggested grouping against the real inventory. Emit `subsystems.json` after the

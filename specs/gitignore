@@ -8,8 +8,8 @@ rust.bak
 
 # Oracle extraction and deterministic caches. Target configs and ownership
 # findings remain tracked.
-oracle/codeql
-oracle/.cache
+wavefront/codeql
+wavefront/.cache
 
 # Campaign plans are tracked; execution logs are not.
 campaigns/**/logs

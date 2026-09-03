@@ -9,7 +9,7 @@
     "",
     "The repo root and the target id are NOT in this file: both are CLI",
     "positionals (`crustify <repo_root> <target> ...`), and this config is",
-    "located by the target at crustify/oracle/targets/<target>/oracle-config.json."
+    "located by the target at crustify/wavefront/targets/<target>/wavefront-config.json."
   ],
   "_comment_files": [
     "`impl_files` is the whole ssl/ tree PLUS the internal headers that",

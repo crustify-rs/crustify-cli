@@ -79,7 +79,7 @@ A6. **Should I wait for your approval before starting UB audit passes?**
 
 # Setup notes
 
-Run Phase 1 end to end. The pre-authored `build.json`, `oracle-config.json`, and
+Run Phase 1 end to end. The pre-authored `build.json`, `wavefront-config.json`, and
 `crates.json` may be copied from `/campaign/`; emit `subsystems.json` after the
 campaign-wide oracle target is populated. Skip toolchain installation when the
 required tools are already installed.
