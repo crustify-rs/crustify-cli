@@ -17,11 +17,11 @@ docker build -f examples/crustify/Dockerfile -t crustify .
 
 docker run -it --name crustify-libgit2 \
     -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
-    -e CRUSTIFY_CAMPAIGN=libgit2/src-port \
     -v "$(dirname "$PWD")/crustify:/opt/crustify" \
     -v "$(dirname "$PWD")/wavefront:/opt/wavefront" \
     -v "$(dirname "$PWD")/ffibox:/opt/ffibox" \
     -v /absolute/path/to/your/target-fork:/target \
+    -v "$PWD/examples/crustify/libgit2/src-port/TASK.md:/campaign/TASK.md:ro" \
     crustify
 ```
 
@@ -45,7 +45,6 @@ Set with `-e` on `docker run`.
 | `ANTHROPIC_API_KEY` | key | — | required for `CRUSTIFY_BACKEND=claude` |
 | `OPENAI_API_KEY` | key | — | required for `CRUSTIFY_BACKEND=codex` |
 | `CRUSTIFY_BACKEND` | `claude`, `codex` | `claude` | orchestrator only; wave agents come from `crustify --model` |
-| `CRUSTIFY_CAMPAIGN` | directory name under `examples/` | empty | empty → orchestrator asks what to port; name that does not resolve → exit 2; a mounted `/campaign/TASK.md` wins over it |
 | `CRUSTIFY_BILLING` | `api`, `subscription` | `api` | orchestrator only; `api` adds `--bare` (claude) or an env-key provider block (codex) — neither CLI uses the key in the environment without it; key missing → exit 2 |
 | `CRUSTIFY_HEADLESS` | `0`, `1` | `0` | `1` answers no approval gate — use only where `TASK.md` pre-answers them |
 | `CRUSTIFY_EFFORT` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, empty | `high` | codex orchestrator only, ignored by claude; empty leaves codex its default; anything else → exit 2 |
@@ -69,7 +68,7 @@ Set with `--build-arg` on `docker build`.
 | `/opt/wavefront` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub, then installed editable |
 | `/opt/ffibox` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub and used by generated Cargo manifests |
 | `/target` | read-write, required | existing target checkout; its partial translation, CodeQL data, branches, and logs remain on the host |
-| `/campaign` | read-only, optional | a `TASK.md` outside the checkout; wins over `CRUSTIFY_CAMPAIGN` |
+| `/campaign/TASK.md` | read-only, optional | pre-filled campaign task; without it the orchestrator asks for unresolved details interactively |
 
 Results are tracked in `results.md`. The Dockerfile header documents
 what each flag buys. The two optional source mounts may be omitted from

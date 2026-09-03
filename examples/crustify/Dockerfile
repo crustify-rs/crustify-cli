@@ -6,11 +6,11 @@
 #
 #   docker run -it --name crustify-libgit2 \
 #       -e ANTHROPIC_API_KEY -e CRUSTIFY_BACKEND=claude \
-#       -e CRUSTIFY_CAMPAIGN=libgit2/src-port \
 #       -v "$(dirname "$PWD")/crustify:/opt/crustify" \
 #       -v "$(dirname "$PWD")/wavefront:/opt/wavefront" \
 #       -v "$(dirname "$PWD")/ffibox:/opt/ffibox" \
 #       -v /absolute/path/to/your/target-fork:/target \
+#       -v "$PWD/examples/crustify/libgit2/src-port/TASK.md:/campaign/TASK.md:ro" \
 #       crustify
 #
 # Source mounts and the target checkout:
@@ -25,19 +25,17 @@
 #                      directory, CodeQL data, partial translation, and logs are
 #                      used in place and remain on the host.
 #
-# THE CAMPAIGN IS NAMED: CRUSTIFY_CAMPAIGN picks a directory under the
-# checkout's examples/, and its TASK.md arrives through the mount above. Edit
-# that file on the host and the next run picks it up. Naming a campaign that
-# does not exist exits 2 with the path it looked for. examples/ is tracked, so a
-# name resolves from the mounted crustify checkout.
+# THE CAMPAIGN TASK IS MOUNTED: bind its TASK.md at /campaign/TASK.md read-only,
+# just like the crustify-audit image. Edit that file on the host and the next
+# run picks it up. Without the mount, the orchestrator asks for unresolved
+# campaign details interactively.
 #
 # The results template rides the same mount: the orchestrator reads
 # examples/crustify/results.md from the checkout and writes the filled table to the path
 # the campaign task names. Nothing is baked into the image or seeded into
 # /target, so editing the template on the host changes the next run.
 #
-# A task living outside the checkout mounts at /campaign, and wins when
-# present.
+# A task mounts directly at /campaign/TASK.md.
 #
 # The campaign task and mounted target are the run-time inputs. The
 # orchestrator works directly in /target: it assesses existing campaign state,
@@ -152,10 +150,6 @@ ENV CRUSTIFY_BACKEND=claude
 # neither, so set 1 only when the task description pre-answers both.
 ENV CRUSTIFY_HEADLESS=0
 
-# Which campaign under the checkout's examples/ to run. Empty means none: the
-# orchestrator starts on the prompt alone and asks what to port.
-ENV CRUSTIFY_CAMPAIGN=
-
 # Reasoning effort for a codex orchestrator. codex infers none and falls back
 # to low, which suits neither planning a wave nor reading a build system. The
 # translate agents a wave spawns get theirs from crustify's own per-model
@@ -208,15 +202,10 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       '        exit 2; }' \
       '    echo "CodeQL unavailable; using pre-extracted target T1/T2 tables" >&2' \
       'fi' \
-      '# A mounted /campaign wins; otherwise CRUSTIFY_CAMPAIGN names one' \
-      '# under the checkout. A named campaign that is absent is fatal, so a' \
-      '# typo costs one exit rather than a whole run on a task-less prompt.' \
+      '# Append a task only when the conventional external mount is present.' \
       'task=' \
       'if [ -f /campaign/TASK.md ]; then' \
       '    task=/campaign/TASK.md' \
-      'elif [ -n "${CRUSTIFY_CAMPAIGN:-}" ]; then' \
-      '    task=/opt/crustify/examples/${CRUSTIFY_CAMPAIGN}/TASK.md' \
-      '    [ -f "$task" ] || { echo "no campaign at $task" >&2; exit 2; }' \
       'fi' \
       '# /opt/crustify is a mount point, so only a prompt generated now' \
       '# matches the checkout driving this run. Passing the optional task to' \
