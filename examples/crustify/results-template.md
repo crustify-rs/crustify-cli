@@ -78,6 +78,12 @@ crate's SAFE APIs.
   its in-scope fields, or its `loc`
 - `$/type` / `$/sym` — in the Overview, a sub-campaign's cost over the types or
   symbols it was scheduled for; `—` where it was scheduled for none
+- `+LoC` — the landed sub-campaign's Rust-source insertions/deletions relative
+  to its parent campaign state
+- `+unit tests` / `+equiv tests` — tests added by that landed sub-campaign;
+  each parenthesized pair is its C/Rust line-coverage change in percentage
+  points. Negative coverage deltas are valid when the landed source adds more
+  executable lines than the new tests cover
 - `rv $` / `rv wall` / `rv loc` — the REVIEW agent's cost, elapsed time, and net
   `.rs` line delta (`+ins/-del`) of its landing commit. Under subscription
   billing `rv $` is an API-equivalent comparison value, not a charged amount
@@ -107,14 +113,14 @@ Implementation `<provider>/<model>` via `<backend>`; review
 `<provider>/<model>` via `<backend>`. Each row names the model that produced
 it.
 
-| sub-campaign | objective | nr types | nr symbols | session wall | total | $/type | $/sym | ub wall | ub $ |
-|---|---|---:|---:|---|---:|---:|---:|---|---:|
-| `<waves>-<name>` | raw lifetime | `0` | `<n>` | `<n>m<n>s` | `$<n>` (`<model>`) | — | `$<n>` | — | — |
-| `<waves>-<name>` | wrap | `<n>` | `<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | `<n>m<n>s` | `$<n>` (`<model>`) |
-| `<waves>-<name>` | review | `<n>` | `<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | — | — |
-| `<waves>-<name>` | port | `<n>` | `<n>` | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | — | — |
-| orchestrator | orchestration | `<n>` | `<n>` | — | `$<n>`+ (`<model>`) | — | — | — | — |
-| **Σ recorded agents** | | **`<n>`** | **`<n>`** | **`<n>h<n>m`** | **`$<n>`** | **`$<n>`** | **`$<n>`** | | **`$<n>`** |
+| sub-campaign | objective | nr types | nr symbols | +LoC | +unit tests (+C/+Rust pp) | +equiv tests (+C/+Rust pp) | session wall | total | $/type | $/sym | ub wall | ub $ |
+|---|---|---:|---:|---:|---:|---:|---|---:|---:|---:|---|---:|
+| `<waves>-<name>` | raw lifetime | `0` | `<n>` | `+<n>/-<n>` | `+<n>` (`+<n>`/`+<n>` pp) | `+<n>` (`+<n>`/`+<n>` pp) | `<n>m<n>s` | `$<n>` (`<model>`) | — | `$<n>` | — | — |
+| `<waves>-<name>` | wrap | `<n>` | `<n>` | `+<n>/-<n>` | `+<n>` (`+<n>`/`+<n>` pp) | `+<n>` (`+<n>`/`+<n>` pp) | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | `<n>m<n>s` | `$<n>` (`<model>`) |
+| `<waves>-<name>` | review | `<n>` | `<n>` | `+<n>/-<n>` | `+<n>` (`+<n>`/`+<n>` pp) | `+<n>` (`+<n>`/`+<n>` pp) | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | — | — |
+| `<waves>-<name>` | port | `<n>` | `<n>` | `+<n>/-<n>` | `+<n>` (`+<n>`/`+<n>` pp) | `+<n>` (`+<n>`/`+<n>` pp) | `<n>h<n>m<n>s` | `$<n>` (`<model>`) | `$<n>` | `$<n>` | — | — |
+| orchestrator | orchestration | `<n>` | `<n>` | — | — | — | — | `$<n>`+ (`<model>`) | — | — | — | — |
+| **Σ recorded agents** | | **`<n>`** | **`<n>`** | **`+<n>/-<n>`** | **`+<n>` (`+<n>`/`+<n>` pp)** | **`+<n>` (`+<n>`/`+<n>` pp)** | **`<n>h<n>m`** | **`$<n>`** | **`$<n>`** | **`$<n>`** | | **`$<n>`** |
 
 ## Raw lifetime discovery
 
