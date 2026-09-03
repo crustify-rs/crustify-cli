@@ -31,9 +31,9 @@
 # campaign details interactively.
 #
 # The results template rides the same mount: the orchestrator reads
-# examples/crustify/results.md from the checkout and writes the filled table to the path
-# the campaign task names. Nothing is baked into the image or seeded into
-# /target, so editing the template on the host changes the next run.
+# examples/crustify/results-template.md from the checkout and writes the filled
+# table to the path the campaign task names. Nothing is baked into the image or
+# seeded into /target, so editing the template on the host changes the next run.
 #
 # A task mounts directly at /campaign/TASK.md.
 #

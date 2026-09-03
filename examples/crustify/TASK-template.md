@@ -1,4 +1,3 @@
----
 
 Fill in as many answers as you want before starting the orchestrator. It will
 ask only for campaign decisions that remain unresolved.

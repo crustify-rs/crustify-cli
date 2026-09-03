@@ -314,7 +314,26 @@ mutable and shared access, scalar and array variants, lifecycle strategies,
 generic instances and callback variants relevant to the worklist. Run both C
 and Rust sides with the configured sanitizers when the test crosses the FFI
 boundary, and fix double-free, use-after-free, invalid-free, leak and bounds
-failures.
+failures. Group translator-emitted in-file unit tests in
+`#[cfg(test)] mod unit_tests`; reserve `mod io_equiv` for equivalence tests.
+
+For callable wrappers, add `#[cfg(test)] mod io_equiv` beside each emitted Rust
+translation unit. Exercise the raw C function and safe Rust wrapper on
+equivalent, independently owned inputs. Compare observable behaviour: return
+values, out-parameters, buffers, callbacks, error states, state transitions and
+lifecycle effects.
+
+For a port objective, obtain the reference result from a feature-off C build in
+which the original implementation is still present and the reference symbol
+cannot resolve to the Rust re-export.
+
+Instrument both implementations and measure separately the line coverage
+produced by the equivalence and unit-test workloads. Target uncovered paths
+belonging to the workset, without expanding into unrelated subsystems merely to
+raise a global percentage. Report each workload's number of `#[test]`
+functions and its C and Rust line coverage, plus any unreachable,
+environment-dependent or intentionally nondeterministic remainder. Investigate
+every observed drift before changing the wrapper or oracle expectation.
 
 Replace every scheduler TODO with the filled anchor required by the
 conventions. If a lifecycle strategy lives outside the operation's authored
@@ -329,9 +348,11 @@ cargo clippy --workspace
 cargo test --workspace
 ```
 
-If C sources changed, run the configured C build and baseline tests with the
-Rust feature off. For a port objective, also run them with the feature on. A
-wrap-only wave need not rebuild an unchanged C side.
+Every FFI or equivalence test uses an instrumented, sanitized C library even
+when its sources did not change. If C sources changed, additionally run the
+configured full C build and baseline tests with the Rust feature off. For a port
+objective, also run them with the feature on. A wrap-only wave need not rerun
+the full C baseline when its C side is unchanged.
 
 Run every enabled deterministic safety-review capability according to its role
 guidance. Fix an unsafe wrapper bypass or unsound reference; retain a necessary

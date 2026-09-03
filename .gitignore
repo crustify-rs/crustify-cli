@@ -33,4 +33,4 @@ target/
 
 # Audit and campaign artifacts written INTO a repository under audit. This
 # repository is not itself a target, but a stray run must not be committed.
-crustify/
+/crustify/

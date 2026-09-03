@@ -75,7 +75,7 @@ Optionally copy and pre-fill the campaign questionnaire before starting the
 orchestrator:
 
 ```bash
-cp crustify/examples/crustify/TASK.md campaign-TASK.md
+cp crustify/examples/crustify/TASK-template.md campaign-TASK.md
 # Edit campaign-TASK.md and answer as many questions as you want.
 ```
 
@@ -95,7 +95,8 @@ it has. It presents a consolidated campaign brief for approval before mutating
 the target repository.
 
 Campaign reports follow the
-[`examples/crustify/results.md`](examples/crustify/results.md) template.
+[`examples/crustify/results-template.md`](examples/crustify/results-template.md)
+template.
 
 For a reproducible container environment or a pre-filled campaign manifest, see
 [`examples/`](examples/crustify/README.md).
@@ -177,9 +178,9 @@ Newer per-campaign reports and reproducible inputs live under
   subsystem decomposition artifact
 - [`docs/schemas/scope-config.md`](docs/schemas/scope-config.md):
   per-sub-campaign selection and oracle closure
-- [`examples/crustify/TASK.md`](examples/crustify/TASK.md): optional pre-filled
+- [`examples/crustify/TASK-template.md`](examples/crustify/TASK-template.md): optional pre-filled
   campaign questionnaire
-- [`examples/crustify/results.md`](examples/crustify/results.md): campaign
+- [`examples/crustify/results-template.md`](examples/crustify/results-template.md): campaign
   results template
 
 ## Acknowledgements

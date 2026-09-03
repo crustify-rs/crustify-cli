@@ -83,6 +83,10 @@ crate's SAFE APIs.
   billing `rv $` is an API-equivalent comparison value, not a charged amount
 - `ub $` / `ub wall` — the UB pass's cost and elapsed time; `—` where the
   optional pass did not run
+- `Equiv tests` / `Unit tests` — counts of `#[test]` functions under
+  `mod io_equiv` / `mod unit_tests`. Each coverage pair comes from running only
+  that workload against the instrumented target C sources and authored Rust
+  sources; state any excluded files or generated code in Notes
 
 Every table below is a heading, a model line and the table. All prose belongs
 in Notes.
@@ -91,7 +95,8 @@ in Notes.
 
 - **Rust LoC, non-test** — `<n>`
 - **Rust LoC, tests** — `<n>`
-- **`io_equiv` test LoC** — `<n>`; **C LoC coverage** — `<n>`%; **Rust LoC coverage** — `<n>`%
+- **Equiv tests** — `<count of #[test]>` (`<n>`% C LoC coverage, `<n>`% Rust LoC coverage)
+- **Unit tests** — `<count of #[test]>` (`<n>`% C LoC coverage, `<n>`% Rust LoC coverage)
 - **C LoC** — `<n>`
 - **ported types** — `<n>`
 - **ported symbols** — `<n>`

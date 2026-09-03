@@ -4,9 +4,9 @@ One campaign example per directory. Each holds the `TASK.md` a run is given,
 plus whatever Phase 1 inputs are authored ahead of time. Derived artifacts such
 as `subsystems.json` are emitted against the live oracle inventory.
 
-Copy [`TASK.md`](TASK.md) to start a campaign request. It is the canonical
+Copy [`TASK-template.md`](TASK-template.md) to start a campaign request. It is the canonical
 user-facing template; campaign directories contain filled instances. Campaign
-reports use [`results.md`](results.md).
+reports use [`results-template.md`](results-template.md).
 
 `Dockerfile` bootstraps the orchestrator that runs one.
 
