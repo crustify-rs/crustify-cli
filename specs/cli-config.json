@@ -21,14 +21,15 @@
     "                      can join a translator's prompt, and the orchestrator writes this path into",
     "                      each wrapper crate's `Cargo.toml`. Required: never",
     "                      guess a location and emit manifests that cannot build.",
-    "  * `crustify-audit` - the standalone safety-review checkout. Its generic",
-    "                      `SKILL.md` can join a translator's prompt."
+    "  * `crustify-audit` - the safety-review capability in the crustify",
+    "                      checkout. Its generic `SKILL.md` can join a",
+    "                      translator's prompt."
   ],
   "deps": {
     "crustify": "/absolute/path/to/crustify",
     "wavefront": "/absolute/path/to/wavefront",
     "ffibox": "/absolute/path/to/ffibox",
-    "crustify-audit": "/absolute/path/to/crustify-audit"
+    "crustify-audit": "/absolute/path/to/crustify"
   },
 
   "_comment_bins": [

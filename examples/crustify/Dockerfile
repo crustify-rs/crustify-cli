@@ -125,9 +125,10 @@ RUN if [ "${INSTALL_CLAUDE}" = "1" ]; then \
     fi
 
 # 6. Quick Setup sources live under /opt. crustify is a required runtime
-#    mount; the entrypoint uses mounted oracle/audit/ffibox trees when present
-#    and clones only the missing ones. It then installs the Python projects
-#    editable and installs the oracle's CodeQL pack before rendering the prompt.
+#    mount and includes crustify-audit; the entrypoint uses mounted
+#    wavefront/ffibox trees when present and clones only the missing ones. It
+#    then installs the Python projects editable and installs Wavefront's CodeQL
+#    pack before rendering the prompt.
 
 # Absolute paths for a target's cli-config.json, which is machine-local and
 # cannot come from any clone. The orchestrator playbook's "Bootstrap
@@ -175,7 +176,7 @@ ENV CRUSTIFY_BILLING=api
 
 RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       '# crustify supplies this entrypoint and campaign task, so it remains' \
-      '# a required host mount. The three capability checkouts are optional.' \
+      '# a required host mount. The other two capability checkouts are optional.' \
       '[ -f /opt/crustify/pyproject.toml ] || {' \
       '    echo "missing checkout mount: /opt/crustify" >&2; exit 2; }' \
       '[ -e /target/.git ] || {' \

@@ -20,7 +20,6 @@ docker run -it --name crustify-libgit2 \
     -e CRUSTIFY_CAMPAIGN=libgit2/src-port \
     -v "$(dirname "$PWD")/crustify:/opt/crustify" \
     -v "$(dirname "$PWD")/wavefront:/opt/wavefront" \
-    -v "$(dirname "$PWD")/crustify-audit:/opt/crustify-audit" \
     -v "$(dirname "$PWD")/ffibox:/opt/ffibox" \
     -v /absolute/path/to/your/target-fork:/target \
     crustify
@@ -68,13 +67,12 @@ Set with `--build-arg` on `docker build`.
 |---|---|---|
 | `/opt/crustify` | read-write | host checkout; agents commit to it, so give them a reviewable branch |
 | `/opt/wavefront` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub, then installed editable |
-| `/opt/crustify-audit` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub, then installed editable |
 | `/opt/ffibox` | read-write, optional | mounted checkout wins; otherwise cloned from GitHub and used by generated Cargo manifests |
 | `/target` | read-write, required | existing target checkout; its partial translation, CodeQL data, branches, and logs remain on the host |
 | `/campaign` | read-only, optional | a `TASK.md` outside the checkout; wins over `CRUSTIFY_CAMPAIGN` |
 
 Results are tracked in `results.md`. The Dockerfile header documents
-what each flag buys. The three optional source mounts may be omitted from
+what each flag buys. The two optional source mounts may be omitted from
 `docker run`; their `main` branches are then cloned into the campaign container.
 
 Historical aggregate measurements for the libgit2 and OpenSSL campaigns are

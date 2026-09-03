@@ -85,7 +85,7 @@ From an untouched checkout to the first commit of the initial Rust tree.
 On macOS arm64 the CodeQL bundle needs Rosetta.
 
 **A provisioned environment has already done all of this.** When
-`CRUSTIFY_DEP_CRUSTIFY` is set, the toolchains are installed, the four
+`CRUSTIFY_DEP_CRUSTIFY` is set, the toolchains are installed, the three
 checkouts are in place and the Python projects are installed editable — the
 table above is already satisfied. Do not clone or reinstall any of it: a second
 copy is not the one on `PATH`, and the paths the agents are handed below must
@@ -102,7 +102,7 @@ Author `<repo>/crustify/cli-config.json` from `specs/cli-config.json`:
 
 | block | holds |
 |---|---|
-| `deps` | absolute paths to the crustify, wavefront, ffibox and crustify-audit checkouts |
+| `deps` | absolute capability paths: crustify and crustify-audit share the crustify checkout; wavefront and ffibox use their own |
 | `bins` | absolute paths to `crustify`, `wavefront` and `crustify-audit` |
 | `prompt_capabilities` | optional skill instructions injected per agent role |
 
