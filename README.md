@@ -143,30 +143,26 @@ interfaces.
 
 ## Results
 
-Crustify has been exercised on >100K-line targets in
-[libgit2](https://github.com/crustify-rs/crustify-libgit2) and
-[OpenSSL](https://github.com/crustify-rs/crustify-openssl). In the recorded
-god-object experiments, it transitively processed 68 new libgit2 units and 47
-new OpenSSL units across closures up to 12 layers deep. Generated wrappers
-priced consistently at roughly $0.008–$0.010 per line across the two unrelated
-codebases.
+The full-public-API [libgit2 safe-wrapper
+campaign](https://github.com/crustify-rs/libgit2-wrap) wrapped every
+non-deprecated target using Codex `gpt-5.6-sol`, followed by independent Claude
+Opus 5 review.
 
-Correctness is gated rather than assumed. Every unit landed only after `cargo
-check`, `cargo clippy`, and `cargo test --workspace` passed over the whole
-tree. Translators emit unit tests beside the code they write — 1,917 and 1,368
-`#[test]` functions across the two campaigns — and exercise both the C and Rust
-sides under the configured sanitizers wherever a test crosses the FFI boundary.
-`crustify-audit unsafe` then measured the landed surface at 5.6% of 48,309
-libgit2 lines and 7.4% of 34,235 OpenSSL lines, with 77.5% and 93.5% of unsafe
-blocks confined inside an `impl T`, reachable only through a wrapped type's
-accessors. An independent agentic review pass and the optional `crustify-audit
-ub` undefined-behavior pass run on request, outside the per-wave gates.
+| Measure | Result |
+|---|---:|
+| C target | `171,084` LoC |
+| Rust implementation | `28,432` LoC |
+| Rust tests | `42,903` LoC |
+| Wrapped public API | `259` types (`99.6`%); `1,014` symbols (`95.8`%) |
+| Remaining API | `1` type and `44` symbols, all deprecated |
+| Tests | `965` unit; `191` C/Rust equivalence |
+| Combined line coverage | `69.71`% C; `92.46`% Rust |
+| Recorded cost | `$1,904.64` for translation, review, and orchestration |
+| Aggregate agent wall time | `24h49m20s` |
 
-Detailed cost, wall-time, unsafe-surface, and test measurements are preserved
-in
+Earlier libgit2 and OpenSSL experiments, including detailed cost and safety
+measurements, remain in
 [`examples/crustify/libgit2-openssl-results.md`](examples/crustify/libgit2-openssl-results.md).
-Newer per-campaign reports and reproducible inputs live under
-[`examples/`](examples/).
 
 ## Documentation
 
