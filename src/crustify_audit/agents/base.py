@@ -189,12 +189,12 @@ class AuditAgent:
         #: objectives may touch target source, and only inside a worktree --
         #: which is what keeps concurrent agents off each other's checkout.
         self.objective = objective
-        #: Files this agent confines its hunt to. Empty means the whole crate,
+        #: Work items assigned to this agent. Empty means the whole crate,
         #: which is the single-agent case. A workset is what makes several
         #: agents on one target additive rather than duplicative. Under
-        #: `revisit` these are LEAD notes, not source files: the unit of work
-        #: is a question someone already asked, so the division is over
-        #: questions rather than over the crate.
+        #: `patch` these are advisory directories, and under `revisit` they are
+        #: lead notes: both objectives divide existing audit artifacts rather
+        #: than source files.
         self.workset = tuple(workset or ())
         self.instruments = tuple(dict.fromkeys(instruments or INSTRUMENTS))
         unknown = set(self.instruments) - set(INSTRUMENTS)
@@ -337,10 +337,20 @@ class AuditAgent:
     def _workset_text(self) -> str:
         """The workset, or the sentence that says there isn't one.
 
-        Under `revisit` the same flag carries lead notes rather than source
-        files, so the phrasing has to change with it: a source workset bounds
-        where a bug may live, a lead workset names the questions to settle.
+        Under `patch` and `revisit` the same flag carries audit artifacts rather
+        than source files, so the prompt must state what kind of work the paths
+        identify instead of describing them as bug-location bounds.
         """
+        if self.objective == "patch":
+            if not self.workset:
+                return ("Every confirmed advisory in "
+                        "`crustify/audit/advisories/`. Repair each one and do "
+                        "not hunt for new findings.")
+            listing = "\n".join(f"  {f}" for f in self.workset)
+            return ("These advisories, and only these:\n\n" + listing + "\n\n"
+                    "Repair each confirmed finding and no other advisory. "
+                    "Other agents are patching the remaining advisories at "
+                    "the same time in separate worktrees.")
         if self.objective == "revisit":
             if not self.workset:
                 return ("Every lead in `crustify/audit/leads/` that is not "

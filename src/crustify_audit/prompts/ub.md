@@ -8,8 +8,8 @@ Rust within it yourself.
 
 - `audit`: investigate and report; do not modify the target.
 - `audit+patch`: investigate, report, and repair confirmed findings.
-- `patch`: repair the confirmed findings already in `advisories/`; do not hunt
-  for new ones.
+- `patch`: repair the confirmed advisories named in your workset, or every
+  advisory when the workset is omitted; do not hunt for new ones.
 - `revisit`: re-investigate the leads named in your workset; do not hunt for
   new ones and do not modify the target.
 
@@ -65,6 +65,10 @@ promote it to and advisory and delete the lead.
 
 Only when your objective includes patching. Under `audit`, an advisory is
 finished when it is written.
+
+Under `patch`, repair only the advisory directories named in the workset. An
+omitted workset means every existing advisory. Do not substitute a different
+advisory merely because its affected source is nearby.
 
 Work in a git worktree, never in the checkout. Follow the repository's
 contributor instructions, make the smallest sound fix with focused regression

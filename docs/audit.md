@@ -61,9 +61,12 @@ crustify-audit REPO ub [--objective audit|audit+patch|patch|revisit]
 
 - `unsafe --json` prints the document written to `unsafe.json`.
 - `unsafe --name` adds source sites for selected C types or symbols.
-- `ub --workset` confines an auditor to specified files; omit it for the whole
-  crate. Under `--objective revisit` it carries lead notes instead of source
-  files.
+- `ub --workset` confines an auditor to specified work items. For audit
+  objectives these are source files; omit it for the whole crate. Under
+  `--objective patch` it carries advisory directories under
+  `crustify/audit/advisories/` instead of source files; omit it to repair every
+  advisory. Under `--objective revisit` it carries lead notes under
+  `crustify/audit/leads/` instead of source files.
 - `ub --instruments` constrains the hunt and advisory evidence; omit it to
   select all five. Before spending, the command prints the exact selected
   instruments, their bug classes, and their reach limitations.

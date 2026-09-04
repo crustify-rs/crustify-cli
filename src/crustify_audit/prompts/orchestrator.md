@@ -29,7 +29,10 @@ to the guidelines in the official repo: https://github.com/borrowSanitizer/bsan
 Verify the target revision. For `audit` and `audit+patch`, run the deterministic
 `unsafe` scan, then inspect the crate and existing leads and advisories. Divide
 the audit into disjoint module-based worksets; give a single auditor the whole
-crate when only one is configured. For `patch`, divide the existing advisories instead.
+crate when only one is configured. For `patch`, divide the existing advisories
+instead and pass each agent its advisory directories under
+`crustify/audit/advisories/` as `--workset`; do not derive a source-file
+workset for patching.
 For `revisit`, divide the existing leads instead: read them, drop the ones already
 settled, and give each auditor a disjoint set of the open ones — grouped so that
 leads needing the same instrument or the same build land on the same auditor.

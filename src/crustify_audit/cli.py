@@ -93,8 +93,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "in the target — which is what makes several agents "
                         "safe to run against one checkout at the same time. "
                         "`audit+patch` also repairs what it confirms; `patch` "
-                        "skips the hunt and repairs advisories that are already "
-                        "there. Both patching objectives develop in a git "
+                        "skips the hunt and repairs the advisories named in "
+                        "`--workset`, or every advisory when it is omitted. "
+                        "Both patching objectives develop in a git "
                         "worktree, so they still do not disturb the checkout "
                         "other agents are reading. `revisit` hunts nothing new: "
                         "it re-investigates the leads named in `--workset`, "
@@ -103,14 +104,16 @@ def build_parser() -> argparse.ArgumentParser:
                         "open.")
     h.add_argument("--workset", nargs="+", action="extend", default=None,
                    metavar="PATH",
-                   help="Confine this agent to these files, so that agents run "
-                        "in parallel against one target divide the crate "
-                        "instead of duplicating each other. Paths relative to "
-                        "the repo. Omitted, the whole crate is in scope. Under "
-                        "`--objective revisit` these are lead notes under "
-                        "`crustify/audit/leads/` rather than source files, and "
-                        "the division is over open questions rather than over "
-                        "the crate; omitted, every unsettled lead is in scope.")
+                   help="Confine this agent to these work items, so agents "
+                        "running in parallel do not duplicate each other. "
+                        "Paths are relative to the repo. For audit objectives "
+                        "they are source files; omitted, the whole crate is in "
+                        "scope. Under `--objective patch` these are advisory "
+                        "directories "
+                        "under `crustify/audit/advisories/`; omitted, every "
+                        "advisory is in scope. Under `--objective revisit` "
+                        "they are lead notes under `crustify/audit/leads/`; "
+                        "omitted, every unsettled lead is in scope.")
     from crustify_audit.agents.base import INSTRUMENTS
     h.add_argument("--instruments", nargs="+", choices=INSTRUMENTS,
                    default=None, metavar="INSTRUMENT",
