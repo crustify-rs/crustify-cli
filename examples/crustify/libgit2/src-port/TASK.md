@@ -1,4 +1,3 @@
----
 
 # Mandatory questions
 

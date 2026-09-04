@@ -17,6 +17,7 @@ Copy this template into the campaign checkout, then fill it as work lands.
 - **`--max-loc`** — `<n>`
 - **`--min-fields`** — `<n>`
 - **`--parallel-max`** — `<n>`
+- **sub-campaign target units** — `<n>` (soft minimum)
 - **branch** — `<branch>`, tip `<sha>`
 - **deps** — crustify `<sha>` (`<branch>`), ffibox `<sha>` (`<branch>`)
 - **build version** — `<build.json version>`

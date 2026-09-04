@@ -47,4 +47,12 @@ def resolve(model: str) -> Route:
         raise ValueError(
             f"unknown provider {provider!r} in model {model!r}; "
             f"expected one of: {', '.join(sorted(_BACKENDS))}.")
+    # OpenRouter resells every vendor behind one key, so the provider segment
+    # alone cannot pick a CLI. Anthropic weights are driven by Claude Code,
+    # which speaks to the gateway through ANTHROPIC_BASE_URL; everything else
+    # goes to Codex. Without this an `openrouter/anthropic/...` orchestrator
+    # would spawn Codex auditors -- a different CLI, tools and system prompt
+    # from the one the run was configured with, and nothing would say so.
+    if provider == "openrouter" and model_id.startswith("anthropic/"):
+        backend = "claude_cli"
     return Route(backend, model_id, provider)

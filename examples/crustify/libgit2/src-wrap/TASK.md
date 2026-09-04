@@ -1,4 +1,3 @@
----
 
 # Mandatory questions
 
@@ -15,18 +14,20 @@
    subset of functions and types, or the whole target repo? You can define them
    now or we can brainstorm them during the live session. You can also answer
    orchestrator's choice.**
-   - Answer: the whole public API
+   - Answer: the whole public API, excluding deprecated items
 
 4. **Which agentic backend and model should do the translation work?**
    - Answer: Codex, `gpt-5.6-sol`
 
 5. **Do you want agentic review after translated work lands? If so, which
    backend and model should perform each review?**
-   - Answer: yes, after each sub-campaign, using claude, `claude-opus-5`
+   - Answer: yes, after each sub-campaign, using claude backend, openrouter
+      provider, `claude-opus-5` model, API billing
 
 6. **Should the campaign run the optional agentic UB audit pass? If so, which
    backend and model should run it?**
-   - Answer: only with explicit approval, at campaign end, using claude, `claude-opus-5`
+   - Answer: only with explicit approval, at campaign end, using claude backend,
+   `claude-opus-5` model, openrouter, API billing
 
 7. **Should I run fully autonomously end to end?**
    - Answer: yes
@@ -42,7 +43,7 @@ Unanswered optional questions use their defaults.
 
 9. **Should the campaign use the default batching and parallelism settings, or
    customize them?**
-   - Answer: defaults
+   - Answer: max two structs per agent, min 20 fields, max 25 symbols, max 500 LoC
 
 10. **What batch caps should review agents use? We recommend 3x the translation
     caps so each reviewer sees more related units.**
@@ -53,7 +54,7 @@ Unanswered optional questions use their defaults.
 11. **Should I wait for your approval before starting the setup phase?**
     - Answer: no
 12. **Should I wait for your approval before starting the translation phase?**
-    - Answer: yes, after setup identifies the selected public API surface and bottom-up oracle layers
+    - Answer: no
 13. **Should I wait for your approval between sub-campaigns?**
     - Answer: no
 14. **Should I wait for your approval before starting review passes?**
@@ -69,7 +70,5 @@ Unanswered optional questions use their defaults.
 # Campaign notes
 
 - Work in `/target` in place. Do not clone, reset, replace, or discard its
-  existing branches or partial `crustify/` work.
-- Refresh the machine-local paths in `crustify/cli-config.json` from the
-  provisioned `CRUSTIFY_DEP_*` and `CRUSTIFY_BIN_*` environment variables if
-  the existing file refers to paths outside the container.
+  existing branches or partial `crustify/` work. Continue where the previous
+  sub-campaigns left of.

@@ -110,6 +110,6 @@ The god-object selection is `record_layer_st`, `quic_stream_st`, and
 
 # Recording notes
 
-The orchestrator derives internal steps and wave files from these selections.
+The orchestrator derives internal waves and schedule files from these selections.
 Record token-derived cost, the session-branch diff, and the deterministic
 unsafe/raw-pointer scan after the sub-campaign completes.

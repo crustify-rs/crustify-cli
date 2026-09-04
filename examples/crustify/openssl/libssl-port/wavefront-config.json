@@ -7,9 +7,9 @@
     "reaches and does not name - all of libcrypto, the providers, libc - lands",
     "in the `imported` section, derived.",
     "",
-    "The repo root and the target id are NOT in this file: both are CLI",
-    "positionals (`crustify <repo_root> <target> ...`), and this config is",
-    "located by the target at crustify/wavefront/targets/<target>/wavefront-config.json."
+    "The repo root is not in this file. Pass this file explicitly to Wavefront",
+    "with `--config`; Crustify retains its separate `<repo_root> <target>`",
+    "positionals for translation and campaign layout."
   ],
   "_comment_files": [
     "`impl_files` is the whole ssl/ tree PLUS the internal headers that",

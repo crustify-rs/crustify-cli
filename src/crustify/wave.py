@@ -1,6 +1,7 @@
-"""Execute an objective-neutral wave document produced by wavefront."""
+"""Execute an objective-neutral sub-campaign schedule produced by Wavefront."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -9,51 +10,145 @@ def load(path: Path) -> dict:
     try:
         doc = json.loads(Path(path).read_text())
     except OSError as exc:
-        raise SystemExit(f"translate: cannot read wave document at {path}: {exc}")
+        raise SystemExit(f"translate: cannot read schedule at {path}: {exc}")
     except ValueError as exc:
-        raise SystemExit(f"translate: invalid wave document at {path}: {exc}")
+        raise SystemExit(f"translate: invalid schedule at {path}: {exc}")
 
     if not isinstance(doc, dict):
-        raise SystemExit("translate: wave document must be a JSON object")
-    if (doc.get("schema_version") != 2
-            or not isinstance(doc.get("steps"), list)):
-        raise SystemExit("translate: unsupported wave document schema")
+        raise SystemExit("translate: schedule must be a JSON object")
+    schema_version = doc.get("schema_version")
+    schedules = doc.get("waves") if schema_version == 3 else doc.get("steps")
+    if (schema_version not in (2, 3) or not isinstance(schedules, list)):
+        raise SystemExit("translate: unsupported schedule schema")
 
-    required = {
-        "oracle_target": str,
-        "summary": dict,
-        "plan_items": list,
-        "dependency_nodes": list,
-    }
+    required = {"summary": dict}
+    if schema_version == 2:
+        required.update({"plan_items": list, "dependency_nodes": list})
     missing = [name for name, kind in required.items()
                if not isinstance(doc.get(name), kind)]
     if missing:
         raise SystemExit(
-            "translate: invalid wave document; expected " + ", ".join(missing))
+            "translate: invalid schedule; expected " + ", ".join(missing))
+    legacy_target = doc.get("oracle_target")
+    oracle_config = doc.get("oracle_config")
+    valid_legacy = isinstance(legacy_target, str)
+    valid_config = (
+        isinstance(oracle_config, dict)
+        and isinstance(oracle_config.get("path"), str)
+        and isinstance(oracle_config.get("sha256"), str)
+        and len(oracle_config["sha256"]) == 64
+        and all(c in "0123456789abcdef" for c in oracle_config["sha256"])
+    )
+    if valid_legacy == valid_config:
+        raise SystemExit(
+            "translate: invalid schedule; expected exactly one of "
+            "oracle_config or legacy oracle_target")
     summary_fields = ("unit_count", "layer_count", "batch_count")
     missing_summary = [name for name in summary_fields
                        if not isinstance(doc["summary"].get(name), int)]
     if missing_summary:
         raise SystemExit(
-            "translate: invalid wave document summary; expected "
+            "translate: invalid schedule summary; expected "
             + ", ".join(missing_summary))
-    for step_index, step in enumerate(doc["steps"]):
-        layers = step.get("layers") if isinstance(step, dict) else None
-        if not (isinstance(step, dict)
-                and isinstance(layers, list) and layers
-                and all(isinstance(layer, int) for layer in layers)
-                and isinstance(step.get("unit_count"), int)
-                and isinstance(step.get("batches"), list)):
+    for wave_index, scheduled_wave in enumerate(schedules):
+        if not (isinstance(scheduled_wave, dict)
+                and isinstance(scheduled_wave.get("unit_count"), int)
+                and isinstance(scheduled_wave.get("batches"), list)):
             raise SystemExit(
-                f"translate: invalid wave document step at index {step_index}")
-        for batch_index, batch in enumerate(step["batches"]):
+                f"translate: invalid scheduled wave at index {wave_index}")
+        if schema_version == 2:
+            layers = scheduled_wave.get("layers")
+            if not (isinstance(layers, list) and layers
+                    and all(isinstance(layer, int) for layer in layers)):
+                raise SystemExit(
+                    f"translate: invalid scheduled wave at index {wave_index}")
+        for batch_index, batch in enumerate(scheduled_wave["batches"]):
             if not (isinstance(batch, dict)
                     and isinstance(batch.get("kind"), str)
                     and isinstance(batch.get("items"), list)):
                 raise SystemExit(
-                    "translate: invalid wave document batch at "
-                    f"step {step_index}, index {batch_index}")
+                    "translate: invalid batch at "
+                    f"wave {wave_index}, index {batch_index}")
+            if schema_version == 3:
+                for item in batch["items"]:
+                    if not isinstance(item, dict):
+                        raise SystemExit(
+                            "translate: invalid item at "
+                            f"wave {wave_index}, batch {batch_index}")
+                    if not isinstance(item.get("layer"), int):
+                        raise SystemExit(
+                            "translate: invalid item layer at "
+                            f"wave {wave_index}, batch {batch_index}")
+                    for side in ("types", "symbols"):
+                        dependencies = item.get("deps", {}).get(side, [])
+                        if not all(
+                            isinstance(dependency, dict)
+                            and dependency.get("scope") in ("wrap", "port", "ext")
+                            for dependency in dependencies
+                        ):
+                            raise SystemExit(
+                                "translate: invalid dependency scope at "
+                                f"wave {wave_index}, batch {batch_index}")
+    if schema_version == 3:
+        items = [
+            item
+            for scheduled_wave in schedules
+            for batch in scheduled_wave["batches"]
+            for item in batch["items"]
+        ]
+        identities = [
+            (item.get("name"), item.get("defined_in"))
+            for item in items if isinstance(item, dict)
+        ]
+        if (len(identities) != len(items)
+                or len(set(identities)) != len(identities)
+                or len(items) != doc["summary"]["unit_count"]
+                or len({item["layer"] for item in items})
+                != doc["summary"]["layer_count"]
+                or sum(len(wave["batches"]) for wave in schedules)
+                != doc["summary"]["batch_count"]):
+            raise SystemExit(
+                "translate: schedule summary or batched item identities disagree")
     return doc
+
+
+def _waves(doc: dict) -> list[dict]:
+    """Return canonical v3 waves or legacy v2 steps."""
+    return doc["waves"] if doc.get("schema_version") == 3 else doc["steps"]
+
+
+def _scheduled_items(doc: dict) -> list[dict]:
+    return [
+        item
+        for scheduled_wave in _waves(doc)
+        for batch in scheduled_wave.get("batches") or []
+        for item in batch.get("items") or []
+    ]
+
+
+def _validate_oracle_provenance(doc: dict, layout, target: Path) -> None:
+    """Reject a wave whose scheduling input no longer matches the repository."""
+    if "oracle_target" in doc:
+        expected = layout.rel_target(target)
+        if doc["oracle_target"] != expected:
+            raise SystemExit(
+                f"translate: wave targets {doc['oracle_target']!r}, not {expected!r}")
+        return
+
+    provenance = doc["oracle_config"]
+    config = Path(provenance["path"])
+    if not config.is_absolute():
+        config = layout.repo_root / config
+    config = config.resolve()
+    try:
+        actual = hashlib.sha256(config.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise SystemExit(
+            f"translate: cannot read wave oracle config at {config}: {exc}") from exc
+    if actual != provenance["sha256"]:
+        raise SystemExit(
+            "translate: wave oracle config changed since scheduling: "
+            f"{config}")
 
 
 def _node(item: dict):
@@ -77,10 +172,18 @@ def _node(item: dict):
 
 def _decode(doc: dict):
     import crustify._schedule as S
-    steps = []
-    for step in doc["steps"]:
+    waves = []
+    for scheduled_wave in _waves(doc):
+        raw_items = [
+            item
+            for raw in scheduled_wave.get("batches") or []
+            for item in raw.get("items") or []
+        ]
+        layers = (sorted({int(item["layer"]) for item in raw_items})
+                  if doc.get("schema_version") == 3
+                  else list(scheduled_wave.get("layers") or ()))
         batches = []
-        for raw in step.get("batches") or []:
+        for raw in scheduled_wave.get("batches") or []:
             units = []
             anchors = {}
             for item in raw.get("items") or []:
@@ -95,48 +198,59 @@ def _decode(doc: dict):
                 fields=[field for unit in units for field in unit.fields],
                 field_anchors=anchors,
             ))
-        steps.append((list(step.get("layers") or ()),
-                      int(step.get("unit_count") or 0), batches))
-    return steps
+        waves.append((layers, int(scheduled_wave.get("unit_count") or 0),
+                      batches))
+    return waves
 
 
 def _dry_run(doc: dict, objective: str) -> None:
     import crustify._schedule as S
-    steps = _decode(doc)
-    items = [_node(item) for item in doc.get("plan_items") or []]
+    waves = _decode(doc)
+    items = [_node(item) for item in _scheduled_items(doc)]
     units = [S.Unit("type" if node.node_kind == "type" else "sym", node)
              for node in items]
-    all_batches = [batch for _layers, _count, batches in steps for batch in batches]
+    all_batches = [batch for _layers, _count, batches in waves for batch in batches]
     summary = doc["summary"]
     print(f"\n[{objective} dry-run] {summary['unit_count']} unit(s) across "
           f"{summary['layer_count']} dependency layer(s) (lower → higher):")
-    for layers, count, batches in steps:
+    for wave_index, (layers, count, batches) in enumerate(waves, start=1):
         label = str(layers[0]) if len(layers) == 1 else f"{layers[0]}-{layers[-1]}"
         merged = " (merged)" if len(layers) > 1 else ""
-        print(f"  L{label}: {count} unit(s) → {len(batches)} batch(es)"
+        print(f"  Wave {wave_index} (L{label}): {count} unit(s) → "
+              f"{len(batches)} batch(es)"
               f"{' (parallel)' if len(batches) > 1 else ''}{merged}")
 
-    by_key = {unit.node.key: unit.node for unit in units}
-    in_scope = set(by_key)
-    for raw in doc.get("dependency_nodes") or []:
-        node = _node(raw)
-        by_key[node.key] = node
-        if raw.get("in_scope"):
-            in_scope.add(node.key)
+    _planned, by_key, in_scope = _plan_index(doc)
     S.show_plan(units, all_batches, by_key, lambda node: node.key in in_scope,
                 objective)
 
 
 def _plan_index(doc: dict):
     from crustify import _schedule as S
-    selected = [_node(item) for item in doc.get("plan_items") or []]
+    raw_selected = _scheduled_items(doc)
+    selected = [_node(item) for item in raw_selected]
     by_key = {node.key: node for node in selected}
     in_scope = set(by_key)
-    for raw in doc.get("dependency_nodes") or []:
-        node = _node(raw)
-        by_key[node.key] = node
-        if raw.get("in_scope"):
-            in_scope.add(node.key)
+    if doc.get("schema_version") == 2:
+        for raw in doc.get("dependency_nodes") or []:
+            node = _node(raw)
+            by_key[node.key] = node
+            if raw.get("in_scope"):
+                in_scope.add(node.key)
+    else:
+        for raw in raw_selected:
+            for side, node_kind in (("types", "type"), ("symbols", "symbol")):
+                for dependency in raw.get("deps", {}).get(side, []):
+                    key = (dependency["name"], dependency.get("defined_in"))
+                    scope = dependency["scope"]
+                    if scope != "ext" and key not in by_key:
+                        by_key[key] = S.Node(
+                            id=key[0], node_kind=node_kind, subkind=node_kind,
+                            defined_in=key[1], layer=0,
+                            dep_types=[], dep_syms=[],
+                        )
+                    if scope == "wrap":
+                        in_scope.add(key)
     units = {node.key: S.Unit(
         "type" if node.node_kind == "type" else "sym", node)
              for node in selected}
@@ -153,16 +267,13 @@ def execute(target: Path, wave_path: Path, *, objective: str,
 
     doc = load(wave_path)
     layout = Layout.discover(target)
-    expected = layout.rel_target(target)
-    if doc.get("oracle_target") != expected:
-        raise SystemExit(
-            f"translate: wave targets {doc.get('oracle_target')!r}, not {expected!r}")
+    _validate_oracle_provenance(doc, layout, target)
     from crustify import config
     from crustify.agentlog import open_session_log
     log_root = layout.logs(target) / config.SESSION_ID
     resolved_wave = Path(wave_path).resolve()
-    raw_items = [item for step in doc["steps"]
-                 for batch in step.get("batches") or []
+    raw_items = [item for scheduled_wave in _waves(doc)
+                 for batch in scheduled_wave.get("batches") or []
                  if batch.get("kind") == "raw-lifetime"
                  for item in batch.get("items") or []]
     if raw_items:
@@ -180,12 +291,12 @@ def execute(target: Path, wave_path: Path, *, objective: str,
                 target, raw_items[0]["name"], objective=objective,
                 dry_run=False)
         return
-    steps = _decode(doc)
+    waves = _decode(doc)
 
     placement = crates.load(layout)
     missing = set()
     linked = set()
-    for _layers, _count, batches in steps:
+    for _layers, _count, batches in waves:
         for batch in batches:
             for member in batch.members:
                 hit = (crates.lookup(placement, member.id, file=member.defined_in)
@@ -222,13 +333,14 @@ def execute(target: Path, wave_path: Path, *, objective: str,
         session_log.line(
             f"[crustify] {doc['summary']['unit_count']} unit(s), "
             f"{doc['summary']['layer_count']} layer(s), parallel_max={parallel_max}")
-        for layers, count, batches in steps:
+        for wave_index, (layers, count, batches) in enumerate(waves, start=1):
             if not batches:
                 continue
             label = (str(layers[0]) if len(layers) == 1
                      else f"{layers[0]}-{layers[-1]}")
-            if len(steps) > 1:
-                print(f"\n[{objective}] dependency layer {label}: {count} unit(s) → "
+            if len(waves) > 1:
+                print(f"\n[{objective}] wave {wave_index} (dependency layer {label}): "
+                      f"{count} unit(s) → "
                       f"{len(batches)} batch(es) (lower layers already landed)")
             layer_set = set(layers)
             wave_units = [unit for unit in planned.values()
@@ -238,7 +350,8 @@ def execute(target: Path, wave_path: Path, *, objective: str,
             before = len(failures)
             failures += S.run(batches, stage, parallel_max=parallel_max)
             session_log.checkpoint(
-                f"layer {label}: {count} unit(s), {len(batches)} batch(es), "
+                f"wave {wave_index}, layer {label}: {count} unit(s), "
+                f"{len(batches)} batch(es), "
                 f"{len(failures) - before} failure(s)")
         session_log.line(
             f"[crustify] {len(failures)} failure(s) over "

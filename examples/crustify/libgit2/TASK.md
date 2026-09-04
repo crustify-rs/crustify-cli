@@ -87,7 +87,7 @@ required tools are already installed.
 # Selection and recording notes
 
 Execute the sub-campaigns in their listed order. The orchestrator chooses the
-internal steps and wave filenames, reports each dry-run plan, and waits for
+internal waves and schedule filenames, reports each dry-run plan, and waits for
 approval before spending on or promoting the next sub-campaign.
 
 After each sub-campaign, record cost from the per-agent `<stage>.usage.json`,

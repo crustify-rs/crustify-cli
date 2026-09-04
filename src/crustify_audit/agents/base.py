@@ -244,6 +244,14 @@ class AuditAgent:
         while True:
             was, t0 = self.counts(), time.monotonic()
             with open_agent_log(self.layout.logs, self.stage, self.tag) as log:
+                # Record the resolved prompt BEFORE the run. The backends hand
+                # it to the CLI with `-p`, and stream-json echoes only the
+                # model's output, so without this the workset an agent was
+                # actually given is unrecoverable once the run is over --
+                # which makes a campaign impossible to replicate or ablate
+                # against. Prefixed so readers can skip it to the transcript.
+                for _l in self._prompt().format(**self._arguments()).splitlines():
+                    log.line("[prompt] " + _l)
                 backend.run(
                     name=self.name,
                     model=route.model,

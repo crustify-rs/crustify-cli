@@ -19,11 +19,11 @@ Three artifact tiers decide where a file goes.
 | tier | path | authored | derived |
 |---|---|---|---|
 | repo | `<repo>/crustify/` | `build.json`, `crates.json`, `cli-config.json` | `subsystems.json`, `rust/` |
-| Wavefront | `<repo>/crustify/wavefront/` | `targets/<target>/wavefront-config.json`, `ownership-store.json` | `codeql/{db,t1,t2}/`, `.cache/` |
-| campaign | `<repo>/crustify/campaigns/<target>/` | `<sub-campaign>/scope-config.json` | `<sub-campaign>/<wave-name>.json`, `logs/<session>/` |
+| Wavefront | `<repo>/crustify/wavefront/` | campaign-wide `wavefront-config.json`, `ownership-store.json` | `codeql/{db,t1,t2}/`, `.cache/` |
+| campaign | `<repo>/crustify/campaigns/<target>/` | `<sub-campaign>/wavefront-config.json` | `<sub-campaign>/<wave-name>.json`, `logs/<session>/` |
 
 Repo-tier describes the whole repository. Oracle targets describe C inventory;
-campaigns contain one directory per sub-campaign, its tracked scope and wave
+campaigns contain one directory per sub-campaign, its tracked narrow oracle config and wave
 plans, and one target-wide execution log namespace. A repo can carry several
 oracle targets and many named sub-campaigns.
 
@@ -34,19 +34,19 @@ artifact; detailed schema documents supplement the `_comment_*` keys.
 
 ### Campaign directory layout
 
-Sub-campaign scope and wave plans live below the target campaign directory;
+Sub-campaign oracle configs and wave plans live below the target campaign directory;
 logs remain target-wide:
 
 ```text
 crustify/campaigns/<target>/
 ├── raw-lifetime-void/
-│   ├── scope-config.json
+│   ├── wavefront-config.json
 │   └── <wave-name>.json
 ├── raw-lifetime-string/
-│   ├── scope-config.json
+│   ├── wavefront-config.json
 │   └── <wave-name>.json
 ├── <sub-campaign>/
-│   ├── scope-config.json
+│   ├── wavefront-config.json
 │   └── <wave-name>.json
 └── logs/
     └── <session>/
@@ -55,14 +55,14 @@ crustify/campaigns/<target>/
         └── <stage>[__<agent-suffix>].usage.json
 ```
 
-`<target>` is the repo-relative oracle target passed to the CLI, so a target
+`<target>` is the repo-relative translation target passed to the Crustify CLI, so a target
 such as `ssl/statem` creates nested directories, while the repo-root target
 uses `crustify/campaigns/` directly. `<session>` is generated once per CLI
 invocation as `YYYY-MM-DD_HH-MM-SS_<4-hex>`.
 
 Wave paths do not select the log directory. The CLI always emits logs under
 `crustify/campaigns/<target>/logs/<session>/` from its target argument, so all
-sub-campaigns for one target share the same log namespace. Scope configs and
+sub-campaigns for one target share the same log namespace. Oracle configs and
 wave plans are tracked; `logs/` is gitignored.
 
 ## Phase 1 — Setup
@@ -142,7 +142,8 @@ that a translation preserved behaviour, and it cannot be reconstructed later.
 
 ### 5. CodeQL database and the T1/T2 tables
 
-Build the CodeQL database manually, and run `wavefront extract-ql`
+Build the CodeQL database manually, and run
+`wavefront <repo_root> extract-ql`
 to emit the T1 (entities) and T2 (edges) against that database.
 
 It writes one CSV per query under `crustify/wavefront/codeql/{t1,t2}/` — T1 entities, T2
@@ -153,7 +154,8 @@ it only after the C tree or the database changes.
 
 ### 6. Configure the campaign-wide oracle target
 
-Author `crustify/wavefront/targets/<campaign-target>/wavefront-config.json` from
+Author a campaign-wide `wavefront-config.json` under
+`crustify/wavefront/` from
 Wavefront's `specs/wavefront-config.json`.
 
 This first target spans the user's campaign selection. If the user named target
@@ -224,8 +226,10 @@ be wrapped and then ported, which is what the flag exists for.
 Verify the result before proceeding:
 
 ```bash
-wavefront <repo_root> <target> query files --targeted-only
-wavefront <repo_root> <target> query files --imported-only
+wavefront <repo_root> --config <campaign-wavefront-config.json> \
+  query files --targeted-only
+wavefront <repo_root> --config <campaign-wavefront-config.json> \
+  query files --imported-only
 ```
 
 After the user picked a target, create the campaign's base branch and
@@ -249,12 +253,36 @@ After the campaign-wide oracle target is populated, emit
 Discover link units from the configured build's actual linker outputs. Store
 link units and their subsystems as ordered lists; each list entry is identified
 by its `name`. Cover exactly the target span the user selected and include its
-complete imported producer closure. Mark every subsystem `scope: targeted` or
-`scope: imported`, consistently with the oracle.
+complete imported producer closure.
+
+Before assigning scope, decide whether each subsystem in the selected span
+actually warrants a project-specific native Rust implementation. Do not mark
+every selected C file `targeted` mechanically. Inspect the subsystem's purpose
+and available Rust equivalents:
+
+- Mark it `targeted` when its behavior or invariants are specific to the target
+  project and should be translated into native Rust.
+- Mark it `imported` when it is a universal collection, protocol, parser,
+  algorithm, runtime utility, or similar facility for which the Rust standard
+  library or a suitable existing Rust implementation should ultimately replace
+  the C code. During a partial migration, retain that C implementation behind a
+  wrapped FFI boundary so translated Rust remains interoperable with the rest
+  of the C system; do not rewrite the generic implementation merely to make it
+  native immediately.
+- If a subsystem mixes project-specific behavior with replaceable generic
+  machinery, split it so the project-specific portion can be `targeted` and
+  the deliberate C boundary can be `imported`.
+
+Verify that a proposed Rust equivalent actually matches the required
+semantics, platform support, performance, and licensing before choosing this
+boundary. Record the candidate equivalent and the reason for deferring native
+migration in the campaign brief or status record. Thus `scope` records
+translation intent: `imported` covers both oracle-discovered producer closure
+and selected code deliberately retained as a C interoperability boundary.
 
 Home every covered translation unit to exactly one subsystem. Keep a subsystem
 scope-homogeneous: do not mix targeted and imported translation units. Use the
-oracle's LoC, type, symbol, and edge statistics whenever available. Aggregate
+wavefront oracle's LoC, type, symbol, and edge statistics whenever available. Aggregate
 each consumer-to-producer relationship into one `depends_on` record with
 `nr_edges`.
 
@@ -314,18 +342,30 @@ branch from this baseline.
 
 ## Phase 2 — Translation
 
-A wave is one scheduler-produced JSON document. The oracle selects its workset
-and divides it into sequential steps; the CLI enforces each step barrier and
-routes that step's batches to agents. Waves repeat until the target is closed.
+A sub-campaign schedule is one scheduler-produced JSON document. The oracle
+selects its workset and divides it into sequential waves; the CLI enforces each
+wave barrier and routes that wave's batches to agents. Sub-campaigns repeat
+until the target is closed.
 See `docs/schemas/wave.md` for the producer/consumer contract.
 
 ### Plan sub-campaigns
 
-For a port campaign, split the selected campaign span into one sub-campaign per
-subsystem in `subsystems.json`, including imported producer subsystems needed by
-the selected targets. Imported or deliberate C-boundary subsystems use the
-`wrap` objective; selected migration subsystems use `port` according to the
-objective rules below.
+For a wrap campaign, derive the workset from published declarations by passing
+`--api-headers-only` to every ordinary `wavefront schedule` invocation. Do not
+substitute the implementation graph: it includes private implementation units
+that are outside a safe-wrapper campaign's target surface. `--transitive` is
+still optional and means “include signature dependencies”; it does not change
+the requirement to use the public API graph.
+
+For a port campaign, split the selected campaign span by subsystem in
+`subsystems.json`, including imported producer subsystems needed by the selected
+targets. Every `scope: imported` subsystem—including a deliberate C boundary
+inside the originally selected span—uses the `wrap` objective. Only
+`scope: targeted` migration subsystems use `port` according to the objective
+rules below. Do not port an imported subsystem merely because its files occur
+in the campaign-wide implementation inventory; replacing its wrapped C
+implementation with a Rust standard-library or ecosystem equivalent is a
+separate, later migration decision.
 
 Schedule these sub-campaigns bottom-up over the subsystem graph. Because a
 `depends_on` record points consumer to producer, complete producers before
@@ -334,29 +374,94 @@ subsystems by greater producer weight and then by `(link_unit, subsystem)`
 name. Never start a consumer sub-campaign while one of its required producer
 sub-campaigns remains incomplete.
 
-Author
-`crustify/campaigns/<target>/<sub-campaign>/scope-config.json` from
-`specs/scope-config.json` for every raw-lifetime and subsystem sub-campaign.
-Field semantics: `docs/schemas/scope-config.md`. Use the campaign-wide oracle
-target to resolve and record the exact targeted and imported file, type, and
-symbol closure before scheduling the first wave. Do not infer closure sets from
-directory names or from `subsystems.json` statistics.
+Use the user-approved **sub-campaign unit budget** as a soft minimum for each
+ordinary sub-campaign; the default is `100` scheduled units. A unit is one
+distinct scheduled type or symbol after completed items have been skipped;
+fields are not separate units. Accumulate adjacent bottom-up subsystems with
+the same campaign objective until the schedule reaches the budget. Preserve
+dependency order inside the resulting schedule's sequential waves.
+
+Before scheduling a narrower sub-campaign, author
+`crustify/campaigns/<target>/<sub-campaign>/wavefront-config.json` from
+Wavefront's spec. Its `impl_files` and `api_headers` must be exact subsets of
+the campaign-wide config and must name that sub-campaign's implementation and
+published API surface. Wavefront derives the imported closure directly from
+this config; do not estimate a closure from directory names or from
+`subsystems.json` statistics. Use the campaign-wide config for a sub-campaign
+only when its intended scope really is campaign-wide, such as raw-lifetime
+discovery.
+
+### Prepare reusable C builds
+
+Before spawning translators, the orchestrator prepares separate immutable,
+out-of-tree C builds for the exact C revision, `build.json` version, compiler,
+and instrumentation configuration:
+
+- a plain build for the normal functional baseline;
+- an ASan + UBSan build for every FFI and lifecycle test; and
+- a coverage build used only for campaign measurements.
+
+Record that provenance with the artifacts and pass agents the sanitized
+library path plus one standard test runner that loads the sanitizer runtimes
+correctly. Parallel tests must use agent-unique sanitizer logs and coverage
+profile filenames. Agents may share immutable libraries, but never a writable
+build tree or output file.
+
+A wrap agent whose changes are limited to Rust, bindgen allowlists, or bindgen
+input headers reuses the prepared sanitized build. An agent that changes
+compiled C or a compiled shim must make and test a private replacement build;
+the orchestrator refreshes the shared builds after that change lands. Reusing
+the build never relaxes the sanitizer requirement for lifecycle tests.
+
+Do not make translators regenerate global coverage reports. They run the
+targeted sanitized tests needed to validate their worklist and report the tests
+they added. After landing, the orchestrator runs the full sanitized regression
+gate and measures the unit- and equivalence-workload coverage once on the
+merged wave or sub-campaign for campaign accounting.
+
+### Preflight and monitor agentic stages
+
+Before spawning any translation, review, or audit agent, resolve the selected
+model to its provider and backend, then verify the backend executable is on the
+stage process's actual `PATH` and responds to `--version`. Verify the required
+credential variable is present without printing it, and reject an unsupported
+provider/billing combination before creating worktrees. Run the stage's dry
+run and confirm its unit, wave, and batch counts match the approved schedule.
+
+Treat launch as successful only after the session log exists, every expected
+first-wave agent process is live, and each backend has emitted its model
+handshake or first repository action. An immediate backend, authentication, or
+model-routing error is a failed launch: stop, repair the environment, and
+restart the unchanged schedule rather than allowing later waves to accumulate
+the same failure.
+
+Attach a persistent completion monitor to every running stage. Poll or await
+the stage independently of user status requests, and notify the user promptly
+when it completes or fails. On process exit, verify the exit status, the
+session log's per-wave and total failure counts, the expected usage records,
+and the session-branch tip before declaring the stage complete. A detached
+process without an attached completion monitor is not an active campaign
+stage.
 
 ### Prepare each wave
 
 Before `translate`, the orchestrator:
 
-1. runs `wavefront schedule` with the selection and batch budgets, writing
-   `crustify/campaigns/<target>/<sub-campaign>/<wave-name>.json` from that
-   sub-campaign's `scope-config.json`;
-2. runs imported campaigns for any unsatisfied dependencies;
-3. homes each wave item in `crates.json`;
-4. creates its `.rs` files and connects them to the crate root;
-5. runs `crates validate` and compiles the affected crates;
-6. runs `translate <wave.json> --dry-run`, then executes it.
+1. verifies that the reusable C builds still match the current C revision and
+   build provenance;
+2. runs `wavefront schedule --config` with the sub-campaign's narrow config,
+   selection and batch budgets, writing
+   `crustify/campaigns/<target>/<sub-campaign>/<wave-name>.json`;
+3. runs imported campaigns for any unsatisfied dependencies;
+4. homes each wave item in `crates.json`;
+5. creates its `.rs` files and connects them to the crate root;
+6. runs `crates validate` and compiles the affected crates;
+7. runs `translate <wave.json> --dry-run`, then executes it.
 
 ```bash
-wavefront <repo_root> <target> schedule \
+wavefront <repo_root> \
+  --config <repo>/crustify/campaigns/<target>/<sub-campaign>/wavefront-config.json \
+  schedule \
   --output <repo>/crustify/campaigns/<target>/<sub-campaign>/<wave-name>.json \
   --name <items...> [--transitive] [--api-headers-only] \
   [--max-syms N] [--max-loc N] [--max-types N] [--min-fields N]
@@ -368,7 +473,7 @@ crustify --parallel-max N <repo_root> <target> translate \
 The bottom-up plan should already have completed imported producers before a
 target wave needs them. If an exact oracle closure reveals an unplanned
 imported subsystem, pause the consumer, add that producer as its own
-sub-campaign and `scope-config.json`, complete it, then resume the consumer.
+sub-campaign and narrow `wavefront-config.json`, complete it, then resume the consumer.
 Imported work uses the crate shells seeded during Setup.
 
 The scheduler inserts TODO anchors. Translator agents extend their worklist's
@@ -380,6 +485,8 @@ their `<lib>-sys` allowlist changes and rerun the affected crate tests.
 ### Choosing the objective
 
 A **wrap** campaign runs every wave at `--objective wrap`.
+Its schedules always use `wavefront schedule --api-headers-only`; this selection
+rule is independent of the execution objective passed to `crustify translate`.
 
 A **port** campaign distinguishes the user-selected migration set from its
 dependency closure. A selected type runs `wrap` when it is scheduled for the

@@ -1,7 +1,7 @@
 {
-  "_comment": "Example `<repo_root>/crustify/subsystems.json` (REPO-ROOT tier), emitted by the orchestrator after the campaign-wide oracle target is populated. `link_units` and each link unit's `subsystems` are ordered lists; their `name` fields are identifiers. The artifact covers the user-selected targeted subsystem span plus its imported producer closure. All paths are repo-root-relative.",
+  "_comment": "Example `<repo_root>/crustify/subsystems.json` (REPO-ROOT tier), emitted by the orchestrator from the campaign-wide Wavefront config. `link_units` and each link unit's `subsystems` are ordered lists; their `name` fields are identifiers. `scope` records translation intent: targeted means native Rust translation; imported includes both producer dependencies and selected generic facilities deliberately retained behind wrapped C boundaries. All paths are repo-root-relative.",
   "build_version": 1,
-  "oracle_target": "campaign",
+  "oracle_config": "crustify/wavefront/wavefront-config.json",
   "link_units": [
     {
       "name": "libssl",

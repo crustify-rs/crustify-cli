@@ -33,7 +33,7 @@ def main() -> None:
     )
     parser.add_argument(
         "target",
-        help="Repo-relative oracle target id recorded in the wave document "
+        help="Repo-relative oracle target id recorded in the schedule "
              "(e.g. ssl/statem). Use . for the repo root.",
     )
     parser.add_argument(
@@ -82,8 +82,8 @@ def main() -> None:
         default=8,
         metavar="N",
         help="Maximum concurrent agents. 1 runs every batch serially; N>1 "
-             "runs up to N batches within a step, with a full barrier between "
-             "steps. Default: 8.",
+             "runs up to N batches within a wave, with a full barrier between "
+             "waves. Default: 8.",
     )
 
     sub = parser.add_subparsers(dest="command", required=True)
@@ -141,24 +141,24 @@ def main() -> None:
 
     # -- translate ---------------------------------------------------------
     _translate_blurb = (
-        "Execute an objective-neutral wave document in topological step order. "
+        "Execute an objective-neutral schedule in sequential wave order. "
         "The oracle has already selected and batched every item; this command "
         "routes batches to translator agents, inserts scheduler-local TODOs, "
-        "and enforces the step barriers. --parallel-max 1 is serial. --dry-run "
+        "and enforces the wave barriers. --parallel-max 1 is serial. --dry-run "
         "prints the recorded plan.")
     wrap_p = sub.add_parser(
         "translate", help=_translate_blurb, description=_translate_blurb,
     )
     wrap_p.add_argument(
         "wave", type=Path,
-        help="Path to an objective-neutral wave document produced by "
+        help="Path to an objective-neutral sub-campaign schedule produced by "
              "wavefront schedule.")
     wrap_p.add_argument(
         "--objective", choices=("wrap", "port", "review"), default="wrap",
         help="Objective handed unchanged to every agent in this wave.")
     wrap_p.add_argument(
         "--dry-run", action="store_true",
-        help="Render the wave's steps and batches without spawning agents.")
+        help="Render the schedule's waves and batches without spawning agents.")
 
     args = parser.parse_args()
 

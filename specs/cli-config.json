@@ -6,8 +6,8 @@
     "so nothing relative to its cwd resolves the same way twice.",
     "Machine-local by construction, hence gitignored - it reaches a worktree",
     "through `worktree.link_shared`, not through git.",
-    "Wavefront target configuration lives separately under",
-    "crustify/wavefront/targets/<target>/wavefront-config.json."
+    "Wavefront configuration is passed explicitly with --config; campaign-wide",
+    "and narrowed sub-campaign configs may live at different paths."
   ],
 
   "_comment_deps": [

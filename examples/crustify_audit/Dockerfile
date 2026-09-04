@@ -291,6 +291,7 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       'esac' \
       'case "$backend/${CRUSTIFY_PROVIDER:-}" in' \
       '    claude/|claude/anthropic) provider=anthropic ;;' \
+      '    claude/openrouter)        provider=openrouter ;;' \
       '    codex/|codex/openai)      provider=openai ;;' \
       '    codex/openrouter)         provider=openrouter ;;' \
       '    *) echo "bad CRUSTIFY_PROVIDER for $backend: ${CRUSTIFY_PROVIDER:-<empty>}" >&2' \
@@ -307,18 +308,27 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
       '        [ "$provider" != openrouter ] || {' \
       '            echo "openrouter requires CRUSTIFY_BILLING=api" >&2; exit 2; } ;;' \
       '    api|"")' \
-      '        case "$provider" in' \
-      '        anthropic) [ -n "${ANTHROPIC_API_KEY:-}" ] || {' \
+      '        case "$backend/$provider" in' \
+      '        # Claude Code speaks to any Anthropic-compatible gateway through' \
+      '        # ANTHROPIC_BASE_URL. The key must be blanked explicitly or the' \
+      '        # CLI keeps preferring it over the gateway token. No --bare here:' \
+      '        # that switch forces ANTHROPIC_API_KEY auth, which is empty.' \
+      '        claude/openrouter) [ -n "${OPENROUTER_API_KEY:-}" ] || {' \
+      '            echo "CRUSTIFY_BILLING=api needs OPENROUTER_API_KEY" >&2; exit 2; }' \
+      '            export ANTHROPIC_BASE_URL="https://openrouter.ai/api"' \
+      '            export ANTHROPIC_AUTH_TOKEN="$OPENROUTER_API_KEY"' \
+      '            export ANTHROPIC_API_KEY="" ;;' \
+      '        claude/anthropic) [ -n "${ANTHROPIC_API_KEY:-}" ] || {' \
       '            echo "CRUSTIFY_BILLING=api needs ANTHROPIC_API_KEY" >&2; exit 2; }' \
       '            auth=(--bare) ;;' \
-      '        openai) [ -n "${OPENAI_API_KEY:-}" ] || {' \
+      '        codex/openai) [ -n "${OPENAI_API_KEY:-}" ] || {' \
       '            echo "CRUSTIFY_BILLING=api needs OPENAI_API_KEY" >&2; exit 2; }' \
       '            auth=(-c "model_provider=openai_apikey"' \
       '                  -c "model_providers.openai_apikey.name=\"OpenAI\""' \
       '                  -c "model_providers.openai_apikey.base_url=\"https://api.openai.com/v1\""' \
       '                  -c "model_providers.openai_apikey.env_key=\"OPENAI_API_KEY\""' \
       '                  -c "model_providers.openai_apikey.wire_api=\"responses\"") ;;' \
-      '        openrouter) [ -n "${OPENROUTER_API_KEY:-}" ] || {' \
+      '        codex/openrouter) [ -n "${OPENROUTER_API_KEY:-}" ] || {' \
       '            echo "CRUSTIFY_BILLING=api needs OPENROUTER_API_KEY" >&2; exit 2; }' \
       '            auth=(-c "model_provider=openrouter_apikey"' \
       '                  -c "model_providers.openrouter_apikey.name=\"OpenRouter\""' \

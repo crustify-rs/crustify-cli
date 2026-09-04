@@ -1,6 +1,6 @@
 """TranslateAgent — the merged wrap-stage codegen agent (agent half).
 
-One agent for every batch recorded in a wave document:
+One agent for every batch recorded in a sub-campaign schedule:
 
   * a **type** batch (a struct / union / enum + a budget slice of its field
     accessors) — the type route in ``translator.md``, and
@@ -154,7 +154,7 @@ class TranslateAgent(CrustifyAgent):
 
         Both halves are known HERE and only here: the objective is the campaign's,
         but the kind is this batch's, and one invocation can carry both (a
-        wave's steps can batch types and symbols alike). So the wave-level
+        schedule's waves can batch types and symbols alike). So the schedule-level
         identity (`Stage.verb` -> session branch, worktree dirs) tags with the
         objective alone, and the full pair lands on the agent's own files —
         which is where it pays, since `crustify-log-cost` buckets by this
@@ -172,6 +172,23 @@ class TranslateAgent(CrustifyAgent):
     def _prompt(self) -> str:
         return (_PKG_ROOT / "prompts" / "translator.md").read_text()
 
+    def _wavefront_config(self) -> str:
+        """Return the campaign-wide config translators use for oracle queries."""
+        try:
+            doc = json.loads(self.layout.subsystems_json.read_text())
+        except (OSError, ValueError):
+            doc = {}
+        configured = doc.get("oracle_config")
+        if isinstance(configured, dict):
+            configured = configured.get("path")
+        if isinstance(configured, str) and configured:
+            return configured
+        legacy = doc.get("oracle_target")
+        if isinstance(legacy, str) and legacy:
+            return str(Path("crustify/wavefront/targets") / legacy
+                       / "wavefront-config.json")
+        return "crustify/wavefront/wavefront-config.json"
+
     def _arguments(self) -> dict:
         common = {
             # Base first: `target`, `repo_root`, and `git_base` (the wave's
@@ -182,6 +199,7 @@ class TranslateAgent(CrustifyAgent):
             "task_objective": self._objective,
             "workspace_root": str(self.layout.rust),
             "build_json":     str(self.layout.build_json),
+            "wavefront_config": self._wavefront_config(),
             # NOTE: no `conventions` key. The conventions doc and skill index are
             # no longer a `.format` slot — they go to the backend's system slot
             # via `system_preamble()`, out of reach of context compaction.

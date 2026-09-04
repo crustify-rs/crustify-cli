@@ -4,14 +4,14 @@ Field meaning for `<repo_root>/crustify/subsystems.json`, the orchestrator's
 campaign decomposition. Layout example:
 [`specs/subsystems.json`](../../specs/subsystems.json).
 
-The orchestrator emits this repo-tier artifact after it has configured the
-campaign-wide oracle target and populated that target's CodeQL inventory. It
+The orchestrator emits this repo-tier artifact after it has authored the
+campaign-wide Wavefront config and populated its CodeQL inventory. It
 describes the subsystem span selected by the user and every imported subsystem
 in that span's producer closure.
 
 `build_version` is the `version` of the `build.json` used to configure and
-compile the analyzed tree. `oracle_target` names the campaign-wide oracle target
-from which the decomposition was derived.
+compile the analyzed tree. `oracle_config` records the campaign-wide
+`wavefront-config.json` from which the decomposition was derived.
 
 ## link_units[*]
 
@@ -39,7 +39,7 @@ globally addressable identity is therefore `(link_unit.name, subsystem.name)`.
 | field | meaning |
 |---|---|
 | `name` | subsystem identifier, unique within the link unit |
-| `scope` | `targeted` when selected by the campaign, or `imported` when included as a producer dependency |
+| `scope` | translation intent: `targeted` for native Rust translation; `imported` for an oracle-discovered producer dependency or a selected subsystem deliberately retained behind a wrapped C boundary |
 | `implementation_files` | repo-relative translation units homed in the subsystem |
 | `loc` | physical nonblank, noncomment lines across `implementation_files` |
 | `nr_types` | number of oracle types assigned to the subsystem |
@@ -74,12 +74,16 @@ weight when choosing boundaries.
 
 ## Scope
 
-The targeted span follows the user's campaign selection:
+The covered span follows the user's campaign selection, but scope also records
+the orchestrator's native-Rust suitability decision:
 
-- named target subsystems produce only those targeted subsystems plus their
-  imported producer closure;
-- a whole-target campaign produces every targeted subsystem plus their imported
-  producer closure.
+- selected project-specific subsystems intended for native translation are
+  `targeted`;
+- selected generic facilities that should eventually be replaced by the Rust
+  standard library or another suitable Rust implementation are `imported` and
+  remain behind wrapped C boundaries during partial migration;
+- oracle-discovered producer dependencies are also `imported`;
+- a mixed subsystem is split so each emitted subsystem is scope-homogeneous.
 
-Changing the target selection requires regenerating this artifact from the
-campaign-wide oracle target.
+Changing the target selection or native-Rust suitability decision requires
+regenerating this artifact from the campaign-wide Wavefront config.

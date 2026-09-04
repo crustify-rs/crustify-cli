@@ -24,7 +24,7 @@ class ClaudeCliBackend:
     def run(self, *, name, model, provider, prompt_template, arguments,
             system_preamble, work_dir, log: AgentLog,
             billing: str = "subscription", effort: str = "high") -> None:
-        if provider != "anthropic":
+        if provider not in ("anthropic", "openrouter"):
             raise SystemExit(
                 f"the claude backend cannot use provider {provider!r}.")
         if shutil.which("claude") is None:
@@ -41,13 +41,30 @@ class ClaudeCliBackend:
             "--append-system-prompt", f"{_BASE}\n\n{system_preamble}",
             "--output-format", "stream-json", "--verbose",
         ]
-        if billing == "api":
+        env = os.environ.copy()
+        if provider == "openrouter":
+            # Claude Code talks to any Anthropic-compatible gateway through
+            # ANTHROPIC_BASE_URL, authenticating with ANTHROPIC_AUTH_TOKEN.
+            # ANTHROPIC_API_KEY must be blanked explicitly: left set, the CLI
+            # keeps preferring it over the gateway token. Deliberately NO
+            # `--bare` here -- that switch forces API-key auth, which is the
+            # one credential this path does not have.
+            key = env.get("OPENROUTER_API_KEY")
+            if not key:
+                raise SystemExit(
+                    "provider openrouter needs OPENROUTER_API_KEY in the "
+                    "environment; without it the CLI issues no request and "
+                    "exits 0 having done nothing.")
+            env["ANTHROPIC_BASE_URL"] = "https://openrouter.ai/api"
+            env["ANTHROPIC_AUTH_TOKEN"] = key
+            env["ANTHROPIC_API_KEY"] = ""
+        elif billing == "api":
             # `--bare` is the only switch that makes the CLI authenticate by API
             # key: exporting ANTHROPIC_API_KEY alone does not — it keeps sending
             # the stored OAuth token. It also strips hooks, LSP and CLAUDE.md
             # discovery, which suits a pipeline invocation.
             cmd.append("--bare")
-            if not os.environ.get("ANTHROPIC_API_KEY"):
+            if not env.get("ANTHROPIC_API_KEY"):
                 raise SystemExit(
                     "--billing api needs ANTHROPIC_API_KEY in the environment; "
                     "without it the CLI issues no request and exits 0 having "
@@ -55,7 +72,7 @@ class ClaudeCliBackend:
         cmd += ["-p", prompt]
         proc = subprocess.Popen(
             cmd, cwd=work_dir, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, bufsize=1)
+            stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
         session = ""
         for line in proc.stdout or ():
             log.line(line.rstrip("\n"))

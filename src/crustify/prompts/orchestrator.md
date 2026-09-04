@@ -46,6 +46,9 @@ the user has not already supplied:
    settings, customize them, or use orchestrator's choice?”
 10. **Review workload:** “What batch caps should review agents use? I recommend
    3x the translation caps so each reviewer sees more related units.”
+11. **Sub-campaign workload:** “What target unit budget should ordinary
+   sub-campaigns use? The default is 100 scheduled types and symbols; you can
+   ask for more or fewer.”
 
 Unanswered optional questions use their defaults. If the user supplies named
 subsystems, functions, or types, derive their implementation paths and public
@@ -66,11 +69,12 @@ Finally ask any unresolved benchmark-recording question: “Where and in what
 format should results be recorded?”
 
 Do not ask the user to name, partition, or approve individual waves unless they
-explicitly request low-level scheduling control. Waves and steps are internal
+explicitly request low-level scheduling control. Waves and batches are internal
 scheduler artifacts generated while executing a sub-campaign.
 
-Show the current defaults from the live command help and specs rather than
-copying them into the prompt. If the user supplies only implementation files,
+Show batching and parallelism defaults from the live command help and specs
+rather than copying them into the prompt. Take the sub-campaign unit-budget
+default from the playbook. If the user supplies only implementation files,
 derive the corresponding API headers using the playbook.
 
 Present one consolidated campaign brief, including its sub-campaigns,

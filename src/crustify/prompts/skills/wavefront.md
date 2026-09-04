@@ -6,5 +6,5 @@ Additional role guidance for a Crustify translator:
   item and submit ownership findings, never to expand the scheduled batch.
 - Read `query {types|symbols|dag} --help` before the first query and submit
   findings only through `--update`.
-- The submitted wave document is orchestrator state. Do not edit or regenerate it from an
+- The submitted sub-campaign schedule is orchestrator state. Do not edit or regenerate it from an
   agent worktree.

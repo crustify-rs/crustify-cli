@@ -109,9 +109,11 @@ For a reproducible container environment or a pre-filled campaign manifest, see
    configure the campaign-wide oracle target, decompose its targeted and
    imported translation units into `subsystems.json`, and scaffold compiling
    Rust crates.
-3. **Plan:** for a port campaign, the orchestrator creates one sub-campaign per
-   subsystem plus separate raw `void` and raw `string` lifetime sub-campaigns.
-   Each gets a `scope-config.json` whose exact closure comes from the oracle.
+3. **Plan:** the orchestrator groups compatible bottom-up subsystems toward the
+   approved sub-campaign unit budget, plus separate raw `void` and raw `string`
+   lifetime sub-campaigns. Each gets a narrow `wavefront-config.json`;
+   Wavefront computes its exact closure before emitting the schedule. Wrap
+   campaigns select the public API graph with `--api-headers-only`.
    Sub-campaigns and their waves run bottom-up so every consumer sees
    already-safe producers. Waves remain internal scheduling artifacts.
 4. **Translate:** isolated translator agents port, wrap, or review one batch at
@@ -129,7 +131,7 @@ playbook`](docs/translator-playbook.md).
 This repository installs four commands:
 
 ```text
-crustify                      validate crate placement and execute wave documents
+crustify                      validate crate placement and execute sub-campaign schedules
 crustify-audit                audit Rust safety; optional undefined-behavior pass
 crustify-log-cost             summarize agent usage and cost logs
 crustify-orchestrator-prompt  render the campaign orchestrator prompt
@@ -176,8 +178,6 @@ Newer per-campaign reports and reproducible inputs live under
 - [`docs/schemas/`](docs/schemas/): crate-placement and wave schemas
 - [`docs/schemas/subsystems.md`](docs/schemas/subsystems.md): link-unit and
   subsystem decomposition artifact
-- [`docs/schemas/scope-config.md`](docs/schemas/scope-config.md):
-  per-sub-campaign selection and oracle closure
 - [`examples/crustify/TASK-template.md`](examples/crustify/TASK-template.md): optional pre-filled
   campaign questionnaire
 - [`examples/crustify/results-template.md`](examples/crustify/results-template.md): campaign

@@ -186,7 +186,7 @@ def link_shared(wt: Path, repo: Path) -> None:
     the main checkout into the worktree, so the worktree is a *complete*
     functional crustify tree. Wavefront extraction/cache data and campaign logs
     resolve to the shared copy without being duplicated. Tracked Wavefront configs,
-    wave documents, and ownership-store entries already present in the worktree
+    schedule documents, and ownership-store entries already present in the worktree
     win over the recursive links.
 
     `build.json`, `subsystems.json`, and `crates.json` are deliberately NOT

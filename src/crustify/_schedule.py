@@ -1,4 +1,4 @@
-"""Batch execution for objective-neutral oracle wave documents.
+"""Batch execution for objective-neutral sub-campaign schedules.
 
 Selection, dependency ordering and packing live in wavefront. This module
 owns only the stateful half: placement checks, TODO insertion, isolated
@@ -159,7 +159,7 @@ def _place_batch_anchors(batch: Batch, layout, target, stage: Stage) -> None:
 
 def run(batches: list[Batch], stage: Stage, *, parallel_max: int) \
         -> list[tuple[Batch, BaseException]]:
-    """Run at most ``parallel_max`` isolated agents for one topological step."""
+    """Run at most ``parallel_max`` isolated agents for one sequential wave."""
     if parallel_max < 1:
         raise ValueError("parallel_max must be >= 1")
     if (stage.emit_factory is None or stage.target is None

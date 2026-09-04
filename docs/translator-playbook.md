@@ -74,7 +74,17 @@ bindgen limitation. Run the affected `-sys` crate's checks and tests, and
 report allowlist/input changes so parallel landings can union them.
 
 Generated headers and build objects may not exist in an isolated worktree.
-Reconfigure or rebuild the C target there when necessary.
+Before configuring or rebuilding C, look for the reusable build paths and
+runner supplied by the orchestrator. Reuse the sanitized build when its
+recorded C revision, `build.json` version, compiler and instrumentation match
+the worktree. Treat the build and its libraries as immutable, and use
+agent-unique sanitizer logs and output files.
+
+If no matching pre-build exists, configure a private sanitized build. Also
+build privately when the batch changes compiled C or a compiled shim; report
+that invalidation so the orchestrator can refresh the shared builds after the
+change lands. A bindgen allowlist or input-header change alone does not
+invalidate a pre-built C library.
 
 ### Resolve macros
 
@@ -323,17 +333,22 @@ equivalent, independently owned inputs. Compare observable behaviour: return
 values, out-parameters, buffers, callbacks, error states, state transitions and
 lifecycle effects.
 
+Equivalence means preserving the intended contract, not bug-for-bug
+compatibility. When the C reference behavior is demonstrably defective, do not
+copy the defect into Rust merely to make the comparison pass. Add a regression
+test for the corrected behavior, document the evidence and deliberate
+divergence, and retain direct C/Rust comparisons for unaffected behavior.
+
 For a port objective, obtain the reference result from a feature-off C build in
 which the original implementation is still present and the reference symbol
 cannot resolve to the Rust re-export.
 
-Instrument both implementations and measure separately the line coverage
-produced by the equivalence and unit-test workloads. Target uncovered paths
-belonging to the workset, without expanding into unrelated subsystems merely to
-raise a global percentage. Report each workload's number of `#[test]`
-functions and its C and Rust line coverage, plus any unreachable,
-environment-dependent or intentionally nondeterministic remainder. Investigate
-every observed drift before changing the wrapper or oracle expectation.
+Target meaningful paths belonging to the workset, without expanding into
+unrelated subsystems merely to raise a global percentage. Report the number of
+unit and equivalence `#[test]` functions the batch adds, plus any unreachable,
+environment-dependent or intentionally nondeterministic remainder. The
+orchestrator measures C and Rust line coverage for the merged wave or
+sub-campaign; translators do not regenerate global coverage reports.
 
 Replace every scheduler TODO with the filled anchor required by the
 conventions. If a lifecycle strategy lives outside the operation's authored
@@ -348,11 +363,12 @@ cargo clippy --workspace
 cargo test --workspace
 ```
 
-Every FFI or equivalence test uses an instrumented, sanitized C library even
-when its sources did not change. If C sources changed, additionally run the
-configured full C build and baseline tests with the Rust feature off. For a port
-objective, also run them with the feature on. A wrap-only wave need not rerun
-the full C baseline when its C side is unchanged.
+Every FFI or equivalence test uses the matching reusable sanitized C library,
+or a private sanitized replacement, even when its sources did not change. If C
+sources changed, additionally run the configured full C build and baseline
+tests with the Rust feature off. For a port objective, also run them with the
+feature on. A wrap-only wave need not rerun the full C baseline when its C side
+is unchanged.
 
 Run every enabled deterministic safety-review capability according to its role
 guidance. Fix an unsafe wrapper bypass or unsound reference; retain a necessary

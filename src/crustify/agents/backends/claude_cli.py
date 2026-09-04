@@ -179,7 +179,28 @@ class ClaudeCliBackend:
         system = f"{_BASE_PROMPT}\n\n{system_preamble}".rstrip()
         cmd += (["--system-prompt", system] if cfg.OVERRIDE_BASE_PROMPT
                 else ["--append-system-prompt", system])
-        if cfg.BILLING == "api":
+        env = dict(os.environ)
+        if route.provider == "openrouter":
+            if cfg.BILLING != "api":
+                raise SystemExit(
+                    "claude_cli backend: OpenRouter supports only API billing."
+                )
+            key = env.get("OPENROUTER_API_KEY")
+            if not key:
+                raise SystemExit(
+                    "claude_cli backend: provider openrouter needs "
+                    "OPENROUTER_API_KEY in the environment; without it the "
+                    "CLI issues no request and exits 0 having done nothing."
+                )
+            # Claude Code supports Anthropic-compatible gateways through this
+            # endpoint and bearer-token pair.  Explicitly blank the direct
+            # Anthropic key because the CLI otherwise prefers it over the
+            # gateway token.  Do not add --bare: that forces the direct API-key
+            # authentication path which OpenRouter does not use.
+            env["ANTHROPIC_BASE_URL"] = "https://openrouter.ai/api"
+            env["ANTHROPIC_AUTH_TOKEN"] = key
+            env["ANTHROPIC_API_KEY"] = ""
+        elif cfg.BILLING == "api":
             # `--bare` is the only switch that makes the CLI authenticate by
             # API key: exporting ANTHROPIC_API_KEY alone does not - it keeps
             # sending the stored OAuth token (verified on the wire). It also
@@ -193,7 +214,6 @@ class ClaudeCliBackend:
                     "and exits 0 having done nothing."
                 )
 
-        env = dict(os.environ)
         env["ANTHROPIC_CONFIG_DIR"] = str(
             Layout(Path(arguments.get("repo_root", wd))).providers("claude")
         )
@@ -230,7 +250,7 @@ class ClaudeCliBackend:
         if transcript is not None:
             requests, transcript_model = _read_usage(transcript)
             log.usage({
-                "provider": "anthropic",
+                "provider": route.provider,
                 "model": transcript_model or route.model,
                 "requests": requests,
             })
