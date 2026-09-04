@@ -50,7 +50,8 @@ as skills.
 | [`crustify-audit`](docs/audit.md) | Compiled Rust safety analysis and optional UB review, shipped in this repository |
 | [`ffibox`](https://github.com/crustify-rs/ffibox) | Safe FFI smart pointers and lifetime traits used by generated wrappers |
 
-Claude Code and OpenAI Codex are supported as agent backends. Campaigns can use
+Claude Code and OpenAI Codex are supported as agent backends with access to latest
+closed- and open-weight models. Campaigns can use
 API or subscription billing and can select a model independently for each
 agentic stage. The recommended baseline is `claude-opus-5` for the
 orchestrator, `gpt-5.6-sol` for translators, and `claude-opus-5` again for the
@@ -143,10 +144,11 @@ interfaces.
 
 ## Results
 
-The full-public-API [libgit2 safe-wrapper
-campaign](https://github.com/crustify-rs/libgit2-wrap) wrapped every
-non-deprecated target using Codex `gpt-5.6-sol`, followed by independent Claude
-Opus 5 review.
+Crustify generated safe bindings for the whole API of libgit2 (excluding deprecated
+items) using Codex GPT-5.6-Sol and followed by independent Claude Opus 5 review and UB
+audit.
+
+Below is an overview of the campaign's stats:
 
 | Measure | Result |
 |---|---:|
@@ -160,9 +162,7 @@ Opus 5 review.
 | Recorded cost | `$1,904.64` for translation, review, and orchestration |
 | Aggregate agent wall time | `24h49m20s` |
 
-Earlier libgit2 and OpenSSL experiments, including detailed cost and safety
-measurements, remain in
-[`examples/crustify/libgit2-openssl-results.md`](examples/crustify/libgit2-openssl-results.md).
+ The full campaign results and code are available [here](https://github.com/crustify-rs/libgit2-wrap).
 
 ## Documentation
 
