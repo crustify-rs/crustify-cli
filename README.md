@@ -144,7 +144,7 @@ interfaces.
 
 ## Results
 
-Crustify generated safe bindings for the whole API of libgit2 (excluding deprecated
+Crustify generated safe bindings for the whole API of `libgit2` (excluding deprecated
 items) using Codex GPT-5.6-Sol and followed by independent Claude Opus 5 review and UB
 audit.
 
